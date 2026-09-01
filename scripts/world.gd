@@ -4,6 +4,9 @@ extends RefCounted
 const SIZE_KM := 100.0
 const RUNWAY_LENGTH_KM := 2.0
 const BEACON_FREQUENCIES := [305.0, 327.0, 348.0, 371.0, 392.0, 415.0]
+const LOCATOR_RANGE_KM := 15.0
+const ROUTE_NDB_RANGE_KM := 30.0
+const MIN_RADIO_BLOCKING_TERRAIN_M := 250.0
 
 var seed_value: int
 var noise := FastNoiseLite.new()
@@ -35,7 +38,9 @@ func height_at(point_km: Vector2) -> float:
 		var cross: float = abs(along_cross.y)
 		# Clear the strip plus a broad, gently widening approach at both ends.
 		var end_distance: float = max(0.0, abs(along) - RUNWAY_LENGTH_KM * 0.5)
-		var corridor_width: float = 0.42 + end_distance * 0.13
+		# Keep the published approach point and its surroundings visibly clear
+		# on the topographic map, not merely the exact runway centerline.
+		var corridor_width: float = 0.70 + end_distance * 0.18
 		if abs(along) < 8.5 and cross < corridor_width:
 			var cross_blend := smoothstep(corridor_width, corridor_width * 0.55, cross)
 			var end_blend := smoothstep(8.5, 6.5, abs(along))
@@ -89,10 +94,35 @@ func _generate_beacons() -> void:
 	for i in airports.size():
 		var airport: Dictionary = airports[i]
 		var end_position: Vector2 = airport.position + heading_vector(airport.heading) * (RUNWAY_LENGTH_KM * 0.5)
-		beacons.append({"name": "RWY-%d" % (i + 1), "frequency": BEACON_FREQUENCIES[i], "position": end_position, "runway": i})
+		beacons.append({"name": "RWY-%d" % (i + 1), "frequency": BEACON_FREQUENCIES[i], "position": end_position, "runway": i, "range_km": LOCATOR_RANGE_KM, "class": "LOC"})
 	for i in 4:
 		var p := Vector2(rng.randf_range(12, 88), rng.randf_range(12, 88))
-		beacons.append({"name": "NDB-%s" % char(65 + i), "frequency": BEACON_FREQUENCIES[i + 2], "position": p, "runway": -1})
+		beacons.append({"name": "NDB-%s" % char(65 + i), "frequency": BEACON_FREQUENCIES[i + 2], "position": p, "runway": -1, "range_km": ROUTE_NDB_RANGE_KM, "class": "MH"})
+
+func beacon_signal(beacon: Dictionary, aircraft_position_km: Vector2, aircraft_altitude_m: float) -> Dictionary:
+	var beacon_position: Vector2 = beacon.position
+	var distance_km: float = aircraft_position_km.distance_to(beacon_position)
+	var max_range_km: float = beacon.range_km
+	if distance_km > max_range_km:
+		return {"available": false, "reason": "ВНЕ ДАЛЬНОСТИ", "distance_km": distance_km, "range_km": max_range_km}
+	if distance_km < 0.05:
+		return {"available": true, "reason": "", "distance_km": distance_km, "range_km": max_range_km}
+	var aircraft_antenna_m := aircraft_altitude_m + 2.0
+	var beacon_antenna_m := height_at(beacon_position) + 20.0
+	var sample_count := clampi(int(ceil(distance_km / 0.5)), 2, 128)
+	for sample in range(1, sample_count):
+		var ratio: float = sample / float(sample_count)
+		var sample_position := aircraft_position_km.lerp(beacon_position, ratio)
+		var radio_ray_height := lerpf(aircraft_antenna_m, beacon_antenna_m, ratio)
+		# A small Fresnel-like clearance makes grazing a ridge unreliable too.
+		var clearance_margin := 8.0 * sin(PI * ratio)
+		var terrain_height := height_at(sample_position)
+		# Only charted relief can create radio shadow. Without this floor, tiny
+		# sub-contour undulations blocked a ground-level receiver despite the map
+		# showing no obstacle between aircraft and beacon.
+		if terrain_height >= MIN_RADIO_BLOCKING_TERRAIN_M and terrain_height + clearance_margin > radio_ray_height:
+			return {"available": false, "reason": "ЗАКРЫТ РЕЛЬЕФОМ", "distance_km": distance_km, "range_km": max_range_km}
+	return {"available": true, "reason": "", "distance_km": distance_km, "range_km": max_range_km}
 
 func vector_heading(delta: Vector2) -> float:
 	return fposmod(rad_to_deg(atan2(delta.x, -delta.y)), 360.0)
