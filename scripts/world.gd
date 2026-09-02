@@ -3,6 +3,7 @@ extends RefCounted
 
 const SIZE_KM := 100.0
 const RUNWAY_LENGTH_KM := 2.0
+const RUNWAY_WIDTH_KM := 0.05
 const BEACON_FREQUENCIES := [305.0, 327.0, 348.0, 371.0, 392.0, 415.0]
 const LOCATOR_RANGE_KM := 15.0
 const ROUTE_NDB_RANGE_KM := 30.0
@@ -104,7 +105,7 @@ func beacon_signal(beacon: Dictionary, aircraft_position_km: Vector2, aircraft_a
 	var distance_km: float = aircraft_position_km.distance_to(beacon_position)
 	var max_range_km: float = beacon.range_km
 	if distance_km > max_range_km:
-		return {"available": false, "reason": "ВНЕ ДАЛЬНОСТИ", "distance_km": distance_km, "range_km": max_range_km}
+		return {"available": false, "reason": "НЕТ СИГНАЛА", "distance_km": distance_km, "range_km": max_range_km}
 	if distance_km < 0.05:
 		return {"available": true, "reason": "", "distance_km": distance_km, "range_km": max_range_km}
 	var aircraft_antenna_m := aircraft_altitude_m + 2.0
@@ -121,7 +122,7 @@ func beacon_signal(beacon: Dictionary, aircraft_position_km: Vector2, aircraft_a
 		# sub-contour undulations blocked a ground-level receiver despite the map
 		# showing no obstacle between aircraft and beacon.
 		if terrain_height >= MIN_RADIO_BLOCKING_TERRAIN_M and terrain_height + clearance_margin > radio_ray_height:
-			return {"available": false, "reason": "ЗАКРЫТ РЕЛЬЕФОМ", "distance_km": distance_km, "range_km": max_range_km}
+			return {"available": false, "reason": "НЕТ СИГНАЛА", "distance_km": distance_km, "range_km": max_range_km}
 	return {"available": true, "reason": "", "distance_km": distance_km, "range_km": max_range_km}
 
 func vector_heading(delta: Vector2) -> float:

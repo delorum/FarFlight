@@ -10,6 +10,9 @@ const CONTOUR_STEP_M := 250.0
 const SAMPLE_GRID := 96
 const INSTRUMENT_RADIUS := 50.0
 const INSTRUMENT_GAP := 14.0
+const THROTTLE_HOLD_DELAY := 0.32
+const THROTTLE_HOLD_RATE := 0.35
+const USE_STYLIZED_YOKE := true
 
 var world
 var flight
@@ -34,8 +37,15 @@ var ils_airport_index := 1
 var simulation_paused := false
 var signal_check_timer := 0.0
 var receiver_signal_status: Array[Dictionary] = [{}, {}]
+var ils_signal_status: Dictionary = {}
+var ils_prediction_timer := 0.0
+var ils_touchdown_prediction: Dictionary = {"valid": false, "distance_from_threshold_km": 0.0}
 var map_render_layer: Control
 var map_canvas: Control
+var throttle_up_held := false
+var throttle_down_held := false
+var throttle_up_hold_time := 0.0
+var throttle_down_hold_time := 0.0
 
 func _ready() -> void:
 	Engine.max_fps = 60
@@ -51,6 +61,24 @@ func _ready() -> void:
 	queue_redraw()
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventKey and (event.keycode == KEY_W or event.keycode == KEY_S):
+		if event.echo:
+			get_viewport().set_input_as_handled()
+			return
+		var increase: bool = event.keycode == KEY_W
+		if increase:
+			throttle_up_held = event.pressed
+			throttle_up_hold_time = 0.0
+		else:
+			throttle_down_held = event.pressed
+			throttle_down_hold_time = 0.0
+			if not event.pressed and flight != null:
+				flight.wheel_brakes_applied = false
+		if event.pressed and flight != null:
+			_adjust_throttle_percent(1 if increase else -1)
+		get_viewport().set_input_as_handled()
+		queue_redraw()
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_Q and event.ctrl_pressed:
 			get_tree().quit()
@@ -62,6 +90,10 @@ func _input(event: InputEvent) -> void:
 		elif event.keycode == KEY_R:
 			regenerate_world()
 			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_C:
+			flight.yoke = Vector2.ZERO
+			get_viewport().set_input_as_handled()
+			queue_redraw()
 
 func regenerate_world() -> void:
 	world = FlightWorldScript.new()
@@ -72,8 +104,10 @@ func regenerate_world() -> void:
 	pending_measure = null
 	clock_seconds = 12.0 * 60.0 * 60.0
 	ils_airport_index = 1
+	ils_prediction_timer = 0.0
 	_build_contours()
 	_update_receiver_signals()
+	_update_ils_touchdown_prediction()
 	_queue_map_redraw()
 	queue_redraw()
 
@@ -84,6 +118,10 @@ func _process(delta: float) -> void:
 	if signal_check_timer <= 0.0:
 		_update_receiver_signals()
 		signal_check_timer = 1.0
+	ils_prediction_timer -= delta
+	if ils_prediction_timer <= 0.0:
+		_update_ils_touchdown_prediction()
+		ils_prediction_timer = 1.0
 	clock_seconds = fmod(clock_seconds + delta, 24.0 * 60.0 * 60.0)
 	var keyboard_yoke := Vector2(
 		Input.get_axis("ui_left", "ui_right"),
@@ -98,13 +136,37 @@ func _process(delta: float) -> void:
 			# Only the pitch axis is positional: releasing Up/Down leaves the
 			# elevator command where the pilot set it.
 			flight.yoke.y = clampf(flight.yoke.y + keyboard_yoke.y * delta * 0.75, -1.0, 1.0)
-	if Input.is_key_pressed(KEY_W):
-		flight.throttle = min(1.0, flight.throttle + delta * 0.35)
-	if Input.is_key_pressed(KEY_S):
-		flight.throttle = max(0.0, flight.throttle - delta * 0.35)
+	_update_held_throttle(delta)
 	flight.update(delta)
 	status_timer += delta
 	queue_redraw()
+
+func _adjust_throttle_percent(step_percent: int) -> void:
+	var current_percent := roundi(flight.throttle * 100.0)
+	if step_percent < 0 and current_percent <= 0 and _aircraft_is_on_ground():
+		flight.wheel_brakes_applied = true
+		return
+	if step_percent > 0:
+		flight.wheel_brakes_applied = false
+	flight.throttle = clampf((current_percent + step_percent) / 100.0, 0.0, 1.0)
+
+func _update_held_throttle(delta: float) -> void:
+	if throttle_up_held:
+		var previous_time := throttle_up_hold_time
+		throttle_up_hold_time += delta
+		var active_delta := maxf(0.0, throttle_up_hold_time - THROTTLE_HOLD_DELAY) - maxf(0.0, previous_time - THROTTLE_HOLD_DELAY)
+		flight.throttle = minf(1.0, flight.throttle + active_delta * THROTTLE_HOLD_RATE)
+	if throttle_down_held:
+		var previous_time := throttle_down_hold_time
+		throttle_down_hold_time += delta
+		var active_delta := maxf(0.0, throttle_down_hold_time - THROTTLE_HOLD_DELAY) - maxf(0.0, previous_time - THROTTLE_HOLD_DELAY)
+		flight.throttle = maxf(0.0, flight.throttle - active_delta * THROTTLE_HOLD_RATE)
+		if flight.throttle <= 0.001 and _aircraft_is_on_ground():
+			flight.throttle = 0.0
+			flight.wheel_brakes_applied = true
+
+func _aircraft_is_on_ground() -> bool:
+	return flight.state == FlightModelScript.State.PARKED or flight.state == FlightModelScript.State.ROLLING or flight.state == FlightModelScript.State.LANDED
 
 func map_rect() -> Rect2:
 	return Rect2(MAP_MARGIN, MAP_MARGIN, size.x - MAP_MARGIN * 2.0, max(300.0, size.y - PANEL_HEIGHT - MAP_MARGIN * 2.0))
@@ -327,7 +389,10 @@ func _draw_panel() -> void:
 	draw_rect(rect, Color("536067"), false, 2)
 	var y := rect.position.y + 12.0
 	var gauge_y := y + 96.0
-	_draw_round_gauge(_instrument_center(0, gauge_y), INSTRUMENT_RADIUS, "СКОРОСТЬ", "%.0f" % flight.speed_kmh, "км/ч", flight.speed_kmh / 200.0)
+	var speed_center := _instrument_center(0, gauge_y)
+	_draw_round_gauge(speed_center, INSTRUMENT_RADIUS, "СКОРОСТЬ", "%.0f" % flight.speed_kmh, "км/ч", flight.speed_kmh / 200.0)
+	if flight.wheel_brakes_applied:
+		draw_string(ThemeDB.fallback_font, speed_center + Vector2(-INSTRUMENT_RADIUS, INSTRUMENT_RADIUS + 34), "ТОРМОЗ", HORIZONTAL_ALIGNMENT_CENTER, INSTRUMENT_RADIUS * 2.0, 11, Color("ef645e"))
 	_draw_round_gauge(_instrument_center(1, gauge_y), INSTRUMENT_RADIUS, "ВЫСОТА", "%.0f" % flight.altitude_m, "м", flight.altitude_m / 5000.0)
 	_draw_variometer(_instrument_center(2, gauge_y), INSTRUMENT_RADIUS)
 	_draw_compass(_instrument_center(3, gauge_y), INSTRUMENT_RADIUS)
@@ -347,7 +412,7 @@ func _draw_panel() -> void:
 		status_text = "ПРЕДУПРЕЖДЕНИЕ: БОЛЬШОЙ УГОЛ АТАКИ"
 		state_color = Color("e8d274")
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, rect.size.y - 10), status_text, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 330, 15, state_color)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(rect.size.x - 320, rect.size.y - 10), "W/S газ  •  стрелки штурвал  •  R новая карта", HORIZONTAL_ALIGNMENT_LEFT, 310, 12, Color("aebbc1"))
+	draw_string(ThemeDB.fallback_font, Vector2(rect.end.x - 470, rect.end.y - 10), "W/S: газ  •  стрелки/C: штурвал  •  R: новая карта", HORIZONTAL_ALIGNMENT_RIGHT, 446, 12, Color("aebbc1"))
 
 func _instrument_center(index: int, gauge_y: float) -> Vector2:
 	var step := INSTRUMENT_RADIUS * 2.0 + INSTRUMENT_GAP
@@ -432,10 +497,10 @@ func _draw_clock(center: Vector2, radius: float) -> void:
 
 func _draw_fuel_instrument(center: Vector2, radius: float) -> void:
 	var flow: float = flight.fuel_flow_lpm()
+	var estimated_range: float = flight.estimated_range_km()
 	var max_flow := 0.78
 	var remaining_ratio: float = clampf(flight.fuel_l / flight.fuel_capacity_l, 0.0, 1.0)
 	var flow_ratio: float = clampf(flow / max_flow, 0.0, 1.0)
-	var altitude_saving_percent := int(round((1.0 - flight.altitude_fuel_factor()) * 100.0))
 	draw_circle(center, radius, Color("0a0e10"))
 	draw_arc(center, radius - 2, 0, TAU, 48, Color("7d8b91"), 2)
 	draw_line(center + Vector2(0, -radius + 3), center + Vector2(0, radius - 3), Color("536067"), 1.0)
@@ -455,29 +520,78 @@ func _draw_fuel_instrument(center: Vector2, radius: float) -> void:
 	draw_string(ThemeDB.fallback_font, center + Vector2(0, 5), "РАСХ", HORIZONTAL_ALIGNMENT_CENTER, radius, 8, Color("6fc78c"))
 	draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ТОПЛИВО", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
 	draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 5.0, radius + 14), "Расход %.1f л/мин" % flow, HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 10.0, 10, Color("6fc78c"))
-	draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 7.0, radius + 29), "%.1f/%.0f л • выс. %+d%%" % [flight.fuel_l, flight.fuel_capacity_l, altitude_saving_percent], HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 14.0, 9, Color.WHITE)
+	draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 7.0, radius + 29), "%.1f/%.0f л • запас %.0f км" % [flight.fuel_l, flight.fuel_capacity_l, estimated_range], HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 14.0, 9, Color.WHITE)
 
 func _draw_ils() -> void:
 	var rect := get_ils_rect()
-	var guidance: Dictionary = flight.landing_guidance(ils_airport_index)
+	var guidance: Dictionary = flight.landing_guidance(ils_airport_index, ils_signal_status.get("available", false))
 	var airport: Dictionary = guidance.airport
 	draw_rect(rect, Color("0a0e10"), true)
 	draw_rect(rect, Color("6f7f85"), false, 1.5)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(5, 12), "ILS %s  [нажать]" % airport.name, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 10, 10, Color("b8c5c8"))
+	draw_string(ThemeDB.fallback_font, rect.position + Vector2(5, 12), "ILS %s  [нажать]" % airport.name, HORIZONTAL_ALIGNMENT_LEFT, 200, 10, Color("b8c5c8"))
 	var display := Rect2(rect.position + Vector2(7, 16), Vector2(82, 35))
 	var center := display.get_center()
-	draw_line(Vector2(display.position.x, center.y), Vector2(display.end.x, center.y), Color("536067"), 1.0)
-	draw_line(Vector2(center.x, display.position.y), Vector2(center.x, display.end.y), Color("536067"), 1.0)
-	# Horizontal marker: runway axis relative to the aircraft. Vertical marker:
-	# desired glide path relative to current altitude.
+	var airport_cross_color := Color("66878a")
+	draw_line(Vector2(display.position.x, center.y), Vector2(display.end.x, center.y), airport_cross_color, 1.5)
+	draw_line(Vector2(center.x, display.position.y), Vector2(center.x, display.end.y), airport_cross_color, 1.5)
+	draw_circle(center, 2.5, airport_cross_color)
+	if not guidance.signal_available:
+		draw_line(display.position + Vector2(8, 4), display.end - Vector2(8, 4), Color("c95d55"), 2.0)
+		draw_line(Vector2(display.end.x - 8, display.position.y + 4), Vector2(display.position.x + 8, display.end.y - 4), Color("c95d55"), 2.0)
+		draw_string(ThemeDB.fallback_font, rect.position + Vector2(96, 37), "НЕТ СИГНАЛА", HORIZONTAL_ALIGNMENT_LEFT, 104, 10, Color("c95d55"))
+		return
+	draw_line(rect.position + Vector2(207, 4), rect.position + Vector2(207, rect.size.y - 4), Color("536067"), 1.0)
+	var desired_vs: float = -(flight.speed_kmh / 3.6) * tan(deg_to_rad(FlightModelScript.GLIDE_SLOPE_DEG))
+	var altitude_color := _ils_parameter_color(absf(guidance.glide_error), true)
+	var vertical_speed_color := _ils_parameter_color(absf(flight.vertical_speed_mps - desired_vs) / 0.35, true)
+	var course_error_color := _ils_parameter_color(absf(guidance.course_error_deg), true, 1.0, 5.0)
+	var approach_speed_color := Color("65d48c")
+	if flight.speed_kmh >= 100.0:
+		approach_speed_color = Color("ef645e")
+	elif flight.speed_kmh > 95.0:
+		approach_speed_color = Color("e8d274")
+	draw_string(ThemeDB.fallback_font, rect.position + Vector2(216, 22), "H %.1f м" % flight.altitude_m, HORIZONTAL_ALIGNMENT_LEFT, 76, 12, altitude_color)
+	draw_string(ThemeDB.fallback_font, rect.position + Vector2(292, 22), "VS %+.2f м/с" % flight.vertical_speed_mps, HORIZONTAL_ALIGNMENT_LEFT, 105, 12, vertical_speed_color)
+	draw_string(ThemeDB.fallback_font, rect.position + Vector2(399, 22), "V %.1f км/ч" % flight.speed_kmh, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 407, 11, approach_speed_color)
+	draw_string(ThemeDB.fallback_font, rect.position + Vector2(216, 42), "ОТКЛ. КУРСА %+.1f°" % guidance.course_error_deg, HORIZONTAL_ALIGNMENT_LEFT, 132, 12, course_error_color)
+	draw_string(ThemeDB.fallback_font, rect.position + Vector2(350, 42), "ДО ВПП %.2f км" % guidance.actual_distance_to_threshold_km, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 358, 12, Color.WHITE)
+	if ils_touchdown_prediction.valid:
+		var touchdown_distance: float = ils_touchdown_prediction.distance_from_threshold_km
+		var touchdown_color := Color("65d48c") if touchdown_distance >= 0.0 and touchdown_distance <= FlightWorldScript.RUNWAY_LENGTH_KM else Color("ef645e")
+		draw_string(ThemeDB.fallback_font, rect.position + Vector2(216, 61), "КАСАНИЕ %+.2f км ОТ ТОРЦА" % touchdown_distance, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 224, 12, touchdown_color)
+	else:
+		draw_string(ThemeDB.fallback_font, rect.position + Vector2(216, 61), "КАСАНИЕ — НЕТ СНИЖЕНИЯ", HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 224, 12, Color("e8d274"))
+	# Runway edges live on the airport's fixed horizontal axis. Far from the
+	# airport they are close together; towards the threshold they spread apart.
+	var runway_half_width_km := FlightWorldScript.RUNWAY_WIDTH_KM * 0.5
+	var runway_edge_error: float = runway_half_width_km / guidance.localizer_tolerance_km
+	var runway_edge_spacing: float = maxf(2.0, runway_edge_error * display.size.x * 0.30)
+	for side in [-1.0, 1.0]:
+		var edge_x: float = center.x + side * runway_edge_spacing
+		draw_line(Vector2(edge_x, center.y - 5.0), Vector2(edge_x, center.y + 5.0), Color("a9c0c1"), 2.0)
+	# The fixed cross is the airport. The moving cross is the aircraft: right of
+	# center means right of the localizer, above center means above glide path.
 	var localizer_x: float = center.x + clampf(guidance.localizer_error, -1.4, 1.4) * display.size.x * 0.30
-	var glide_y: float = center.y + clampf(guidance.glide_error, -1.4, 1.4) * display.size.y * 0.30
-	draw_line(Vector2(localizer_x, display.position.y + 3), Vector2(localizer_x, display.end.y - 3), Color("e8d274"), 2.0)
-	draw_line(Vector2(display.position.x + 3, glide_y), Vector2(display.end.x - 3, glide_y), Color("73d6d0"), 2.0)
+	var glide_y: float = center.y - clampf(guidance.glide_error, -1.4, 1.4) * display.size.y * 0.30
+	var localizer_severity: float = maxf(absf(guidance.localizer_error), absf(guidance.course_error_deg) / 14.0)
+	var glide_severity: float = absf(guidance.glide_error)
+	var localizer_line_color := _ils_parameter_color(localizer_severity, true)
+	var glide_line_color := _ils_parameter_color(glide_severity, true)
+	var aircraft_center_color := _ils_parameter_color(maxf(localizer_severity, glide_severity), true)
+	draw_line(Vector2(localizer_x, display.position.y + 3), Vector2(localizer_x, display.end.y - 3), localizer_line_color, 2.0)
+	draw_line(Vector2(display.position.x + 3, glide_y), Vector2(display.end.x - 3, glide_y), glide_line_color, 2.0)
+	draw_circle(Vector2(localizer_x, glide_y), 2.5, aircraft_center_color)
 	var localizer_color := Color("65d48c") if guidance.in_localizer else Color("e8d274")
 	var glide_color := Color("65d48c") if guidance.in_glide else Color("e8d274")
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(96, 30), "СТВОР" if guidance.in_localizer else "ВНЕ СТВОРА", HORIZONTAL_ALIGNMENT_LEFT, 104, 10, localizer_color)
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(96, 44), "ГЛИСС" if guidance.in_glide else ("ВЫСОКО" if guidance.glide_error > 0 else "НИЗКО"), HORIZONTAL_ALIGNMENT_LEFT, 104, 10, glide_color)
+
+func _ils_parameter_color(error: float, signal_available: bool, green_limit: float = 1.0, yellow_limit: float = 2.0) -> Color:
+	if not signal_available or error > yellow_limit:
+		return Color("ef645e")
+	if error > green_limit:
+		return Color("e8d274")
+	return Color("65d48c")
 
 func _draw_horizon(center: Vector2, radius: float) -> void:
 	draw_circle(center, radius, Color("0a0e10"))
@@ -534,6 +648,13 @@ func _update_receiver_signals() -> void:
 	for instrument in 2:
 		var beacon: Dictionary = world.beacons[selected_beacons[instrument]]
 		receiver_signal_status[instrument] = world.beacon_signal(beacon, flight.position_km, flight.altitude_m)
+	var ils_beacon: Dictionary = world.beacons[ils_airport_index]
+	ils_signal_status = world.beacon_signal(ils_beacon, flight.position_km, flight.altitude_m)
+
+func _update_ils_touchdown_prediction() -> void:
+	if flight == null:
+		return
+	ils_touchdown_prediction = flight.touchdown_prediction(ils_airport_index)
 
 func _draw_controls(rect: Rect2) -> void:
 	var throttle_rect := get_throttle_rect()
@@ -542,14 +663,17 @@ func _draw_controls(rect: Rect2) -> void:
 	var handle_y: float = lerpf(throttle_rect.end.y - 8, throttle_rect.position.y + 8, flight.throttle)
 	draw_rect(Rect2(throttle_rect.position.x - 5, handle_y - 5, throttle_rect.size.x + 10, 10), Color("e49a4f"), true)
 	draw_string(ThemeDB.fallback_font, throttle_rect.position - Vector2(13, 7), "ГАЗ", HORIZONTAL_ALIGNMENT_CENTER, throttle_rect.size.x + 26, 11, Color("b8c5c8"))
-	draw_string(ThemeDB.fallback_font, throttle_rect.end + Vector2(-12, 16), "%d%%" % int(flight.throttle * 100), HORIZONTAL_ALIGNMENT_CENTER, 48, 11, Color.WHITE)
+	draw_string(ThemeDB.fallback_font, Vector2(throttle_rect.position.x - 56, handle_y + 5), "%d%%" % roundi(flight.throttle * 100.0), HORIZONTAL_ALIGNMENT_RIGHT, 44, 11, Color.WHITE)
 	var yoke_rect := get_yoke_rect()
-	draw_circle(yoke_rect.get_center(), yoke_rect.size.x * 0.5, Color("0a0e10"))
-	draw_arc(yoke_rect.get_center(), yoke_rect.size.x * 0.5, 0, TAU, 48, Color("6f7f85"), 2)
-	var knob: Vector2 = yoke_rect.get_center() + flight.yoke * yoke_rect.size.x * 0.38
-	draw_line(yoke_rect.get_center(), knob, Color("89999f"), 3)
-	draw_circle(knob, 10, Color("d9c15e"))
+	if USE_STYLIZED_YOKE:
+		_draw_stylized_yoke(yoke_rect)
+	else:
+		_draw_legacy_yoke(yoke_rect)
 	draw_string(ThemeDB.fallback_font, yoke_rect.position - Vector2(0, 7), "ШТУРВАЛ", HORIZONTAL_ALIGNMENT_CENTER, yoke_rect.size.x, 11, Color("b8c5c8"))
+	var center_button := get_center_yoke_button_rect()
+	draw_rect(center_button, Color("334b55"), true)
+	draw_rect(center_button, Color("82979f"), false, 1)
+	draw_string(ThemeDB.fallback_font, center_button.position + Vector2(0, 17), "ЦЕНТР", HORIZONTAL_ALIGNMENT_CENTER, center_button.size.x, 10, Color.WHITE)
 	if flight.state == FlightModelScript.State.PARKED or flight.state == FlightModelScript.State.LANDED or flight.state == FlightModelScript.State.CRASHED:
 		var button := get_action_button_rect()
 		draw_rect(button, Color("334b55"), true)
@@ -557,21 +681,58 @@ func _draw_controls(rect: Rect2) -> void:
 		var label := "ПОДГОТОВИТЬ К ВЫЛЕТУ" if flight.state != FlightModelScript.State.PARKED else "ЗАПРАВИТЬ И ВЫРОВНЯТЬ"
 		draw_string(ThemeDB.fallback_font, button.position + Vector2(0, 21), label, HORIZONTAL_ALIGNMENT_CENTER, button.size.x, 12, Color.WHITE)
 
+func _draw_legacy_yoke(yoke_rect: Rect2) -> void:
+	draw_circle(yoke_rect.get_center(), yoke_rect.size.x * 0.5, Color("0a0e10"))
+	draw_arc(yoke_rect.get_center(), yoke_rect.size.x * 0.5, 0, TAU, 48, Color("6f7f85"), 2)
+	var knob: Vector2 = yoke_rect.get_center() + flight.yoke * yoke_rect.size.x * 0.38
+	draw_line(yoke_rect.get_center(), knob, Color("89999f"), 3)
+	draw_circle(knob, 10, Color("d9c15e"))
+
+func _draw_stylized_yoke(yoke_rect: Rect2) -> void:
+	var center := yoke_rect.get_center()
+	var radius := yoke_rect.size.x * 0.5
+	draw_circle(center, radius, Color("0a0e10"))
+	draw_arc(center, radius, 0, TAU, 48, Color("6f7f85"), 2)
+	var rotation: float = deg_to_rad(flight.yoke.x * 28.0)
+	var depth_scale: float = 1.0 + flight.yoke.y * 0.16
+	draw_set_transform(center, rotation, Vector2.ONE * depth_scale)
+	var silhouette := PackedVector2Array([
+		Vector2(-34, -24), Vector2(-39, -7), Vector2(-35, 12),
+		Vector2(-25, 25), Vector2(-10, 27), Vector2(0, 21),
+		Vector2(10, 27), Vector2(25, 25), Vector2(35, 12),
+		Vector2(39, -7), Vector2(34, -24),
+	])
+	draw_polyline(silhouette, Color("273238"), 13.0, true)
+	draw_polyline(silhouette, Color("75838a"), 2.2, true)
+	draw_line(Vector2(-34, -23), Vector2(-39, -7), Color("9aa7ac"), 3.0, true)
+	draw_line(Vector2(34, -23), Vector2(39, -7), Color("9aa7ac"), 3.0, true)
+	draw_rect(Rect2(-10, -5, 20, 34), Color("1b2428"), true)
+	draw_rect(Rect2(-10, -5, 20, 34), Color("657278"), false, 1.5)
+	draw_circle(Vector2(-34, -25), 8.0, Color("202a2f"))
+	draw_circle(Vector2(34, -25), 8.0, Color("202a2f"))
+	draw_arc(Vector2(-34, -25), 8.0, 0, TAU, 20, Color("7b898f"), 1.5)
+	draw_arc(Vector2(34, -25), 8.0, 0, TAU, 20, Color("7b898f"), 1.5)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
 func get_throttle_rect() -> Rect2:
 	var rect := panel_rect()
-	return Rect2(rect.end.x - 216, rect.position.y + 62, 28, 112)
+	return Rect2(rect.end.x - 178, rect.position.y + 62, 28, 112)
 
 func get_yoke_rect() -> Rect2:
 	var rect := panel_rect()
-	return Rect2(rect.end.x - 174, rect.position.y + 62, 112, 112)
+	return Rect2(rect.end.x - 136, rect.position.y + 62, 112, 112)
 
 func get_action_button_rect() -> Rect2:
 	var rect := panel_rect()
-	return Rect2(rect.end.x - 224, rect.position.y + 181, 210, 30)
+	return Rect2(rect.end.x - 234, rect.position.y + 211, 210, 28)
+
+func get_center_yoke_button_rect() -> Rect2:
+	var yoke_rect := get_yoke_rect()
+	return Rect2(yoke_rect.get_center().x - 41.5, yoke_rect.end.y + 7, 83, 24)
 
 func get_ils_rect() -> Rect2:
 	var rect := panel_rect()
-	return Rect2(rect.get_center().x - 105.0, rect.end.y - 64.0, 210, 50)
+	return Rect2(rect.get_center().x - 242.5, rect.end.y - 82.0, 485, 68)
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
@@ -595,13 +756,21 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 			elif get_yoke_rect().has_point(event.position):
 				dragging_yoke = true
 				_update_yoke(event.position)
+			elif get_center_yoke_button_rect().has_point(event.position):
+				flight.yoke = Vector2.ZERO
 			elif get_action_button_rect().has_point(event.position) and flight.state in [FlightModelScript.State.PARKED, FlightModelScript.State.LANDED, FlightModelScript.State.CRASHED]:
 				var next_airport: int = flight.airport_index
 				flight.prepare_at_airport(next_airport)
 				flight.refuel()
 				ils_airport_index = 1 - next_airport
+				_update_receiver_signals()
+				_update_ils_touchdown_prediction()
+				ils_prediction_timer = 1.0
 			elif get_ils_rect().has_point(event.position):
 				ils_airport_index = 1 - ils_airport_index
+				_update_receiver_signals()
+				_update_ils_touchdown_prediction()
+				ils_prediction_timer = 1.0
 			elif _beacon_receiver_hit(event.position, 0):
 				selected_beacons[0] = (selected_beacons[0] + 1) % world.beacons.size()
 				_update_receiver_signals()
@@ -620,6 +789,8 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 				else:
 					point_drag_candidate = true
 		else:
+			if dragging_measure_point:
+				_snap_dragged_measure_point_to_endpoint(event.position)
 			if (map_drag_candidate and not dragging_map or point_drag_candidate and not dragging_measure_point) and mrect.has_point(event.position):
 				_handle_map_click(event.position)
 			map_drag_candidate = false
@@ -674,6 +845,8 @@ func _update_yoke(mouse: Vector2) -> void:
 func _update_throttle(mouse: Vector2) -> void:
 	var rect := get_throttle_rect()
 	flight.throttle = clamp(inverse_lerp(rect.end.y - 8, rect.position.y + 8, mouse.y), 0.0, 1.0)
+	if flight.throttle > 0.001:
+		flight.wheel_brakes_applied = false
 
 func _beacon_receiver_hit(point: Vector2, receiver: int) -> bool:
 	var rect := panel_rect()
@@ -753,6 +926,29 @@ func _find_measure_connections(screen_position: Vector2) -> Array[Dictionary]:
 			if endpoint.is_equal_approx(selected_world):
 				connections.append({"line_index": line_index, "endpoint": endpoint_key})
 	return connections
+
+func _snap_dragged_measure_point_to_endpoint(screen_position: Vector2) -> void:
+	var closest_pixels := 14.0
+	var snap_target: Variant = null
+	for line_index in measurement_lines.size():
+		for endpoint_key in ["a", "b"]:
+			if _is_dragged_measure_connection(line_index, endpoint_key):
+				continue
+			var endpoint: Vector2 = measurement_lines[line_index][endpoint_key]
+			var pixel_distance := screen_position.distance_to(world_to_screen(endpoint))
+			if pixel_distance < closest_pixels:
+				closest_pixels = pixel_distance
+				snap_target = endpoint
+	if snap_target == null:
+		return
+	for connection in dragged_measure_connections:
+		measurement_lines[connection.line_index][connection.endpoint] = snap_target
+
+func _is_dragged_measure_connection(line_index: int, endpoint_key: String) -> bool:
+	for connection in dragged_measure_connections:
+		if connection.line_index == line_index and connection.endpoint == endpoint_key:
+			return true
+	return false
 
 func _snap_map_point(screen_position: Vector2) -> Vector2:
 	var unsnapped := screen_to_world(screen_position)
