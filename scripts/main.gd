@@ -13,6 +13,7 @@ const INSTRUMENT_GAP := 14.0
 const THROTTLE_HOLD_DELAY := 0.32
 const THROTTLE_HOLD_RATE := 0.35
 const USE_STYLIZED_YOKE := true
+const APPROACH_DETAIL_MIN_ZOOM := 10.0
 
 var world
 var flight
@@ -20,6 +21,7 @@ var selected_beacons := [0, 1]
 var map_zoom := 1.0
 var map_center := Vector2(50, 50)
 var contour_segments: Array[Dictionary] = []
+var terrain_peaks: Array[Dictionary] = []
 var measurement_lines: Array[Dictionary] = []
 var pending_measure: Variant = null
 var dragging_map := false
@@ -33,6 +35,8 @@ var dragging_throttle := false
 var last_mouse := Vector2.ZERO
 var status_timer := 0.0
 var clock_seconds := 12.0 * 60.0 * 60.0
+var trip_air_distance_km := 0.0
+var trip_elapsed_seconds := 0.0
 var ils_airport_index := 1
 var simulation_paused := false
 var signal_check_timer := 0.0
@@ -94,6 +98,14 @@ func _input(event: InputEvent) -> void:
 			flight.yoke = Vector2.ZERO
 			get_viewport().set_input_as_handled()
 			queue_redraw()
+		elif event.keycode == KEY_T:
+			_reset_trip_counter()
+			get_viewport().set_input_as_handled()
+			queue_redraw()
+		elif event.keycode == KEY_F and flight.state in [FlightModelScript.State.PARKED, FlightModelScript.State.LANDED, FlightModelScript.State.CRASHED]:
+			_prepare_for_departure()
+			get_viewport().set_input_as_handled()
+			queue_redraw()
 
 func regenerate_world() -> void:
 	world = FlightWorldScript.new()
@@ -103,9 +115,12 @@ func regenerate_world() -> void:
 	measurement_lines.clear()
 	pending_measure = null
 	clock_seconds = 12.0 * 60.0 * 60.0
+	trip_air_distance_km = 0.0
+	trip_elapsed_seconds = 0.0
 	ils_airport_index = 1
 	ils_prediction_timer = 0.0
 	_build_contours()
+	_build_approach_markers()
 	_update_receiver_signals()
 	_update_ils_touchdown_prediction()
 	_queue_map_redraw()
@@ -138,6 +153,9 @@ func _process(delta: float) -> void:
 			flight.yoke.y = clampf(flight.yoke.y + keyboard_yoke.y * delta * 0.75, -1.0, 1.0)
 	_update_held_throttle(delta)
 	flight.update(delta)
+	if flight.state == FlightModelScript.State.FLYING:
+		trip_air_distance_km += flight.speed_kmh / 3600.0 * delta
+		trip_elapsed_seconds += delta
 	status_timer += delta
 	queue_redraw()
 
@@ -149,6 +167,21 @@ func _adjust_throttle_percent(step_percent: int) -> void:
 	if step_percent > 0:
 		flight.wheel_brakes_applied = false
 	flight.throttle = clampf((current_percent + step_percent) / 100.0, 0.0, 1.0)
+
+func _reset_trip_counter() -> void:
+	trip_air_distance_km = 0.0
+	trip_elapsed_seconds = 0.0
+	if flight != null and flight.state != FlightModelScript.State.CRASHED:
+		flight._show_message("Счётчик воздушного пути сброшен", 3.0, "")
+
+func _prepare_for_departure() -> void:
+	var next_airport: int = flight.airport_index
+	flight.prepare_at_airport(next_airport)
+	flight.refuel()
+	ils_airport_index = 1 - next_airport
+	_update_receiver_signals()
+	_update_ils_touchdown_prediction()
+	ils_prediction_timer = 1.0
 
 func _update_held_throttle(delta: float) -> void:
 	if throttle_up_held:
@@ -206,13 +239,14 @@ func _draw_map() -> void:
 		var width := 1.0 if int(level) % 500 != 0 else 1.7
 		_draw_clipped_map_line(world_to_screen(segment.a), world_to_screen(segment.b), color, width)
 	_draw_contour_labels(rect)
+	_draw_terrain_peaks(rect)
 	for airport in world.airports:
 		_draw_airport(airport)
 		_draw_approach_point(airport)
 	for beacon in world.beacons:
 		_draw_beacon(beacon)
 	for line in measurement_lines:
-		_draw_measurement(line.a, line.b)
+		_draw_measurement(line.a, line.b, Color("254d9a"), line.get("max_height_m", -1.0))
 	if pending_measure != null:
 		_draw_measurement(pending_measure, _snap_map_point(get_local_mouse_position()), Color(0.1, 0.25, 0.7, 0.55))
 	map_canvas.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, 20), "НАВИГАЦИОННАЯ КАРТА • положение самолёта не отображается", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("35372e"))
@@ -250,6 +284,13 @@ func _draw_contour_labels(rect: Rect2) -> void:
 		map_canvas.draw_string(ThemeDB.fallback_font, midpoint + Vector2(-text_size.x * 0.5, 4.0), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("55462f"))
 		positions.append(midpoint)
 
+func _draw_terrain_peaks(rect: Rect2) -> void:
+	var safe_rect := rect.grow(-18.0)
+	for peak in terrain_peaks:
+		var position := world_to_screen(peak.position)
+		if safe_rect.has_point(position):
+			_draw_clamped_map_text(position + Vector2(5.0, -5.0), "▲ %.0f м" % float(peak.height), 11, Color("4d3d29"))
+
 func _draw_airport(airport: Dictionary) -> void:
 	var center := world_to_screen(airport.position)
 	var vector: Vector2 = world.heading_vector(airport.heading) * FlightWorldScript.RUNWAY_LENGTH_KM * 0.5
@@ -268,35 +309,63 @@ func _draw_airport(airport: Dictionary) -> void:
 	_draw_clamped_map_text(center + Vector2(7, -7), "%s  %03d°/%03d°" % [airport.name, direct_course, reverse_course], 12, Color("20241f"))
 
 func _draw_approach_point(airport: Dictionary) -> void:
+	# Keep the overview map readable: detailed glide-path markings appear only
+	# at the maximum zoom and the immediately preceding wheel-zoom level.
+	if map_zoom < APPROACH_DETAIL_MIN_ZOOM:
+		return
 	var forward: Vector2 = world.heading_vector(airport.heading)
 	var threshold: Vector2 = airport.position - forward * (FlightWorldScript.RUNWAY_LENGTH_KM * 0.5)
-	var approach_position: Vector2 = threshold - forward * 4.0
-	var point := world_to_screen(approach_position)
-	var threshold_screen := world_to_screen(threshold)
-	if not map_rect().grow(-8.0).has_point(point):
-		return
-	_draw_clipped_map_line(point, threshold_screen, Color("287777"), 1.5, true)
-	var diamond := PackedVector2Array([
-		point + Vector2(0, -6),
-		point + Vector2(6, 0),
-		point + Vector2(0, 6),
-		point + Vector2(-6, 0),
-	])
-	map_canvas.draw_colored_polygon(diamond, Color("d7d0ad"))
-	map_canvas.draw_polyline(PackedVector2Array([diamond[0], diamond[1], diamond[2], diamond[3], diamond[0]]), Color("185f61"), 2.0)
-	var desired_altitude := 4000.0 * tan(deg_to_rad(FlightModelScript.GLIDE_SLOPE_DEG))
+	var touchdown_target: Vector2 = threshold + forward * FlightModelScript.GLIDE_TOUCHDOWN_OFFSET_KM
 	var approach_vertical_speed := -(92.0 / 3.6) * tan(deg_to_rad(FlightModelScript.GLIDE_SLOPE_DEG))
-	var label := "ВХОД «%s»  %.0f м • верт. %.1f м/с" % [airport.name, desired_altitude, approach_vertical_speed]
-	var text_size := ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
-	var label_position := point + Vector2(9, -9)
-	if label_position.x + text_size.x + 5 > map_rect().end.x:
-		label_position.x = point.x - text_size.x - 9
-	if label_position.y - 13 < map_rect().position.y:
-		label_position.y = point.y + 19
-	label_position.x = clampf(label_position.x, map_rect().position.x + 4.0, map_rect().end.x - text_size.x - 4.0)
-	label_position.y = clampf(label_position.y, map_rect().position.y + text_size.y + 2.0, map_rect().end.y - 4.0)
-	map_canvas.draw_rect(Rect2(label_position + Vector2(-3, -12), text_size + Vector2(6, 4)), Color("d7d0ad"), true)
-	map_canvas.draw_string(ThemeDB.fallback_font, label_position, label, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("185f61"))
+	var markers: Array = airport.get("approach_markers", [])
+	if markers.is_empty():
+		return
+	var farthest_distance_km: float = markers[-1].distance_km
+	var farthest_position := threshold - forward * farthest_distance_km
+	_draw_clipped_map_line(world_to_screen(farthest_position), world_to_screen(touchdown_target), Color("287777"), 1.5, true)
+	for marker in markers:
+		var distance_km: float = marker.distance_km
+		var approach_position: Vector2 = threshold - forward * distance_km
+		var point := world_to_screen(approach_position)
+		if not map_rect().grow(-8.0).has_point(point):
+			continue
+		var diamond := PackedVector2Array([
+			point + Vector2(0, -6), point + Vector2(6, 0),
+			point + Vector2(0, 6), point + Vector2(-6, 0),
+		])
+		map_canvas.draw_colored_polygon(diamond, Color("d7d0ad"))
+		map_canvas.draw_polyline(PackedVector2Array([diamond[0], diamond[1], diamond[2], diamond[3], diamond[0]]), Color("185f61"), 2.0)
+		var desired_altitude: float = marker.altitude_m
+		var label := "%.0f м • верт. %.1f м/с" % [desired_altitude, approach_vertical_speed]
+		var text_size := ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 10)
+		var label_position := point + Vector2(12.0, 4.0)
+		label_position.x = clampf(label_position.x, map_rect().position.x + 4.0, map_rect().end.x - text_size.x - 4.0)
+		label_position.y = clampf(label_position.y, map_rect().position.y + text_size.y + 2.0, map_rect().end.y - 4.0)
+		map_canvas.draw_rect(Rect2(label_position + Vector2(-3, -11), text_size + Vector2(6, 3)), Color("d7d0ad"), true)
+		map_canvas.draw_string(ThemeDB.fallback_font, label_position, label, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("185f61"))
+
+func _build_approach_markers() -> void:
+	for airport in world.airports:
+		var markers: Array[Dictionary] = []
+		for distance_km in range(4, 21, 4):
+			var distance: float = float(distance_km)
+			if not _approach_path_is_clear(airport, distance):
+				continue
+			var altitude_m := (distance * 1000.0 + FlightModelScript.GLIDE_TOUCHDOWN_OFFSET_KM * 1000.0) * tan(deg_to_rad(FlightModelScript.GLIDE_SLOPE_DEG))
+			markers.append({"distance_km": distance, "altitude_m": altitude_m})
+		airport.approach_markers = markers
+
+func _approach_path_is_clear(airport: Dictionary, start_distance_km: float) -> bool:
+	var forward: Vector2 = world.heading_vector(airport.heading)
+	var threshold: Vector2 = airport.position - forward * (FlightWorldScript.RUNWAY_LENGTH_KM * 0.5)
+	var sample_count := maxi(1, ceili(start_distance_km / 0.10))
+	for sample_index in sample_count + 1:
+		var distance_km := start_distance_km * sample_index / float(sample_count)
+		var position := threshold - forward * distance_km
+		var glide_altitude_m := (distance_km + FlightModelScript.GLIDE_TOUCHDOWN_OFFSET_KM) * 1000.0 * tan(deg_to_rad(FlightModelScript.GLIDE_SLOPE_DEG))
+		if world.height_at(position) >= glide_altitude_m:
+			return false
+	return true
 
 func _draw_beacon(beacon: Dictionary) -> void:
 	var p := world_to_screen(beacon.position)
@@ -307,7 +376,7 @@ func _draw_beacon(beacon: Dictionary) -> void:
 	map_canvas.draw_polyline(PackedVector2Array([points[0], points[1], points[2], points[0]]), Color("972d25"), 2.0)
 	_draw_clamped_map_text(p + Vector2(7, 12), "%s %.0f" % [beacon.name, beacon.frequency], 11, Color("76231d"))
 
-func _draw_measurement(a_world: Vector2, b_world: Vector2, color := Color("254d9a")) -> void:
+func _draw_measurement(a_world: Vector2, b_world: Vector2, color := Color("254d9a"), cached_max_height := -1.0) -> void:
 	var a := world_to_screen(a_world)
 	var b := world_to_screen(b_world)
 	_draw_clipped_map_line(a, b, color, 2.0, true)
@@ -319,7 +388,8 @@ func _draw_measurement(a_world: Vector2, b_world: Vector2, color := Color("254d9
 	var bearing: float = world.vector_heading(b_world - a_world)
 	var direct_course := int(round(bearing)) % 360
 	var reverse_course := (direct_course + 180) % 360
-	var label := "%.1f км  %03d° / %03d°" % [distance, direct_course, reverse_course]
+	var max_height: float = cached_max_height if cached_max_height >= 0.0 else _maximum_terrain_height_on_line(a_world, b_world)
+	var label := "%.1f км  %03d° / %03d°  %.0f м" % [distance, direct_course, reverse_course, max_height]
 	var visible_segment := _clip_line_to_rect(a, b, map_rect().grow(-3.0))
 	if visible_segment.size() == 2:
 		var visible_direction: Vector2 = visible_segment[1] - visible_segment[0]
@@ -390,7 +460,7 @@ func _draw_panel() -> void:
 	var y := rect.position.y + 12.0
 	var gauge_y := y + 96.0
 	var speed_center := _instrument_center(0, gauge_y)
-	_draw_round_gauge(speed_center, INSTRUMENT_RADIUS, "СКОРОСТЬ", "%.0f" % flight.speed_kmh, "км/ч", flight.speed_kmh / 200.0)
+	_draw_speedometer(speed_center, INSTRUMENT_RADIUS)
 	if flight.wheel_brakes_applied:
 		draw_string(ThemeDB.fallback_font, speed_center + Vector2(-INSTRUMENT_RADIUS, INSTRUMENT_RADIUS + 34), "ТОРМОЗ", HORIZONTAL_ALIGNMENT_CENTER, INSTRUMENT_RADIUS * 2.0, 11, Color("ef645e"))
 	_draw_round_gauge(_instrument_center(1, gauge_y), INSTRUMENT_RADIUS, "ВЫСОТА", "%.0f" % flight.altitude_m, "м", flight.altitude_m / 5000.0)
@@ -411,12 +481,56 @@ func _draw_panel() -> void:
 	elif not simulation_paused and flight.stall_warning_active():
 		status_text = "ПРЕДУПРЕЖДЕНИЕ: БОЛЬШОЙ УГОЛ АТАКИ"
 		state_color = Color("e8d274")
+	elif not simulation_paused and flight.vne_exceeded():
+		status_text = "ПРЕВЫШЕНА VNE — УМЕНЬШИТЬ СКОРОСТЬ"
+		state_color = Color("ef645e")
+	elif not simulation_paused and flight.overspeed_warning_active():
+		status_text = "ВЫСОКАЯ СКОРОСТЬ — ИЗБЕГАТЬ РЕЗКИХ МАНЁВРОВ"
+		state_color = Color("e8d274")
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, rect.size.y - 10), status_text, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 330, 15, state_color)
-	draw_string(ThemeDB.fallback_font, Vector2(rect.end.x - 470, rect.end.y - 10), "W/S: газ  •  стрелки/C: штурвал  •  R: новая карта", HORIZONTAL_ALIGNMENT_RIGHT, 446, 12, Color("aebbc1"))
+	draw_string(ThemeDB.fallback_font, Vector2(rect.end.x - 470, rect.end.y - 10), "W/S: газ  •  стрелки: штурвал  •  R: новая карта", HORIZONTAL_ALIGNMENT_RIGHT, 446, 12, Color("aebbc1"))
 
 func _instrument_center(index: int, gauge_y: float) -> Vector2:
 	var step := INSTRUMENT_RADIUS * 2.0 + INSTRUMENT_GAP
 	return Vector2(panel_rect().position.x + INSTRUMENT_RADIUS + 5.0 + index * step, gauge_y)
+
+func _draw_speedometer(center: Vector2, radius: float) -> void:
+	var start_angle := -PI * 0.75
+	var end_angle := PI * 0.75
+	var speed_to_angle := func(value: float) -> float:
+		return lerpf(start_angle, end_angle, clampf(value / 300.0, 0.0, 1.0))
+	draw_circle(center, radius, Color("0a0e10"))
+	draw_arc(center, radius - 2, 0, TAU, 48, Color("7d8b91"), 2)
+	draw_arc(center, radius - 5, speed_to_angle.call(0.0), speed_to_angle.call(FlightModelScript.VNO_KMH), 28, Color("65d48c"), 3.0)
+	draw_arc(center, radius - 5, speed_to_angle.call(FlightModelScript.VNO_KMH), speed_to_angle.call(FlightModelScript.VNE_KMH), 10, Color("e8d274"), 3.0)
+	var red_angle: float = speed_to_angle.call(FlightModelScript.VNE_KMH)
+	var red_outer := center + Vector2(cos(red_angle), sin(red_angle)) * (radius - 4)
+	var red_inner := center + Vector2(cos(red_angle), sin(red_angle)) * (radius - 14)
+	draw_line(red_inner, red_outer, Color("ef645e"), 3.0)
+	var rotation_angle: float = speed_to_angle.call(FlightModelScript.RECOMMENDED_ROTATION_SPEED_KMH)
+	var rotation_direction := Vector2(cos(rotation_angle), sin(rotation_angle))
+	draw_line(center + rotation_direction * (radius - 16), center + rotation_direction * (radius - 4), Color("73d6d0"), 2.5)
+	var rotation_label_position := center + rotation_direction * (radius - 25) - Vector2(9.0, -3.0)
+	draw_string(ThemeDB.fallback_font, rotation_label_position, "VR", HORIZONTAL_ALIGNMENT_CENTER, 18.0, 8, Color("73d6d0"))
+	# With the current simplified climb polar, best angle and best rate of climb
+	# coincide at about 130 km/h. Keep one honest combined mark until the flight
+	# model has distinct Vx and Vy optima.
+	var climb_angle: float = speed_to_angle.call(FlightModelScript.VX_KMH)
+	var climb_direction := Vector2(cos(climb_angle), sin(climb_angle))
+	draw_line(center + climb_direction * (radius - 16), center + climb_direction * (radius - 4), Color("65d48c"), 2.5)
+	var climb_label_position := center + climb_direction * (radius - 27) - Vector2(15.0, -3.0)
+	draw_string(ThemeDB.fallback_font, climb_label_position, "VX/VY", HORIZONTAL_ALIGNMENT_CENTER, 30.0, 7, Color("65d48c"))
+	for i in 11:
+		var angle: float = lerpf(start_angle, end_angle, i / 10.0)
+		var outer := center + Vector2(cos(angle), sin(angle)) * (radius - 7)
+		var inner := center + Vector2(cos(angle), sin(angle)) * (radius - 12)
+		draw_line(inner, outer, Color("d2dde0"), 1)
+	var needle_angle: float = speed_to_angle.call(flight.speed_kmh)
+	draw_line(center, center + Vector2(cos(needle_angle), sin(needle_angle)) * (radius - 15), Color("ed775f"), 2)
+	draw_circle(center, 3, Color("d8dfe0"))
+	draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "СКОРОСТЬ", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
+	var value_color := Color("ef645e") if flight.speed_kmh > FlightModelScript.VNE_KMH else (Color("e8d274") if flight.speed_kmh > FlightModelScript.VNO_KMH else Color.WHITE)
+	draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "%.0f км/ч" % flight.speed_kmh, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 14, value_color)
 
 func _draw_round_gauge(center: Vector2, radius: float, title: String, value: String, unit: String, ratio: float) -> void:
 	draw_circle(center, radius, Color("0a0e10"))
@@ -481,9 +595,9 @@ func _draw_clock(center: Vector2, radius: float) -> void:
 	draw_arc(center, radius - 1, 0, TAU, 40, Color("7d8b91"), 2)
 	for hour_mark in 12:
 		var mark_angle := deg_to_rad(hour_mark * 30.0 - 90.0)
-		var outer := center + Vector2(cos(mark_angle), sin(mark_angle)) * (radius - 4)
-		var inner_length := 8.0 if hour_mark % 3 == 0 else 5.0
-		var inner := center + Vector2(cos(mark_angle), sin(mark_angle)) * (radius - inner_length)
+		var outer := center + Vector2(cos(mark_angle), sin(mark_angle)) * (radius - 6.0)
+		var inner_radius := radius - (15.0 if hour_mark % 3 == 0 else 11.0)
+		var inner := center + Vector2(cos(mark_angle), sin(mark_angle)) * inner_radius
 		draw_line(inner, outer, Color("d2dde0"), 1.5)
 	var hour_angle := deg_to_rad(fmod(hours, 12) * 30.0 + minutes * 0.5 - 90.0)
 	var minute_angle := deg_to_rad(minutes * 6.0 + seconds * 0.1 - 90.0)
@@ -493,12 +607,20 @@ func _draw_clock(center: Vector2, radius: float) -> void:
 	draw_line(center, center + Vector2(cos(second_angle), sin(second_angle)) * (radius * 0.73), Color("ed775f"), 1.0, true)
 	draw_circle(center, 2.5, Color("edf2f2"))
 	draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ЧАСЫ", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 10, Color("b8c5c8"))
-	draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "%02d:%02d:%02d" % [hours, minutes, seconds], HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 13, Color.WHITE)
+	draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 14), "%02d:%02d:%02d" % [hours, minutes, seconds], HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 10, Color.WHITE)
+	var trip_whole_seconds := int(trip_elapsed_seconds)
+	var trip_minutes: int = trip_whole_seconds / 60
+	var trip_seconds: int = trip_whole_seconds % 60
+	draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 8.0, radius + 29), "ПУТЬ %.1f км • %02d:%02d" % [trip_air_distance_km, trip_minutes, trip_seconds], HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 16.0, 10, Color("73d6d0"))
+	var reset_button := get_trip_reset_button_rect()
+	draw_rect(reset_button, Color("334b55"), true)
+	draw_rect(reset_button, Color("82979f"), false, 1.0)
+	draw_string(ThemeDB.fallback_font, reset_button.position + Vector2(0.0, 13.0), "СБРОС [T]", HORIZONTAL_ALIGNMENT_CENTER, reset_button.size.x, 8, Color.WHITE)
 
 func _draw_fuel_instrument(center: Vector2, radius: float) -> void:
 	var flow: float = flight.fuel_flow_lpm()
 	var estimated_range: float = flight.estimated_range_km()
-	var max_flow := 0.78
+	var max_flow := 0.95
 	var remaining_ratio: float = clampf(flight.fuel_l / flight.fuel_capacity_l, 0.0, 1.0)
 	var flow_ratio: float = clampf(flow / max_flow, 0.0, 1.0)
 	draw_circle(center, radius, Color("0a0e10"))
@@ -519,8 +641,8 @@ func _draw_fuel_instrument(center: Vector2, radius: float) -> void:
 	draw_string(ThemeDB.fallback_font, center + Vector2(-radius, 5), "ОСТ", HORIZONTAL_ALIGNMENT_CENTER, radius, 8, Color("e6c75b"))
 	draw_string(ThemeDB.fallback_font, center + Vector2(0, 5), "РАСХ", HORIZONTAL_ALIGNMENT_CENTER, radius, 8, Color("6fc78c"))
 	draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ТОПЛИВО", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
-	draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 5.0, radius + 14), "Расход %.1f л/мин" % flow, HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 10.0, 10, Color("6fc78c"))
-	draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 7.0, radius + 29), "%.1f/%.0f л • запас %.0f км" % [flight.fuel_l, flight.fuel_capacity_l, estimated_range], HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 14.0, 9, Color.WHITE)
+	draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 5.0, radius + 14), "Расход %.2f л/мин" % flow, HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 10.0, 10, Color("6fc78c"))
+	draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 7.0, radius + 29), "%.1f/%.0f л • запас %.0f км" % [flight.fuel_l, flight.fuel_capacity_l, estimated_range], HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 14.0, 10, Color.WHITE)
 
 func _draw_ils() -> void:
 	var rect := get_ils_rect()
@@ -546,9 +668,9 @@ func _draw_ils() -> void:
 	var vertical_speed_color := _ils_parameter_color(absf(flight.vertical_speed_mps - desired_vs) / 0.35, true)
 	var course_error_color := _ils_parameter_color(absf(guidance.course_error_deg), true, 1.0, 5.0)
 	var approach_speed_color := Color("65d48c")
-	if flight.speed_kmh >= 100.0:
+	if flight.speed_kmh > 115.0:
 		approach_speed_color = Color("ef645e")
-	elif flight.speed_kmh > 95.0:
+	elif flight.speed_kmh > 100.0:
 		approach_speed_color = Color("e8d274")
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(216, 22), "H %.1f м" % flight.altitude_m, HORIZONTAL_ALIGNMENT_LEFT, 76, 12, altitude_color)
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(292, 22), "VS %+.2f м/с" % flight.vertical_speed_mps, HORIZONTAL_ALIGNMENT_LEFT, 105, 12, vertical_speed_color)
@@ -571,7 +693,11 @@ func _draw_ils() -> void:
 		draw_line(Vector2(edge_x, center.y - 5.0), Vector2(edge_x, center.y + 5.0), Color("a9c0c1"), 2.0)
 	# The fixed cross is the airport. The moving cross is the aircraft: right of
 	# center means right of the localizer, above center means above glide path.
-	var localizer_x: float = center.x + clampf(guidance.localizer_error, -1.4, 1.4) * display.size.x * 0.30
+	# runway_coordinates() uses a cross-runway axis whose positive side appears
+	# left to the pilot on the supported approach. Invert it for the aircraft
+	# symbol: if the moving line is left of the airport, steering right must move
+	# it back towards the fixed centre, and vice versa.
+	var localizer_x: float = center.x - clampf(guidance.localizer_error, -1.4, 1.4) * display.size.x * 0.30
 	var glide_y: float = center.y - clampf(guidance.glide_error, -1.4, 1.4) * display.size.y * 0.30
 	var localizer_severity: float = maxf(absf(guidance.localizer_error), absf(guidance.course_error_deg) / 14.0)
 	var glide_severity: float = absf(guidance.glide_error)
@@ -606,7 +732,11 @@ func _draw_horizon(center: Vector2, radius: float) -> void:
 	draw_circle(center, 3, Color("e7c25f"))
 	draw_arc(center, radius - 2, 0, TAU, 48, Color("7d8b91"), 2)
 	draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "АВИАГОРИЗОНТ", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
-	var aoa_color := Color("ef645e") if flight.stalled else (Color("e8d274") if flight.stall_warning_active() else Color.WHITE)
+	var aoa_color := Color("65d48c")
+	if flight.stalled or flight.angle_of_attack_deg >= FlightModelScript.STALL_AOA_DEG:
+		aoa_color = Color("ef645e")
+	elif flight.angle_of_attack_deg >= FlightModelScript.STALL_WARNING_AOA_DEG:
+		aoa_color = Color("e8d274")
 	draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "УА %+.1f°" % flight.angle_of_attack_deg, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 12, aoa_color)
 
 func _draw_beacon_instrument(center: Vector2, radius: float, instrument: int) -> void:
@@ -634,13 +764,13 @@ func _draw_beacon_instrument(center: Vector2, radius: float, instrument: int) ->
 		draw_line(center + Vector2(-12, -12), center + Vector2(12, 12), Color("c95d55"), 2.0)
 		draw_line(center + Vector2(12, -12), center + Vector2(-12, 12), Color("c95d55"), 2.0)
 	draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ПРИЁМНИК %d" % (instrument + 1), HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
-	draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 5.0, radius + 14), "%s  %.0f кГц  R%.0f" % [beacon.name, beacon.frequency, beacon.range_km], HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 10.0, 9, Color.WHITE)
+	draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 5.0, radius + 14), "%s  %.0f кГц  R%.0f" % [beacon.name, beacon.frequency, beacon.range_km], HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 10.0, 10, Color.WHITE)
 	if signal_available:
 		var direct_course := int(round(absolute_bearing)) % 360
 		var reverse_course := (direct_course + 180) % 360
 		draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 9.0, radius + 29), "%.1f км  %03d°/%03d°" % [delta.length(), direct_course, reverse_course], HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 18.0, 10, Color("73d6d0"))
 	else:
-		draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 9.0, radius + 29), signal_status.get("reason", "НЕТ СИГНАЛА"), HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 18.0, 9, Color("c95d55"))
+		draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 9.0, radius + 29), signal_status.get("reason", "НЕТ СИГНАЛА"), HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 18.0, 10, Color("c95d55"))
 
 func _update_receiver_signals() -> void:
 	if world == null or flight == null:
@@ -648,8 +778,7 @@ func _update_receiver_signals() -> void:
 	for instrument in 2:
 		var beacon: Dictionary = world.beacons[selected_beacons[instrument]]
 		receiver_signal_status[instrument] = world.beacon_signal(beacon, flight.position_km, flight.altitude_m)
-	var ils_beacon: Dictionary = world.beacons[ils_airport_index]
-	ils_signal_status = world.beacon_signal(ils_beacon, flight.position_km, flight.altitude_m)
+	ils_signal_status = world.ils_signal(ils_airport_index, flight.position_km, flight.altitude_m)
 
 func _update_ils_touchdown_prediction() -> void:
 	if flight == null:
@@ -673,12 +802,12 @@ func _draw_controls(rect: Rect2) -> void:
 	var center_button := get_center_yoke_button_rect()
 	draw_rect(center_button, Color("334b55"), true)
 	draw_rect(center_button, Color("82979f"), false, 1)
-	draw_string(ThemeDB.fallback_font, center_button.position + Vector2(0, 17), "ЦЕНТР", HORIZONTAL_ALIGNMENT_CENTER, center_button.size.x, 10, Color.WHITE)
+	draw_string(ThemeDB.fallback_font, center_button.position + Vector2(0, 17), "ЦЕНТР [C]", HORIZONTAL_ALIGNMENT_CENTER, center_button.size.x, 10, Color.WHITE)
 	if flight.state == FlightModelScript.State.PARKED or flight.state == FlightModelScript.State.LANDED or flight.state == FlightModelScript.State.CRASHED:
 		var button := get_action_button_rect()
 		draw_rect(button, Color("334b55"), true)
 		draw_rect(button, Color("82979f"), false, 1)
-		var label := "ПОДГОТОВИТЬ К ВЫЛЕТУ" if flight.state != FlightModelScript.State.PARKED else "ЗАПРАВИТЬ И ВЫРОВНЯТЬ"
+		var label := "ПОДГОТОВИТЬ К ВЫЛЕТУ [F]" if flight.state != FlightModelScript.State.PARKED else "ЗАПРАВИТЬ И ВЫРОВНЯТЬ [F]"
 		draw_string(ThemeDB.fallback_font, button.position + Vector2(0, 21), label, HORIZONTAL_ALIGNMENT_CENTER, button.size.x, 12, Color.WHITE)
 
 func _draw_legacy_yoke(yoke_rect: Rect2) -> void:
@@ -730,6 +859,11 @@ func get_center_yoke_button_rect() -> Rect2:
 	var yoke_rect := get_yoke_rect()
 	return Rect2(yoke_rect.get_center().x - 41.5, yoke_rect.end.y + 7, 83, 24)
 
+func get_trip_reset_button_rect() -> Rect2:
+	var rect := panel_rect()
+	var clock_center := _instrument_center(7, rect.position.y + 108.0)
+	return Rect2(clock_center.x - 27.0, clock_center.y - INSTRUMENT_RADIUS - 42.0, 54.0, 18.0)
+
 func get_ils_rect() -> Rect2:
 	var rect := panel_rect()
 	return Rect2(rect.get_center().x - 242.5, rect.end.y - 82.0, 485, 68)
@@ -750,7 +884,9 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		if event.pressed:
 			map_drag_candidate = false
 			point_drag_candidate = false
-			if get_throttle_rect().has_point(event.position):
+			if get_trip_reset_button_rect().has_point(event.position):
+				_reset_trip_counter()
+			elif get_throttle_rect().has_point(event.position):
 				dragging_throttle = true
 				_update_throttle(event.position)
 			elif get_yoke_rect().has_point(event.position):
@@ -759,13 +895,7 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 			elif get_center_yoke_button_rect().has_point(event.position):
 				flight.yoke = Vector2.ZERO
 			elif get_action_button_rect().has_point(event.position) and flight.state in [FlightModelScript.State.PARKED, FlightModelScript.State.LANDED, FlightModelScript.State.CRASHED]:
-				var next_airport: int = flight.airport_index
-				flight.prepare_at_airport(next_airport)
-				flight.refuel()
-				ils_airport_index = 1 - next_airport
-				_update_receiver_signals()
-				_update_ils_touchdown_prediction()
-				ils_prediction_timer = 1.0
+				_prepare_for_departure()
 			elif get_ils_rect().has_point(event.position):
 				ils_airport_index = 1 - ils_airport_index
 				_update_receiver_signals()
@@ -791,6 +921,7 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		else:
 			if dragging_measure_point:
 				_snap_dragged_measure_point_to_endpoint(event.position)
+				_refresh_measurement_max_heights(dragged_measure_connections)
 			if (map_drag_candidate and not dragging_map or point_drag_candidate and not dragging_measure_point) and mrect.has_point(event.position):
 				_handle_map_click(event.position)
 			map_drag_candidate = false
@@ -822,6 +953,7 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 		new_world.y = clampf(new_world.y, 0.0, FlightWorldScript.SIZE_KM)
 		for connection in dragged_measure_connections:
 			measurement_lines[connection.line_index][connection.endpoint] = new_world
+		_refresh_measurement_max_heights(dragged_measure_connections)
 		_queue_map_redraw()
 		queue_redraw()
 		return
@@ -902,8 +1034,37 @@ func _handle_map_click(screen_position: Vector2) -> void:
 	if pending_measure == null:
 		pending_measure = point
 	else:
-		measurement_lines.append({"a": pending_measure, "b": point})
+		measurement_lines.append({"a": pending_measure, "b": point, "max_height_m": _maximum_terrain_height_on_line(pending_measure, point)})
 		pending_measure = null
+
+func _maximum_terrain_height_on_line(a: Vector2, b: Vector2) -> float:
+	var sample_count: int = maxi(1, ceili(a.distance_to(b) / 0.10))
+	var maximum_height: float = world.height_at(a)
+	var previous_position: Vector2 = a
+	var previous_height: float = maximum_height
+	for sample_index in range(1, sample_count + 1):
+		var position := a.lerp(b, sample_index / float(sample_count))
+		var height: float = world.height_at(position)
+		maximum_height = maxf(maximum_height, height)
+		# On a rapidly changing slope, inspect the middle of the interval too.
+		# This halves the local sampling step without paying that cost over flats.
+		if absf(height - previous_height) >= 8.0:
+			maximum_height = maxf(maximum_height, world.height_at((previous_position + position) * 0.5))
+		previous_position = position
+		previous_height = height
+	# A small allowance covers residual sampling error; this is deliberately
+	# much smaller than a contour interval and is not a safe-flight altitude.
+	return maximum_height + 8.0
+
+func _refresh_measurement_max_heights(connections: Array[Dictionary]) -> void:
+	var refreshed: Dictionary = {}
+	for connection in connections:
+		var line_index: int = connection.line_index
+		if refreshed.has(line_index) or line_index < 0 or line_index >= measurement_lines.size():
+			continue
+		var line: Dictionary = measurement_lines[line_index]
+		line.max_height_m = _maximum_terrain_height_on_line(line.a, line.b)
+		refreshed[line_index] = true
 
 func _find_measure_connections(screen_position: Vector2) -> Array[Dictionary]:
 	var selected_world := Vector2.ZERO
@@ -930,6 +1091,15 @@ func _find_measure_connections(screen_position: Vector2) -> Array[Dictionary]:
 func _snap_dragged_measure_point_to_endpoint(screen_position: Vector2) -> void:
 	var closest_pixels := 14.0
 	var snap_target: Variant = null
+	# Both route NDBs and runway locator beacons are stored in world.beacons.
+	# Check them together with user-created endpoints when a dragged node is
+	# released, so every connected line lands on the exact beacon coordinate.
+	for beacon in world.beacons:
+		var beacon_position: Vector2 = beacon.position
+		var pixel_distance := screen_position.distance_to(world_to_screen(beacon_position))
+		if pixel_distance < closest_pixels:
+			closest_pixels = pixel_distance
+			snap_target = beacon_position
 	for line_index in measurement_lines.size():
 		for endpoint_key in ["a", "b"]:
 			if _is_dragged_measure_connection(line_index, endpoint_key):
@@ -971,6 +1141,7 @@ func _snap_map_point(screen_position: Vector2) -> Vector2:
 
 func _build_contours() -> void:
 	contour_segments.clear()
+	terrain_peaks.clear()
 	var cell: float = FlightWorldScript.SIZE_KM / SAMPLE_GRID
 	# Cache the terrain grid once. Marching every contour level over the old
 	# uncached grid repeated the same height query hundreds of thousands of times.
@@ -979,6 +1150,7 @@ func _build_contours() -> void:
 	for grid_y in SAMPLE_GRID + 1:
 		for grid_x in SAMPLE_GRID + 1:
 			heights[grid_y * (SAMPLE_GRID + 1) + grid_x] = world.height_at(Vector2(grid_x * cell, grid_y * cell))
+	_find_terrain_peaks(heights, cell)
 	for level in range(int(CONTOUR_STEP_M), 3250, int(CONTOUR_STEP_M)):
 		for y in SAMPLE_GRID:
 			for x in SAMPLE_GRID:
@@ -999,6 +1171,36 @@ func _build_contours() -> void:
 					contour_segments.append({"a": points[0], "b": points[1], "level": float(level)})
 				if points.size() == 4:
 					contour_segments.append({"a": points[2], "b": points[3], "level": float(level)})
+func _find_terrain_peaks(heights: PackedFloat32Array, cell: float) -> void:
+	var candidates: Array[Dictionary] = []
+	var row_size := SAMPLE_GRID + 1
+	for y in range(1, SAMPLE_GRID):
+		for x in range(1, SAMPLE_GRID):
+			var height: float = heights[y * row_size + x]
+			if height < CONTOUR_STEP_M:
+				continue
+			var is_peak := true
+			for offset_y in range(-1, 2):
+				for offset_x in range(-1, 2):
+					if offset_x != 0 or offset_y != 0:
+						if heights[(y + offset_y) * row_size + x + offset_x] >= height:
+							is_peak = false
+							break
+				if not is_peak:
+					break
+			if is_peak:
+				candidates.append({"position": Vector2(x * cell, y * cell), "height": height})
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.height) > float(b.height))
+	for candidate in candidates:
+		var far_enough := true
+		for chosen in terrain_peaks:
+			if Vector2(candidate.position).distance_to(chosen.position) < 12.0:
+				far_enough = false
+				break
+		if far_enough:
+			terrain_peaks.append(candidate)
+			if terrain_peaks.size() >= 7:
+				break
 
 func _add_crossing(points: Array[Vector2], a: Vector2, b: Vector2, ha: float, hb: float, level: float) -> void:
 	if (ha < level and hb >= level) or (hb < level and ha >= level):

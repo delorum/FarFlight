@@ -7,6 +7,9 @@ const RUNWAY_WIDTH_KM := 0.05
 const BEACON_FREQUENCIES := [305.0, 327.0, 348.0, 371.0, 392.0, 415.0]
 const LOCATOR_RANGE_KM := 15.0
 const ROUTE_NDB_RANGE_KM := 30.0
+const ILS_RANGE_KM := 15.0
+const ILS_HALF_CONE_DEG := 30.0
+const ILS_AIM_OFFSET_KM := 0.06
 const MIN_RADIO_BLOCKING_TERRAIN_M := 250.0
 
 var seed_value: int
@@ -124,6 +127,25 @@ func beacon_signal(beacon: Dictionary, aircraft_position_km: Vector2, aircraft_a
 		if terrain_height >= MIN_RADIO_BLOCKING_TERRAIN_M and terrain_height + clearance_margin > radio_ray_height:
 			return {"available": false, "reason": "НЕТ СИГНАЛА", "distance_km": distance_km, "range_km": max_range_km}
 	return {"available": true, "reason": "", "distance_km": distance_km, "range_km": max_range_km}
+
+func ils_signal(airport_index: int, aircraft_position_km: Vector2, aircraft_altitude_m: float) -> Dictionary:
+	var airport: Dictionary = airports[airport_index]
+	var forward: Vector2 = heading_vector(airport.heading)
+	var near_threshold: Vector2 = airport.position - forward * (RUNWAY_LENGTH_KM * 0.5)
+	var coords: Vector2 = runway_coordinates(aircraft_position_km, airport)
+	# Use the 60 m aiming point as the cone apex so guidance remains available
+	# across the threshold and up to the intended touchdown point.
+	var forward_distance_km := -RUNWAY_LENGTH_KM * 0.5 + ILS_AIM_OFFSET_KM - coords.x
+	var distance_to_threshold_km := aircraft_position_km.distance_to(near_threshold)
+	if forward_distance_km <= 0.0 or distance_to_threshold_km > ILS_RANGE_KM:
+		return {"available": false, "reason": "НЕТ СИГНАЛА", "distance_km": distance_to_threshold_km, "range_km": ILS_RANGE_KM}
+	var cone_angle_deg := rad_to_deg(atan2(absf(coords.y), forward_distance_km))
+	if cone_angle_deg > ILS_HALF_CONE_DEG:
+		return {"available": false, "reason": "НЕТ СИГНАЛА", "distance_km": distance_to_threshold_km, "range_km": ILS_RANGE_KM}
+	# Terrain masking is checked independently from the omnidirectional runway
+	# locator, using the approach threshold as the simplified ILS transmitter.
+	var transmitter := {"position": near_threshold, "range_km": ILS_RANGE_KM}
+	return beacon_signal(transmitter, aircraft_position_km, aircraft_altitude_m)
 
 func vector_heading(delta: Vector2) -> float:
 	return fposmod(rad_to_deg(atan2(delta.x, -delta.y)), 360.0)
