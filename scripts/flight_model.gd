@@ -19,6 +19,7 @@ const BREAKUP_SPEED_KMH := 280.0
 const MAX_AIRFRAME_STRESS := 100.0
 const ROTATION_AUTHORITY_START_KMH := 60.0
 const ROTATION_AUTHORITY_FULL_KMH := 100.0
+const NOMINAL_STALL_SPEED_KMH := 75.0
 const RECOMMENDED_ROTATION_SPEED_KMH := 75.0
 const VX_KMH := 130.0
 const VY_KMH := 130.0
@@ -378,12 +379,28 @@ func _update_airframe_stress(delta: float) -> void:
 func fuel_flow_lpm() -> float:
 	if fuel_l <= 0.0 or state == State.CRASHED:
 		return 0.0
-	# Deliberately game-scaled fuel burn: about 0.55--0.58 l/min around the
-	# 87--90% cruise setting, followed by a steep rise to 0.84 l/min at full
-	# power. Altitude efficiency is applied afterwards and remains independent.
-	var cruise_flow := 0.10 + 0.60 * throttle * throttle
-	var full_power_surcharge := 0.14 * smoothstep(0.90, 1.0, throttle)
-	return (cruise_flow + full_power_surcharge) * altitude_fuel_factor()
+	# Game-scaled engine map. A simple quadratic made low power unrealistically
+	# efficient: 45% throttle could cover much more distance than cruise. These
+	# monotonic reference points put best range near 75--80%, retain normal
+	# 87--90% cruise, and make continuous full power distinctly expensive.
+	var sea_level_flow: float
+	if throttle <= 0.30:
+		sea_level_flow = lerpf(0.10, 0.28, throttle / 0.30)
+	elif throttle <= 0.45:
+		sea_level_flow = lerpf(0.28, 0.36, inverse_lerp(0.30, 0.45, throttle))
+	elif throttle <= 0.50:
+		sea_level_flow = lerpf(0.36, 0.38, inverse_lerp(0.45, 0.50, throttle))
+	elif throttle <= 0.75:
+		sea_level_flow = lerpf(0.38, 0.445, inverse_lerp(0.50, 0.75, throttle))
+	elif throttle <= 0.80:
+		sea_level_flow = lerpf(0.445, 0.47, inverse_lerp(0.75, 0.80, throttle))
+	elif throttle <= 0.87:
+		sea_level_flow = lerpf(0.47, 0.55, inverse_lerp(0.80, 0.87, throttle))
+	elif throttle <= 0.90:
+		sea_level_flow = lerpf(0.55, 0.58, inverse_lerp(0.87, 0.90, throttle))
+	else:
+		sea_level_flow = lerpf(0.58, 0.84, inverse_lerp(0.90, 1.0, throttle))
+	return sea_level_flow * altitude_fuel_factor()
 
 func estimated_range_km() -> float:
 	var flow_lpm := fuel_flow_lpm()

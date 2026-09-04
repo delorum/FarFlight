@@ -17,7 +17,9 @@ const APPROACH_DETAIL_MIN_ZOOM := 10.0
 
 var world
 var flight
-var selected_beacons := [0, 1]
+var receiver_frequencies := [305, 327]
+var active_receiver := -1
+var receiver_frequency_entry := ""
 var map_zoom := 1.0
 var map_center := Vector2(50, 50)
 var contour_segments: Array[Dictionary] = []
@@ -37,6 +39,12 @@ var status_timer := 0.0
 var clock_seconds := 12.0 * 60.0 * 60.0
 var trip_air_distance_km := 0.0
 var trip_elapsed_seconds := 0.0
+var flight_trajectory: Array[Dictionary] = []
+var trajectory_finished := false
+var trajectory_recording_started := false
+var trajectory_elapsed_seconds := 0.0
+var trajectory_distance_km := 0.0
+var trajectory_last_position := Vector2.ZERO
 var ils_airport_index := 1
 var simulation_paused := false
 var signal_check_timer := 0.0
@@ -65,6 +73,29 @@ func _ready() -> void:
 	queue_redraw()
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and active_receiver >= 0:
+		var entered_character := char(event.unicode)
+		if entered_character >= "0" and entered_character <= "9":
+			_enter_receiver_frequency_digit(entered_character)
+			get_viewport().set_input_as_handled()
+			queue_redraw()
+			return
+		if event.keycode == KEY_BACKSPACE:
+			receiver_frequency_entry = receiver_frequency_entry.left(maxi(0, receiver_frequency_entry.length() - 1))
+			get_viewport().set_input_as_handled()
+			queue_redraw()
+			return
+		if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
+			_commit_receiver_frequency_entry()
+			get_viewport().set_input_as_handled()
+			queue_redraw()
+			return
+		if event.keycode == KEY_ESCAPE:
+			receiver_frequency_entry = ""
+			active_receiver = -1
+			get_viewport().set_input_as_handled()
+			queue_redraw()
+			return
 	if event is InputEventKey and (event.keycode == KEY_W or event.keycode == KEY_S):
 		if event.echo:
 			get_viewport().set_input_as_handled()
@@ -117,6 +148,7 @@ func regenerate_world() -> void:
 	clock_seconds = 12.0 * 60.0 * 60.0
 	trip_air_distance_km = 0.0
 	trip_elapsed_seconds = 0.0
+	_reset_flight_trajectory()
 	ils_airport_index = 1
 	ils_prediction_timer = 0.0
 	_build_contours()
@@ -152,7 +184,10 @@ func _process(delta: float) -> void:
 			# elevator command where the pilot set it.
 			flight.yoke.y = clampf(flight.yoke.y + keyboard_yoke.y * delta * 0.75, -1.0, 1.0)
 	_update_held_throttle(delta)
+	var state_before_update: int = flight.state
+	var speed_before_update: float = flight.speed_kmh
 	flight.update(delta)
+	_update_flight_trajectory(state_before_update, speed_before_update, delta)
 	if flight.state == FlightModelScript.State.FLYING:
 		trip_air_distance_km += flight.speed_kmh / 3600.0 * delta
 		trip_elapsed_seconds += delta
@@ -178,10 +213,65 @@ func _prepare_for_departure() -> void:
 	var next_airport: int = flight.airport_index
 	flight.prepare_at_airport(next_airport)
 	flight.refuel()
+	_reset_flight_trajectory()
 	ils_airport_index = 1 - next_airport
 	_update_receiver_signals()
 	_update_ils_touchdown_prediction()
 	ils_prediction_timer = 1.0
+
+func _reset_flight_trajectory() -> void:
+	flight_trajectory.clear()
+	trajectory_finished = false
+	trajectory_recording_started = false
+	trajectory_elapsed_seconds = 0.0
+	trajectory_distance_km = 0.0
+	if flight != null:
+		trajectory_last_position = flight.position_km
+		flight_trajectory.append(_make_trajectory_point(flight.position_km))
+	if map_render_layer != null:
+		_queue_map_redraw()
+
+func _make_trajectory_point(position: Vector2) -> Dictionary:
+	return {
+		"position": position,
+		"time_seconds": trajectory_elapsed_seconds,
+		"distance_km": trajectory_distance_km,
+	}
+
+func _update_flight_trajectory(previous_state: int, previous_speed: float, delta: float) -> void:
+	# A stopped aircraft may depart again without using the preparation button.
+	# Treat its first movement as the beginning of a completely new flight.
+	if previous_state == FlightModelScript.State.LANDED and previous_speed <= 0.05 and flight.speed_kmh > 0.05:
+		_reset_flight_trajectory()
+	var moved_distance := trajectory_last_position.distance_to(flight.position_km)
+	if moved_distance > 0.000001 or flight.speed_kmh > 0.05:
+		trajectory_recording_started = true
+	if trajectory_recording_started:
+		trajectory_elapsed_seconds += delta
+		trajectory_distance_km += moved_distance
+	trajectory_last_position = flight.position_km
+	if flight_trajectory.is_empty():
+		flight_trajectory.append(_make_trajectory_point(flight.position_km))
+	elif Vector2(flight_trajectory[-1].position).distance_to(flight.position_km) >= 0.03:
+		flight_trajectory.append(_make_trajectory_point(flight.position_km))
+	var just_finished: bool = (
+		flight.state == FlightModelScript.State.CRASHED and previous_state != FlightModelScript.State.CRASHED
+	) or (
+		flight.state == FlightModelScript.State.LANDED and previous_state != FlightModelScript.State.LANDED
+	)
+	if just_finished:
+		if not Vector2(flight_trajectory[-1].position).is_equal_approx(flight.position_km):
+			flight_trajectory.append(_make_trajectory_point(flight.position_km))
+		trajectory_finished = true
+		flight._show_message("%s • путь %.1f км • время %s" % [flight.message, trajectory_distance_km, _format_trajectory_time(trajectory_elapsed_seconds)], -1.0, "")
+		_queue_map_redraw()
+
+func _format_trajectory_time(seconds_value: float) -> String:
+	var total_seconds := maxi(0, roundi(seconds_value))
+	var hours: int = total_seconds / 3600
+	var minutes: int = (total_seconds % 3600) / 60
+	var seconds: int = total_seconds % 60
+	return "%02d:%02d:%02d" % [hours, minutes, seconds]
 
 func _update_held_throttle(delta: float) -> void:
 	if throttle_up_held:
@@ -249,13 +339,68 @@ func _draw_map() -> void:
 		_draw_measurement(line.a, line.b, Color("254d9a"), line.get("max_height_m", -1.0))
 	if pending_measure != null:
 		_draw_measurement(pending_measure, _snap_map_point(get_local_mouse_position()), Color(0.1, 0.25, 0.7, 0.55))
-	map_canvas.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, 20), "НАВИГАЦИОННАЯ КАРТА • положение самолёта не отображается", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("35372e"))
-	map_canvas.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, 40), "Изолинии: 250 м  •  ЛКМ: точка/линия  •  ЛКМ с движением: карта  •  ПКМ: отмена/стереть  •  колесо: масштаб", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("55574a"))
+	_draw_completed_flight_trajectory()
+	map_canvas.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, 20), "НАВИГАЦИОННАЯ КАРТА", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("35372e"))
+	map_canvas.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, 38), "Положение самолёта не отображается", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("55574a"))
+	var map_hints := [
+		"Изолинии: 250 м",
+		"ЛКМ: точка/линия",
+		"ЛКМ с движением: карта",
+		"ПКМ: отмена/стереть",
+		"Колесо: масштаб",
+	]
+	for hint_index in map_hints.size():
+		map_canvas.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, 57 + hint_index * 17), map_hints[hint_index], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("55574a"))
 	var scale_km := 10.0
 	var scale_px := scale_km * pixels_per_km()
 	var scale_start := rect.end - Vector2(scale_px + 18, 18)
 	map_canvas.draw_line(scale_start, scale_start + Vector2(scale_px, 0), Color("25271f"), 3)
 	map_canvas.draw_string(ThemeDB.fallback_font, scale_start - Vector2(0, 6), "10 км", HORIZONTAL_ALIGNMENT_CENTER, scale_px, 12, Color("25271f"))
+
+func _draw_completed_flight_trajectory() -> void:
+	if not trajectory_finished or flight_trajectory.is_empty():
+		return
+	var path_color := Color("a83f38") if flight.state == FlightModelScript.State.CRASHED else Color("176f75")
+	for point_index in range(1, flight_trajectory.size()):
+		_draw_clipped_map_line(world_to_screen(flight_trajectory[point_index - 1].position), world_to_screen(flight_trajectory[point_index].position), path_color, 2.0)
+	var aircraft_position := world_to_screen(flight.position_km)
+	var safe_rect := map_rect().grow(-10.0)
+	aircraft_position.x = clampf(aircraft_position.x, safe_rect.position.x, safe_rect.end.x)
+	aircraft_position.y = clampf(aircraft_position.y, safe_rect.position.y, safe_rect.end.y)
+	_draw_map_aircraft(aircraft_position, flight.heading_deg, path_color)
+
+func _draw_map_aircraft(position: Vector2, heading_deg: float, color: Color) -> void:
+	map_canvas.draw_set_transform(position, deg_to_rad(heading_deg), Vector2.ONE)
+	# Compact top-down silhouette of a small single-engine high-wing aircraft:
+	# straight wing and tailplane first, then the fuselage, cabin and propeller.
+	var wing := PackedVector2Array([
+		Vector2(-12, -3), Vector2(12, -3), Vector2(12, 2), Vector2(3, 2),
+		Vector2(2, 3), Vector2(-2, 3), Vector2(-3, 2), Vector2(-12, 2),
+	])
+	var tailplane := PackedVector2Array([
+		Vector2(-6, 7), Vector2(6, 7), Vector2(6, 10),
+		Vector2(2, 9), Vector2(-2, 9), Vector2(-6, 10),
+	])
+	var fuselage := PackedVector2Array([
+		Vector2(0, -11), Vector2(3, -8), Vector2(3, 4), Vector2(2, 10),
+		Vector2(0, 12), Vector2(-2, 10), Vector2(-3, 4), Vector2(-3, -8),
+	])
+	for part in [wing, tailplane, fuselage]:
+		map_canvas.draw_colored_polygon(part, Color("c8ced0"))
+		var part_outline: PackedVector2Array = part.duplicate()
+		part_outline.append(part[0])
+		map_canvas.draw_polyline(part_outline, color, 1.5, true)
+	var cabin := PackedVector2Array([
+		Vector2(-2.3, -6.5), Vector2(2.3, -6.5),
+		Vector2(2.3, -1.5), Vector2(-2.3, -1.5),
+	])
+	map_canvas.draw_colored_polygon(cabin, Color("58b5c0"))
+	var cabin_outline: PackedVector2Array = cabin.duplicate()
+	cabin_outline.append(cabin[0])
+	map_canvas.draw_polyline(cabin_outline, color, 1.0, true)
+	map_canvas.draw_line(Vector2(-6, -11), Vector2(6, -11), color, 1.5, true)
+	map_canvas.draw_circle(Vector2.ZERO + Vector2(0, -11), 1.5, Color("e4bd4e"))
+	map_canvas.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _draw_contour_labels(rect: Rect2) -> void:
 	var placed_by_level: Dictionary = {}
@@ -374,7 +519,7 @@ func _draw_beacon(beacon: Dictionary) -> void:
 	var radius := 5.0
 	var points := PackedVector2Array([p + Vector2(0, -radius), p + Vector2(radius, radius), p + Vector2(-radius, radius)])
 	map_canvas.draw_polyline(PackedVector2Array([points[0], points[1], points[2], points[0]]), Color("972d25"), 2.0)
-	_draw_clamped_map_text(p + Vector2(7, 12), "%s %.0f" % [beacon.name, beacon.frequency], 11, Color("76231d"))
+	_draw_clamped_map_text(p + Vector2(7, 12), "%s %.0f кГц R%.0f" % [beacon.name, beacon.frequency, beacon.range_km], 11, Color("76231d"))
 
 func _draw_measurement(a_world: Vector2, b_world: Vector2, color := Color("254d9a"), cached_max_height := -1.0) -> void:
 	var a := world_to_screen(a_world)
@@ -501,7 +646,10 @@ func _draw_speedometer(center: Vector2, radius: float) -> void:
 		return lerpf(start_angle, end_angle, clampf(value / 300.0, 0.0, 1.0))
 	draw_circle(center, radius, Color("0a0e10"))
 	draw_arc(center, radius - 2, 0, TAU, 48, Color("7d8b91"), 2)
-	draw_arc(center, radius - 5, speed_to_angle.call(0.0), speed_to_angle.call(FlightModelScript.VNO_KMH), 28, Color("65d48c"), 3.0)
+	# As on a conventional airspeed indicator, the lower edge of the green arc
+	# marks the nominal clean-configuration stall speed; the unmarked sector
+	# below it is not a normal operating range.
+	draw_arc(center, radius - 5, speed_to_angle.call(FlightModelScript.NOMINAL_STALL_SPEED_KMH), speed_to_angle.call(FlightModelScript.VNO_KMH), 28, Color("65d48c"), 3.0)
 	draw_arc(center, radius - 5, speed_to_angle.call(FlightModelScript.VNO_KMH), speed_to_angle.call(FlightModelScript.VNE_KMH), 10, Color("e8d274"), 3.0)
 	var red_angle: float = speed_to_angle.call(FlightModelScript.VNE_KMH)
 	var red_outer := center + Vector2(cos(red_angle), sin(red_angle)) * (radius - 4)
@@ -740,19 +888,34 @@ func _draw_horizon(center: Vector2, radius: float) -> void:
 	draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "УА %+.1f°" % flight.angle_of_attack_deg, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 12, aoa_color)
 
 func _draw_beacon_instrument(center: Vector2, radius: float, instrument: int) -> void:
-	var beacon: Dictionary = world.beacons[selected_beacons[instrument]]
-	var delta: Vector2 = beacon.position - flight.position_km
-	var absolute_bearing: float = world.vector_heading(delta)
 	var signal_status: Dictionary = receiver_signal_status[instrument]
+	var beacon: Variant = signal_status.get("beacon", null)
 	var signal_available: bool = signal_status.get("available", false)
 	draw_circle(center, radius, Color("0a0e10"))
 	draw_arc(center, radius - 2, 0, TAU, 48, Color("7d8b91"), 2)
+	if active_receiver == instrument:
+		draw_arc(center, radius + 2, 0, TAU, 48, Color("73d6d0"), 1.5)
+	# External tuning index: the complete circumference represents 0--999 kHz,
+	# starting at the top and increasing clockwise.
+	var frequency_angle := -PI * 0.5 + TAU * float(receiver_frequencies[instrument]) / 999.0
+	var frequency_direction := Vector2(cos(frequency_angle), sin(frequency_angle))
+	var frequency_side := Vector2(-frequency_direction.y, frequency_direction.x)
+	var marker_tip := center + frequency_direction * (radius + 1.0)
+	var marker_base := center + frequency_direction * (radius + 8.0)
+	var marker_color := Color("73d6d0") if active_receiver == instrument else Color("d2dde0")
+	draw_colored_polygon(PackedVector2Array([
+		marker_tip,
+		marker_base + frequency_side * 3.0,
+		marker_base - frequency_side * 3.0,
+	]), marker_color)
 	# North-up receiver: the arrow shows absolute map bearing, independent of heading.
-	var needle_angle: float = deg_to_rad(absolute_bearing - 90.0)
-	var needle_direction := Vector2(cos(needle_angle), sin(needle_angle))
-	var needle_side := Vector2(-needle_direction.y, needle_direction.x)
-	var needle_tip := center + needle_direction * (radius - 7.0)
 	if signal_available:
+		var delta: Vector2 = beacon.position - flight.position_km
+		var absolute_bearing: float = world.vector_heading(delta)
+		var needle_angle: float = deg_to_rad(absolute_bearing - 90.0)
+		var needle_direction := Vector2(cos(needle_angle), sin(needle_angle))
+		var needle_side := Vector2(-needle_direction.y, needle_direction.x)
+		var needle_tip := center + needle_direction * (radius - 7.0)
 		draw_line(center - needle_direction * 10.0, needle_tip, Color("73d6d0"), 1.5, true)
 		draw_colored_polygon(PackedVector2Array([
 			needle_tip,
@@ -763,9 +926,15 @@ func _draw_beacon_instrument(center: Vector2, radius: float, instrument: int) ->
 	else:
 		draw_line(center + Vector2(-12, -12), center + Vector2(12, 12), Color("c95d55"), 2.0)
 		draw_line(center + Vector2(12, -12), center + Vector2(-12, 12), Color("c95d55"), 2.0)
-	draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ПРИЁМНИК %d" % (instrument + 1), HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
-	draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 5.0, radius + 14), "%s  %.0f кГц  R%.0f" % [beacon.name, beacon.frequency, beacon.range_km], HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 10.0, 10, Color.WHITE)
+	var title_color := Color("73d6d0") if active_receiver == instrument else Color("b8c5c8")
+	draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ПРИЁМНИК %d" % (instrument + 1), HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, title_color)
+	var frequency_text := "%03d кГц" % int(receiver_frequencies[instrument])
+	if active_receiver == instrument and not receiver_frequency_entry.is_empty():
+		frequency_text = "%s кГц" % receiver_frequency_entry.rpad(3, "_")
+	draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 5.0, radius + 14), frequency_text, HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 10.0, 10, Color.WHITE)
 	if signal_available:
+		var delta: Vector2 = beacon.position - flight.position_km
+		var absolute_bearing: float = world.vector_heading(delta)
 		var direct_course := int(round(absolute_bearing)) % 360
 		var reverse_course := (direct_course + 180) % 360
 		draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 9.0, radius + 29), "%.1f км  %03d°/%03d°" % [delta.length(), direct_course, reverse_course], HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 18.0, 10, Color("73d6d0"))
@@ -776,9 +945,20 @@ func _update_receiver_signals() -> void:
 	if world == null or flight == null:
 		return
 	for instrument in 2:
-		var beacon: Dictionary = world.beacons[selected_beacons[instrument]]
-		receiver_signal_status[instrument] = world.beacon_signal(beacon, flight.position_km, flight.altitude_m)
+		var beacon: Variant = _beacon_for_frequency(int(receiver_frequencies[instrument]))
+		if beacon == null:
+			receiver_signal_status[instrument] = {"available": false, "reason": "НЕТ СИГНАЛА", "beacon": null}
+		else:
+			var status: Dictionary = world.beacon_signal(beacon, flight.position_km, flight.altitude_m)
+			status.beacon = beacon
+			receiver_signal_status[instrument] = status
 	ils_signal_status = world.ils_signal(ils_airport_index, flight.position_km, flight.altitude_m)
+
+func _beacon_for_frequency(frequency_khz: int) -> Variant:
+	for beacon in world.beacons:
+		if roundi(float(beacon.frequency)) == frequency_khz:
+			return beacon
+	return null
 
 func _update_ils_touchdown_prediction() -> void:
 	if flight == null:
@@ -876,7 +1056,13 @@ func _gui_input(event: InputEvent) -> void:
 
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	var mrect := map_rect()
-	if event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed and mrect.has_point(event.position):
+	var hovered_receiver := _receiver_at_point(event.position)
+	if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN] and event.pressed and hovered_receiver >= 0:
+		active_receiver = hovered_receiver
+		receiver_frequency_entry = ""
+		var wheel_direction := 1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1
+		_tune_receiver_frequency(hovered_receiver, wheel_direction * (10 if event.shift_pressed else 1))
+	elif event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed and mrect.has_point(event.position):
 		_zoom_at(event.position, 1.18)
 	elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed and mrect.has_point(event.position):
 		_zoom_at(event.position, 1.0 / 1.18)
@@ -902,11 +1088,11 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 				_update_ils_touchdown_prediction()
 				ils_prediction_timer = 1.0
 			elif _beacon_receiver_hit(event.position, 0):
-				selected_beacons[0] = (selected_beacons[0] + 1) % world.beacons.size()
-				_update_receiver_signals()
+				active_receiver = 0
+				receiver_frequency_entry = ""
 			elif _beacon_receiver_hit(event.position, 1):
-				selected_beacons[1] = (selected_beacons[1] + 1) % world.beacons.size()
-				_update_receiver_signals()
+				active_receiver = 1
+				receiver_frequency_entry = ""
 			elif mrect.has_point(event.position):
 				map_press_position = event.position
 				last_mouse = event.position
@@ -984,6 +1170,32 @@ func _beacon_receiver_hit(point: Vector2, receiver: int) -> bool:
 	var rect := panel_rect()
 	var center := _instrument_center(5 + receiver, rect.position.y + 108.0)
 	return point.distance_to(center) < INSTRUMENT_RADIUS
+
+func _receiver_at_point(point: Vector2) -> int:
+	for receiver in 2:
+		if _beacon_receiver_hit(point, receiver):
+			return receiver
+	return -1
+
+func _tune_receiver_frequency(receiver: int, delta_khz: int) -> void:
+	receiver_frequencies[receiver] = clampi(int(receiver_frequencies[receiver]) + delta_khz, 190, 535)
+	_update_receiver_signals()
+
+func _enter_receiver_frequency_digit(digit: String) -> void:
+	if receiver_frequency_entry.length() >= 3:
+		receiver_frequency_entry = ""
+	receiver_frequency_entry += digit
+	if receiver_frequency_entry.length() == 3:
+		_commit_receiver_frequency_entry()
+
+func _commit_receiver_frequency_entry() -> void:
+	if active_receiver < 0 or receiver_frequency_entry.is_empty():
+		return
+	var entered_frequency := int(receiver_frequency_entry)
+	if entered_frequency >= 190 and entered_frequency <= 535:
+		receiver_frequencies[active_receiver] = entered_frequency
+	receiver_frequency_entry = ""
+	_update_receiver_signals()
 
 func _zoom_at(mouse: Vector2, factor: float) -> void:
 	var before := screen_to_world(mouse)

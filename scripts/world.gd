@@ -132,19 +132,21 @@ func ils_signal(airport_index: int, aircraft_position_km: Vector2, aircraft_alti
 	var airport: Dictionary = airports[airport_index]
 	var forward: Vector2 = heading_vector(airport.heading)
 	var near_threshold: Vector2 = airport.position - forward * (RUNWAY_LENGTH_KM * 0.5)
+	var far_threshold: Vector2 = airport.position + forward * (RUNWAY_LENGTH_KM * 0.5)
 	var coords: Vector2 = runway_coordinates(aircraft_position_km, airport)
-	# Use the 60 m aiming point as the cone apex so guidance remains available
-	# across the threshold and up to the intended touchdown point.
-	var forward_distance_km := -RUNWAY_LENGTH_KM * 0.5 + ILS_AIM_OFFSET_KM - coords.x
+	# The localizer transmitter is at the far end of the runway. Its forward
+	# course therefore remains valid throughout the approach and ground roll,
+	# and ends only after the aircraft passes that far threshold. The separate
+	# glide-slope calculation still aims 60 m beyond the near threshold.
+	var forward_distance_km := RUNWAY_LENGTH_KM * 0.5 - coords.x
 	var distance_to_threshold_km := aircraft_position_km.distance_to(near_threshold)
 	if forward_distance_km <= 0.0 or distance_to_threshold_km > ILS_RANGE_KM:
 		return {"available": false, "reason": "НЕТ СИГНАЛА", "distance_km": distance_to_threshold_km, "range_km": ILS_RANGE_KM}
 	var cone_angle_deg := rad_to_deg(atan2(absf(coords.y), forward_distance_km))
 	if cone_angle_deg > ILS_HALF_CONE_DEG:
 		return {"available": false, "reason": "НЕТ СИГНАЛА", "distance_km": distance_to_threshold_km, "range_km": ILS_RANGE_KM}
-	# Terrain masking is checked independently from the omnidirectional runway
-	# locator, using the approach threshold as the simplified ILS transmitter.
-	var transmitter := {"position": near_threshold, "range_km": ILS_RANGE_KM}
+	# Terrain masking uses the same far-end site as the runway locator.
+	var transmitter := {"position": far_threshold, "range_km": ILS_RANGE_KM}
 	return beacon_signal(transmitter, aircraft_position_km, aircraft_altitude_m)
 
 func vector_heading(delta: Vector2) -> float:
