@@ -27,28 +27,31 @@ func _init() -> void:
 	assert(not out_of_range.available)
 	assert(out_of_range.reason == "НЕТ СИГНАЛА")
 	var flight = FlightModelScript.new(test_world)
-	assert(flight.message.begins_with("Готов к взлёту"))
+	assert(flight.message.is_empty())
 	flight.refuel()
 	assert(flight.message.begins_with("Самолёт заправлен"))
+	assert(not flight.engine_running)
+	flight.toggle_engine()
+	assert(flight.engine_running)
 	assert(is_equal_approx(flight.fuel_flow_lpm(), 0.10))
 	flight.throttle = 1.0
-	assert(is_equal_approx(flight.fuel_flow_lpm(), 0.72))
+	assert(is_equal_approx(flight.fuel_flow_lpm(), 0.84))
 	flight.speed_kmh = 200.0
-	assert(absf(flight.estimated_range_km() - 185.185) < 0.01)
+	assert(absf(flight.estimated_range_km() - 158.730) < 0.01)
 	flight.altitude_m = 2500.0
 	assert(is_equal_approx(flight.altitude_fuel_factor(), 0.82))
-	assert(is_equal_approx(flight.fuel_flow_lpm(), 0.5904))
-	assert(absf(flight.estimated_range_km() - 225.836) < 0.01)
+	assert(is_equal_approx(flight.fuel_flow_lpm(), 0.6888))
+	assert(absf(flight.estimated_range_km() - 193.573) < 0.01)
 	assert(is_equal_approx(flight.altitude_power_factor(), 1.0))
 	flight.altitude_m = 5000.0
 	assert(is_equal_approx(flight.altitude_fuel_factor(), 1.08))
-	assert(is_equal_approx(flight.fuel_flow_lpm(), 0.7776))
+	assert(is_equal_approx(flight.fuel_flow_lpm(), 0.9072))
 	assert(is_equal_approx(flight.altitude_power_factor(), 0.82))
 	assert(is_equal_approx(flight.max_available_climb_mps(), 0.0))
 	flight.altitude_m = 0.0
 	flight.throttle = 0.0
 	flight.update(3.1)
-	assert(flight.message.begins_with("Готов к взлёту"))
+	assert(flight.message.is_empty())
 	var taxi_coast = FlightModelScript.new(test_world)
 	taxi_coast.speed_kmh = 50.0
 	taxi_coast.throttle = 0.0
@@ -77,6 +80,7 @@ func _init() -> void:
 	assert(not flight.stalled)
 
 	var climbing_over_runway = FlightModelScript.new(test_world)
+	climbing_over_runway.engine_running = true
 	climbing_over_runway.state = FlightModelScript.State.FLYING
 	climbing_over_runway.altitude_m = 1.0
 	climbing_over_runway.speed_kmh = 90.0
@@ -95,6 +99,7 @@ func _init() -> void:
 	assert(takeoff_grace_test.state == FlightModelScript.State.FLYING)
 	assert(takeoff_grace_test.takeoff_grace_remaining < 2.0)
 	var full_yoke_takeoff = FlightModelScript.new(test_world)
+	full_yoke_takeoff.engine_running = true
 	full_yoke_takeoff.throttle = 1.0
 	full_yoke_takeoff.yoke.y = 1.0
 	var full_yoke_stalled := false
@@ -103,13 +108,15 @@ func _init() -> void:
 		full_yoke_stalled = full_yoke_stalled or full_yoke_takeoff.stalled
 		if full_yoke_takeoff.state == FlightModelScript.State.CRASHED:
 			break
-	assert(full_yoke_takeoff.state == FlightModelScript.State.FLYING)
-	assert(full_yoke_takeoff.altitude_m > 50.0)
-	assert(not full_yoke_stalled)
+	# Holding full aft yoke throughout the takeoff is no longer a guaranteed
+	# safe technique: the aircraft may stall after rotation, especially in
+	# disturbed air.
+	assert(full_yoke_stalled or full_yoke_takeoff.state == FlightModelScript.State.CRASHED)
 
 	# A sharp pull exceeds the critical angle of attack. The stall persists
 	# until the nose is lowered and sufficient airspeed is restored.
 	var stall_test = FlightModelScript.new(test_world)
+	stall_test.engine_running = true
 	stall_test.state = FlightModelScript.State.FLYING
 	stall_test.position_km = Vector2(50, 50)
 	stall_test.altitude_m = 3000.0
@@ -139,6 +146,7 @@ func _init() -> void:
 	# At the practical ceiling full power no longer provides excess climb
 	# power. Continuing to pull trades speed for AoA and causes a stall.
 	var ceiling_test = FlightModelScript.new(test_world)
+	ceiling_test.engine_running = true
 	ceiling_test.state = FlightModelScript.State.FLYING
 	ceiling_test.position_km = Vector2(50, 50)
 	ceiling_test.altitude_m = 4950.0
@@ -160,12 +168,14 @@ func _init() -> void:
 	# At equal power a descending aircraft gains speed from gravity, unlike an
 	# otherwise identical aircraft in level flight.
 	var level_test = FlightModelScript.new(test_world)
+	level_test.engine_running = true
 	level_test.state = FlightModelScript.State.FLYING
 	level_test.position_km = Vector2(45, 45)
 	level_test.altitude_m = 2500.0
 	level_test.speed_kmh = 120.0
 	level_test.throttle = 0.45
 	var dive_test = FlightModelScript.new(test_world)
+	dive_test.engine_running = true
 	dive_test.state = FlightModelScript.State.FLYING
 	dive_test.position_km = Vector2(45, 45)
 	dive_test.altitude_m = 2500.0
@@ -212,6 +222,7 @@ func _init() -> void:
 	assert(flight.state == FlightModelScript.State.FLYING)
 
 	var rollout_failure = FlightModelScript.new(test_world)
+	rollout_failure.engine_running = true
 	rollout_failure.state = FlightModelScript.State.ROLLING
 	rollout_failure.position_km = airport.position + test_world.heading_vector(airport.heading) * 0.85
 	rollout_failure.heading_deg = airport.heading
@@ -248,6 +259,7 @@ func _init() -> void:
 	# 4 km to the threshold. Neutral pitch and 30% power should follow an
 	# approximately three-degree glide path, followed by a short power cut.
 	var approach = FlightModelScript.new(test_world)
+	approach.engine_running = true
 	var approach_airport: Dictionary = test_world.airports[1]
 	var approach_direction: Vector2 = test_world.heading_vector(approach_airport.heading)
 	approach.position_km = approach_airport.position - approach_direction * 5.0

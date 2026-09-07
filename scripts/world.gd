@@ -11,11 +11,15 @@ const ILS_RANGE_KM := 15.0
 const ILS_HALF_CONE_DEG := 30.0
 const ILS_AIM_OFFSET_KM := 0.06
 const MIN_RADIO_BLOCKING_TERRAIN_M := 250.0
+const WEATHER_STORM_COUNT := 9
 
 var seed_value: int
 var noise := FastNoiseLite.new()
 var airports: Array[Dictionary] = []
 var beacons: Array[Dictionary] = []
+var wind_layers: Array[Dictionary] = []
+var storms: Array[Dictionary] = []
+var weather_time_seconds := 0.0
 
 func _init(requested_seed: int = 0) -> void:
 	seed_value = requested_seed if requested_seed != 0 else randi_range(10000, 99999999)
@@ -26,6 +30,78 @@ func _init(requested_seed: int = 0) -> void:
 	noise.fractal_gain = 0.52
 	_generate_airports()
 	_generate_beacons()
+	_generate_weather()
+
+func _generate_weather() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_value + 44771
+	wind_layers.clear()
+	for altitude_m in [0.0, 1500.0, 3000.0, 5000.0]:
+		wind_layers.append({"altitude_m": altitude_m, "from_deg": rng.randf_range(0.0, 360.0), "speed_kmh": rng.randf_range(8.0, 32.0)})
+	storms.clear()
+	for index in WEATHER_STORM_COUNT:
+		var drift_heading := rng.randf_range(0.0, 360.0)
+		var storm_radius := rng.randf_range(4.0, 8.0)
+		var radar_lobes: Array[Dictionary] = [
+			{"offset_km": Vector2.ZERO, "radius_scale": 0.68, "strength": 1.0},
+		]
+		for lobe_index in 6:
+			var offset_direction := heading_vector(rng.randf_range(0.0, 360.0))
+			radar_lobes.append({
+				"offset_km": offset_direction * storm_radius * rng.randf_range(0.15, 0.43),
+				"radius_scale": rng.randf_range(0.38, 0.62),
+				"strength": rng.randf_range(0.72, 1.05),
+			})
+		storms.append({
+			"origin": Vector2(rng.randf_range(12.0, 88.0), rng.randf_range(12.0, 88.0)),
+			"radius_km": storm_radius,
+			"intensity": rng.randf_range(0.55, 1.0),
+			"drift_kmh": heading_vector(drift_heading) * rng.randf_range(8.0, 18.0),
+			"radar_lobes": radar_lobes,
+		})
+
+func update_weather(delta: float) -> void:
+	weather_time_seconds += delta
+
+func storm_position(storm: Dictionary) -> Vector2:
+	var moved: Vector2 = storm.origin + Vector2(storm.drift_kmh) * weather_time_seconds / 3600.0
+	return Vector2(fposmod(moved.x, SIZE_KM), fposmod(moved.y, SIZE_KM))
+
+func wind_at(altitude_m: float) -> Vector2:
+	var lower: Dictionary = wind_layers[0]
+	var upper: Dictionary = wind_layers[-1]
+	for index in range(1, wind_layers.size()):
+		if altitude_m <= float(wind_layers[index].altitude_m):
+			lower = wind_layers[index - 1]
+			upper = wind_layers[index]
+			break
+	var ratio := inverse_lerp(float(lower.altitude_m), float(upper.altitude_m), clampf(altitude_m, float(lower.altitude_m), float(upper.altitude_m))) if lower != upper else 0.0
+	var lower_vector := heading_vector(float(lower.from_deg) + 180.0) * float(lower.speed_kmh)
+	var upper_vector := heading_vector(float(upper.from_deg) + 180.0) * float(upper.speed_kmh)
+	return lower_vector.lerp(upper_vector, ratio)
+
+func storm_intensity_at(position_km: Vector2) -> float:
+	var result := 0.0
+	for storm in storms:
+		var ratio := position_km.distance_to(storm_position(storm)) / float(storm.radius_km)
+		if ratio < 1.0:
+			result = maxf(result, float(storm.intensity) * (1.0 - ratio * ratio))
+	return result
+
+func weather_report(airport: Dictionary) -> String:
+	var layer: Dictionary = wind_layers[0]
+	var nearest_storm := INF
+	for storm in storms:
+		nearest_storm = minf(nearest_storm, Vector2(airport.position).distance_to(storm_position(storm)))
+	var storm_text := "гроз нет" if nearest_storm > 30.0 else "гроза %.0f км" % nearest_storm
+	return "%s: ветер %03d° %.0f км/ч • %s" % [airport.name, roundi(float(layer.from_deg)) % 360, float(layer.speed_kmh), storm_text]
+
+func wind_forecast_reports() -> Array[String]:
+	var reports: Array[String] = []
+	for layer in wind_layers:
+		var altitude_label := "У поверхности" if float(layer.altitude_m) <= 0.0 else "%d м" % roundi(float(layer.altitude_m))
+		reports.append("%s: %03d° %.0f км/ч" % [altitude_label, roundi(float(layer.from_deg)) % 360, float(layer.speed_kmh)])
+	return reports
 
 func raw_height_at(point_km: Vector2) -> float:
 	var continental := (noise.get_noise_2d(point_km.x, point_km.y) + 1.0) * 0.5
@@ -94,11 +170,11 @@ func _generate_beacons() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value + 9187
 	beacons.clear()
-	# The first two are at the far threshold/end of each runway.
+	# Runway locator beacons share the runway centre so their bearing and range
+	# are identical for approaches from either direction.
 	for i in airports.size():
 		var airport: Dictionary = airports[i]
-		var end_position: Vector2 = airport.position + heading_vector(airport.heading) * (RUNWAY_LENGTH_KM * 0.5)
-		beacons.append({"name": "RWY-%d" % (i + 1), "frequency": BEACON_FREQUENCIES[i], "position": end_position, "runway": i, "range_km": LOCATOR_RANGE_KM, "class": "LOC"})
+		beacons.append({"name": "RWY-%d" % (i + 1), "frequency": BEACON_FREQUENCIES[i], "position": airport.position, "runway": i, "range_km": LOCATOR_RANGE_KM, "class": "LOC"})
 	for i in 4:
 		var p := Vector2(rng.randf_range(12, 88), rng.randf_range(12, 88))
 		beacons.append({"name": "NDB-%s" % char(65 + i), "frequency": BEACON_FREQUENCIES[i + 2], "position": p, "runway": -1, "range_km": ROUTE_NDB_RANGE_KM, "class": "MH"})
@@ -128,26 +204,34 @@ func beacon_signal(beacon: Dictionary, aircraft_position_km: Vector2, aircraft_a
 			return {"available": false, "reason": "НЕТ СИГНАЛА", "distance_km": distance_km, "range_km": max_range_km}
 	return {"available": true, "reason": "", "distance_km": distance_km, "range_km": max_range_km}
 
-func ils_signal(airport_index: int, aircraft_position_km: Vector2, aircraft_altitude_m: float) -> Dictionary:
+func ils_signal(airport_index: int, aircraft_position_km: Vector2, aircraft_altitude_m: float, aircraft_heading_deg: float) -> Dictionary:
 	var airport: Dictionary = airports[airport_index]
-	var forward: Vector2 = heading_vector(airport.heading)
-	var near_threshold: Vector2 = airport.position - forward * (RUNWAY_LENGTH_KM * 0.5)
-	var far_threshold: Vector2 = airport.position + forward * (RUNWAY_LENGTH_KM * 0.5)
-	var coords: Vector2 = runway_coordinates(aircraft_position_km, airport)
-	# The localizer transmitter is at the far end of the runway. Its forward
-	# course therefore remains valid throughout the approach and ground roll,
-	# and ends only after the aircraft passes that far threshold. The separate
-	# glide-slope calculation still aims 60 m beyond the near threshold.
-	var forward_distance_km := RUNWAY_LENGTH_KM * 0.5 - coords.x
-	var distance_to_threshold_km := aircraft_position_km.distance_to(near_threshold)
-	if forward_distance_km <= 0.0 or distance_to_threshold_km > ILS_RANGE_KM:
-		return {"available": false, "reason": "НЕТ СИГНАЛА", "distance_km": distance_to_threshold_km, "range_km": ILS_RANGE_KM}
-	var cone_angle_deg := rad_to_deg(atan2(absf(coords.y), forward_distance_km))
+	var approach_sign: float = runway_approach_sign(airport, aircraft_heading_deg)
+	var forward: Vector2 = heading_vector(airport.heading) * approach_sign
+	var delta: Vector2 = aircraft_position_km - Vector2(airport.position)
+	var right := Vector2(forward.y, -forward.x)
+	var along: float = delta.dot(forward)
+	var cross: float = delta.dot(right)
+	# Use the far threshold as the virtual cone apex. This keeps the selected
+	# course valid throughout approach and ground roll, ending only after the
+	# aircraft passes that threshold. The physical locator is in the centre.
+	var forward_distance_km: float = RUNWAY_LENGTH_KM * 0.5 - along
+	var distance_to_beacon_km := aircraft_position_km.distance_to(Vector2(airport.position))
+	if forward_distance_km <= 0.0 or distance_to_beacon_km > ILS_RANGE_KM:
+		return {"available": false, "reason": "НЕТ СИГНАЛА", "distance_km": distance_to_beacon_km, "range_km": ILS_RANGE_KM}
+	var cone_angle_deg := rad_to_deg(atan2(absf(cross), forward_distance_km))
 	if cone_angle_deg > ILS_HALF_CONE_DEG:
-		return {"available": false, "reason": "НЕТ СИГНАЛА", "distance_km": distance_to_threshold_km, "range_km": ILS_RANGE_KM}
-	# Terrain masking uses the same far-end site as the runway locator.
-	var transmitter := {"position": far_threshold, "range_km": ILS_RANGE_KM}
+		return {"available": false, "reason": "НЕТ СИГНАЛА", "distance_km": distance_to_beacon_km, "range_km": ILS_RANGE_KM}
+	# The locator itself is in the runway centre; the far threshold above is the
+	# virtual apex used only to retain guidance throughout the ground roll.
+	var transmitter := {"position": airport.position, "range_km": ILS_RANGE_KM}
 	return beacon_signal(transmitter, aircraft_position_km, aircraft_altitude_m)
+
+func runway_approach_sign(airport: Dictionary, aircraft_heading_deg: float) -> float:
+	var direct_error := absf(wrapf(aircraft_heading_deg - float(airport.heading), -180.0, 180.0))
+	var reverse_heading := fmod(float(airport.heading) + 180.0, 360.0)
+	var reverse_error := absf(wrapf(aircraft_heading_deg - reverse_heading, -180.0, 180.0))
+	return 1.0 if direct_error <= reverse_error else -1.0
 
 func vector_heading(delta: Vector2) -> float:
 	return fposmod(rad_to_deg(atan2(delta.x, -delta.y)), 360.0)
