@@ -4,6 +4,8 @@ const FlightWorldScript = preload("res://scripts/world.gd")
 const FlightModelScript = preload("res://scripts/flight_model.gd")
 const MapRenderLayerScript = preload("res://scripts/map_render_layer.gd")
 const AircraftArt = preload("res://scripts/aircraft_art.gd")
+const WeatherRadarArt = preload("res://scripts/weather_radar_art.gd")
+const WeatherRadarCache = preload("res://scripts/weather_radar_cache.gd")
 
 const MAP_MARGIN := 14.0
 const PANEL_HEIGHT := 280.0
@@ -30,6 +32,19 @@ var contour_segments: Array[Dictionary] = []
 var terrain_peaks: Array[Dictionary] = []
 var measurement_lines: Array[Dictionary] = []
 var pending_measure: Variant = null
+var radar_measurement_lines: Array[Dictionary] = []
+var radar_pending_measure: Variant = null
+var active_measurement_lines: Array[Dictionary]:
+	get:
+		return radar_measurement_lines if large_weather_radar else measurement_lines
+var active_pending_measure: Variant:
+	get:
+		return radar_pending_measure if large_weather_radar else pending_measure
+	set(value):
+		if large_weather_radar:
+			radar_pending_measure = value
+		else:
+			pending_measure = value
 var dragging_map := false
 var map_drag_candidate := false
 var map_press_position := Vector2.ZERO
@@ -72,6 +87,17 @@ var apron_aircraft_on_left := true
 var scene_notice := ""
 var scene_is_walking := false
 var propeller_phase := 0.0
+var cabin_terrain_zoom := 0
+var cabin_terrain_profile := PackedVector2Array()
+var cabin_terrain_timer := 0.0
+var cabin_rain_blue := true
+var cabin_fog_travel_px := 0.0
+var large_weather_radar := false
+const RADAR_RANGES_KM := [30.0, 20.0, 10.0, 5.0]
+var radar_range_index := 0
+var weather_radar_cache: Node
+var crash_overlay: PanelContainer
+var crash_description: Label
 
 func _ready() -> void:
 	Engine.max_fps = 60
@@ -81,6 +107,9 @@ func _ready() -> void:
 	map_render_layer.controller = self
 	map_render_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(map_render_layer)
+	weather_radar_cache = WeatherRadarCache.new()
+	add_child(weather_radar_cache)
+	_build_crash_overlay()
 	resized.connect(_queue_map_redraw)
 	regenerate_world()
 	set_process(true)
@@ -93,12 +122,28 @@ func _input(event: InputEvent) -> void:
 		get_tree().quit()
 		get_viewport().set_input_as_handled()
 		return
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_X and view_mode == ViewMode.COCKPIT:
-		_enter_cabin()
+	if flight != null and flight.state == FlightModelScript.State.CRASHED:
+		if event is InputEventKey and event.pressed and not event.echo:
+			if event.keycode == KEY_R or event.physical_keycode == KEY_R:
+				_restart_after_crash()
+			elif event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
+				_show_crash_map()
+			get_viewport().set_input_as_handled()
+		return
+	if event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_X or event.physical_keycode == KEY_X) and view_mode in [ViewMode.COCKPIT, ViewMode.CABIN]:
+		if view_mode == ViewMode.COCKPIT:
+			_enter_cabin()
+		else:
+			_set_view_mode(ViewMode.COCKPIT)
 		get_viewport().set_input_as_handled()
 		return
 	if view_mode != ViewMode.COCKPIT:
 		if event is InputEventKey and event.pressed and not event.echo:
+			if cabin_terrain_zoom > 0 and event.keycode in [KEY_ENTER, KEY_KP_ENTER, KEY_ESCAPE]:
+				cabin_terrain_zoom = 0
+				queue_redraw()
+				get_viewport().set_input_as_handled()
+				return
 			if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
 				_interact_in_scene()
 			elif event.keycode == KEY_ESCAPE:
@@ -107,8 +152,13 @@ func _input(event: InputEvent) -> void:
 		return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_M:
 		flight.toggle_engine()
+		_queue_map_redraw()
 		get_viewport().set_input_as_handled()
 		queue_redraw()
+		return
+	if event is InputEventKey and event.pressed and not event.echo and not event.ctrl_pressed and (event.keycode == KEY_B or event.physical_keycode == KEY_B):
+		_toggle_weather_radar()
+		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and event.pressed and not event.echo and event.ctrl_pressed and event.keycode in [KEY_1, KEY_2]:
 		active_receiver = 0 if event.keycode == KEY_1 else 1
@@ -189,6 +239,9 @@ func regenerate_world() -> void:
 	map_zoom = 1.0
 	measurement_lines.clear()
 	pending_measure = null
+	radar_measurement_lines.clear()
+	radar_pending_measure = null
+	radar_range_index = 0
 	clock_seconds = 12.0 * 60.0 * 60.0
 	trip_air_distance_km = 0.0
 	trip_elapsed_seconds = 0.0
@@ -203,6 +256,8 @@ func regenerate_world() -> void:
 	queue_redraw()
 
 func _process(delta: float) -> void:
+	if flight.state == FlightModelScript.State.CRASHED:
+		return
 	if view_mode != ViewMode.COCKPIT:
 		_update_scene_walking(delta)
 	if simulation_paused:
@@ -232,17 +287,96 @@ func _process(delta: float) -> void:
 	_update_held_throttle(delta)
 	var state_before_update: int = flight.state
 	var speed_before_update: float = flight.speed_kmh
+	var engine_before_update: bool = flight.engine_running
 	flight.update(delta)
+	# Match the small scope: heading and motion must be rendered every frame,
+	# independently of the once-per-second radio/ILS signal checks.
+	if large_weather_radar and view_mode == ViewMode.COCKPIT and flight.engine_running:
+		_queue_map_redraw()
+	if cabin_terrain_zoom > 0:
+		if not _can_view_cabin_terrain():
+			cabin_terrain_zoom = 0
+		else:
+			cabin_terrain_timer -= delta
+			if cabin_terrain_timer <= 0.0:
+				_update_cabin_terrain_profile()
+	if engine_before_update != flight.engine_running:
+		_queue_map_redraw()
 	_update_propeller_animation(delta)
 	if wind_overlay_index == WIND_OVERLAY_ALTITUDES.size() and absf(flight.altitude_m - last_wind_overlay_altitude_m) >= 25.0:
 		last_wind_overlay_altitude_m = flight.altitude_m
 		_queue_map_redraw()
 	_update_flight_trajectory(state_before_update, speed_before_update, delta)
+	if flight.state == FlightModelScript.State.CRASHED:
+		scene_is_walking = false
+		dragging_yoke = false
+		dragging_throttle = false
+		_update_crash_overlay()
 	if flight.state == FlightModelScript.State.FLYING:
 		trip_air_distance_km += flight.speed_kmh / 3600.0 * delta
 		trip_elapsed_seconds += delta
 	status_timer += delta
+	if flight.state == FlightModelScript.State.FLYING:
+		# Accumulate travel rather than multiplying time by current speed: this
+		# avoids jumps when the aircraft accelerates or changes orientation.
+		var fog_speed := lerpf(12.0, 40.0, clampf(flight.speed_kmh / 220.0, 0.0, 1.0))
+		cabin_fog_travel_px += fog_speed * delta * (1.0 if _aircraft_mirrored() else -1.0)
 	queue_redraw()
+
+func _build_crash_overlay() -> void:
+	crash_overlay = PanelContainer.new()
+	crash_overlay.visible = false
+	crash_overlay.z_index = 10
+	crash_overlay.add_theme_stylebox_override("panel",_rounded_box(AircraftArt.PAPER,AircraftArt.INK,2,8))
+	add_child(crash_overlay)
+	var margin := MarginContainer.new()
+	for side in ["left","right","top","bottom"]:
+		margin.add_theme_constant_override("margin_"+side,20)
+	crash_overlay.add_child(margin)
+	var layout := VBoxContainer.new()
+	layout.add_theme_constant_override("separation",16)
+	margin.add_child(layout)
+	var title := Label.new()
+	title.text = "ПОЛЁТ ЗАВЕРШЁН — КРУШЕНИЕ"
+	title.add_theme_color_override("font_color",Color("a83f38"))
+	title.add_theme_font_size_override("font_size",22)
+	layout.add_child(title)
+	crash_description = Label.new()
+	crash_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	crash_description.custom_minimum_size = Vector2(600,90)
+	crash_description.add_theme_color_override("font_color",Color("694b30"))
+	layout.add_child(crash_description)
+	var map_button := Button.new()
+	map_button.text = "ПОКАЗАТЬ ТРАЕКТОРИЮ [ENTER]"
+	map_button.pressed.connect(_show_crash_map)
+	layout.add_child(map_button)
+	var restart_button := Button.new()
+	restart_button.text = "НОВАЯ КАРТА [R]"
+	restart_button.pressed.connect(_restart_after_crash)
+	layout.add_child(restart_button)
+	resized.connect(_update_crash_overlay)
+
+func _update_crash_overlay() -> void:
+	if crash_overlay == null or flight == null:
+		return
+	crash_overlay.visible = flight.state == FlightModelScript.State.CRASHED and view_mode != ViewMode.COCKPIT
+	if not crash_overlay.visible:
+		return
+	var overlay_width := minf(760,size.x-40)
+	crash_description.custom_minimum_size.x = overlay_width-44
+	crash_description.text = ("Самолёт находился в сваливании.\n" if flight.stalled else "")+flight.message
+	crash_overlay.size = Vector2(overlay_width,280)
+	crash_overlay.position = (size-crash_overlay.size)*0.5
+
+func _show_crash_map() -> void:
+	large_weather_radar = false
+	_set_view_mode(ViewMode.COCKPIT)
+
+func _restart_after_crash() -> void:
+	simulation_paused = false
+	large_weather_radar = false
+	regenerate_world()
+	_set_view_mode(ViewMode.COCKPIT)
 
 func _update_propeller_animation(delta: float) -> void:
 	if not flight.engine_running:
@@ -340,6 +474,8 @@ func _format_trajectory_time(seconds_value: float) -> String:
 	return "%02d:%02d:%02d" % [hours, minutes, seconds]
 
 func _set_view_mode(next_mode: int) -> void:
+	weather_radar_cache.invalidate()
+	cabin_terrain_zoom = 0
 	view_mode = next_mode
 	scene_is_walking = false
 	dragging_map = false
@@ -352,11 +488,14 @@ func _set_view_mode(next_mode: int) -> void:
 	throttle_up_held = false
 	throttle_down_held = false
 	scene_notice = ""
+	_update_crash_overlay()
+	_queue_map_redraw()
 	queue_redraw()
 
 func _aircraft_mirrored() -> bool:
-	var airport: Dictionary = world.airports[flight.airport_index]
-	return world.heading_vector(flight.heading_deg).dot(world.heading_vector(float(airport.heading))) >= 0.0
+	# The side-view camera always looks at the same side of the aircraft.
+	# The source drawing faces left, so mirror it to keep the nose right.
+	return true
 
 func _aircraft_scale() -> float:
 	return minf(size.x * 0.84 / 1000.0, (size.y * 0.76 - 140.0) / AircraftArt.GROUND_Y)
@@ -397,8 +536,11 @@ func _scene_hotspots() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	if view_mode == ViewMode.CABIN:
 		for entry in [[AircraftArt.SEAT_X,"В кресло пилота"],[AircraftArt.DOOR_X,"На перрон"]]:
+			if entry[0] == AircraftArt.DOOR_X and flight.state == FlightModelScript.State.FLYING:
+				continue
 			var point := _aircraft_point(Vector2(entry[0],AircraftArt.cabin_floor_y(entry[0])))
-			result.append({"x":point.x,"rect":Rect2(point-Vector2(43,105),Vector2(86,137)),"label":entry[1],"label_y":_aircraft_point(Vector2(0,AircraftArt.FLOOR_Y)).y+44})
+			var label_y := point.y + 32.0 * _aircraft_scale() if entry[0] == AircraftArt.SEAT_X else _aircraft_point(Vector2(0,AircraftArt.FLOOR_Y)).y+44
+			result.append({"x":point.x,"rect":Rect2(point-Vector2(43,105),Vector2(86,137)),"label":entry[1],"label_y":label_y})
 	elif view_mode == ViewMode.APRON:
 		var point := _aircraft_point(Vector2(AircraftArt.DOOR_X,AircraftArt.FLOOR_Y))
 		result.append({"x":point.x,"rect":Rect2(point-Vector2(46,110),Vector2(92,210)),"label":"В самолёт"})
@@ -412,21 +554,29 @@ func _scene_hotspots() -> Array[Dictionary]:
 	return result
 
 func _draw_scene_hotspots() -> void:
+	if flight.state == FlightModelScript.State.CRASHED:
+		return
+	var pose := _cabin_pose()
+	draw_set_transform_matrix(pose)
 	for spot in _scene_hotspots():
 		var rect: Rect2 = spot.rect
-		var hovered := rect.has_point(get_local_mouse_position())
+		var hovered := rect.has_point(pose.affine_inverse() * get_local_mouse_position())
 		var color := Color("#785022") if hovered else AircraftArt.INK
 		var label: String = spot.label
 		var width := ThemeDB.fallback_font.get_string_size(label,HORIZONTAL_ALIGNMENT_LEFT,-1,12).x+20
 		var x := clampf(float(spot.x)-width*0.5,12,size.x-width-12)
 		var y: float = spot.get("label_y", rect.end.y + 12)
-		var label_rect := Rect2(x,y-16,width,23)
-		draw_rect(label_rect,AircraftArt.PAPER)
 		draw_string(ThemeDB.fallback_font,Vector2(x+10,y),label,HORIZONTAL_ALIGNMENT_CENTER,width-20,12,color)
 		if hovered:
 			draw_line(Vector2(x+10,y+5),Vector2(x+width-10,y+5),color,1,true)
+	draw_set_transform_matrix(Transform2D.IDENTITY)
 
 func _click_side_scene(position: Vector2) -> void:
+	if cabin_terrain_zoom > 0:
+		return
+	if flight.state == FlightModelScript.State.CRASHED:
+		return
+	position = _cabin_pose().affine_inverse() * position
 	var interact := false
 	var bounds := _scene_walk_bounds()
 	var destination := clampf(position.x,bounds.x,bounds.y)
@@ -456,6 +606,11 @@ func _enter_apron() -> void:
 	scene_player_x = _aircraft_point(Vector2(AircraftArt.DOOR_X, 0)).x
 	scene_player_facing = 1.0 if apron_aircraft_on_left else -1.0
 func _update_scene_walking(delta: float) -> void:
+	if cabin_terrain_zoom > 0:
+		scene_is_walking = false
+		return
+	if flight.state == FlightModelScript.State.CRASHED:
+		return
 	if view_mode not in [ViewMode.CABIN, ViewMode.APRON, ViewMode.AIRPORT]:
 		return
 	var movement := Input.get_axis("ui_left", "ui_right")
@@ -470,13 +625,15 @@ func _update_scene_walking(delta: float) -> void:
 		scene_notice = ""
 	queue_redraw()
 func _interact_in_scene() -> void:
+	if flight.state == FlightModelScript.State.CRASHED:
+		return
 	match view_mode:
 		ViewMode.CABIN:
 			var seat := _aircraft_point(Vector2(AircraftArt.SEAT_X, 0)).x
 			var door := _aircraft_point(Vector2(AircraftArt.DOOR_X, 0)).x
 			if absf(scene_player_x - seat) < 38.0:
 				_set_view_mode(ViewMode.COCKPIT)
-			elif absf(scene_player_x - door) < 38.0:
+			elif flight.state != FlightModelScript.State.FLYING and absf(scene_player_x - door) < 38.0:
 				if _can_exit_aircraft():
 					_enter_apron()
 				else:
@@ -513,13 +670,18 @@ func _leave_current_scene() -> void:
 			_set_view_mode(ViewMode.COCKPIT)
 
 func _scene_prompt(text: String) -> void:
+	if flight.state == FlightModelScript.State.CRASHED:
+		text = "Enter: траектория полёта • R: новая карта"
 	draw_line(Vector2(36, size.y - 69), Vector2(size.x - 36, size.y - 69), AircraftArt.LIGHT, 1.0, true)
 	draw_string(ThemeDB.fallback_font, Vector2(36, size.y - 39), text, HORIZONTAL_ALIGNMENT_CENTER, size.x - 72, 15, AircraftArt.INK)
-	draw_string(ThemeDB.fallback_font, Vector2(36, size.y - 17), "ЛКМ: переместиться • клик по двери: перейти • стрелки: идти • Enter: действие • Ctrl+Q: выход", HORIZONTAL_ALIGNMENT_CENTER, size.x - 72, 11, Color("#ad9271"))
+	var controls_text := "Ctrl+Q: выход" if flight.state == FlightModelScript.State.CRASHED else "ЛКМ: переместиться • клик по двери: перейти • стрелки: идти • Enter: действие • Ctrl+Q: выход"
+	if view_mode == ViewMode.CABIN and flight.state != FlightModelScript.State.CRASHED:
+		controls_text = "ЛКМ / стрелки: идти • Enter: действие • X: за штурвал • Ctrl+Q: выход"
+	draw_string(ThemeDB.fallback_font, Vector2(36, size.y - 17), controls_text, HORIZONTAL_ALIGNMENT_CENTER, size.x - 72, 11, Color("#ad9271"))
 func _draw_pilot(position: Vector2) -> void:
 	var stride := sin(scene_walk_phase) * 6.0 if scene_is_walking else 0.0
 	var pilot_scale := _aircraft_scale() * AircraftArt.PILOT_SCALE if view_mode in [ViewMode.CABIN, ViewMode.APRON] else AircraftArt.PILOT_SCALE
-	draw_set_transform(position, 0, Vector2(scene_player_facing, 1) * pilot_scale)
+	draw_set_transform_matrix(_cabin_pose() * Transform2D(0.0, Vector2(scene_player_facing, 1) * pilot_scale, 0.0, position))
 	var ink := Color("#795e3c")
 	var cloth := Color("#cbb892")
 	draw_line(Vector2(-3,-21), Vector2(-7+stride,-3), ink, 5, true)
@@ -553,14 +715,159 @@ func _draw_scene_background(title: String) -> float:
 	return ground_y
 func _draw_cabin_scene() -> void:
 	_draw_scene_background("Борт 02 / салон")
-	AircraftArt.draw_aircraft(self, _aircraft_origin(), _aircraft_scale(), _aircraft_mirrored(), true, flight.engine_running, propeller_phase)
+	if cabin_terrain_zoom > 0:
+		_draw_cabin_terrain()
+		return
+	_draw_cabin_weather(false)
+	_draw_cabin_weather(true)
+	AircraftArt.draw_aircraft(self, _aircraft_origin(), _aircraft_scale(), _aircraft_mirrored(), true, flight.engine_running, propeller_phase, _cabin_pitch())
 	_draw_pilot(_cabin_player_position())
 	_draw_scene_hotspots()
 	var prompt := "Грузовой отсек • самолёт продолжает полёт" if flight.state == FlightModelScript.State.FLYING else "Грузовой отсек • самолёт на стоянке"
+	if _can_view_cabin_terrain():
+		prompt += " • колесо вниз: отдалить"
 	for spot in _scene_hotspots():
 		if absf(scene_player_x - float(spot.x)) < 38:
 			prompt = "Enter: " + String(spot.label)
-	_scene_prompt(scene_notice if not scene_notice.is_empty() else prompt)
+	if flight.stall_warning_active():
+		prompt = "СВАЛИВАНИЕ — ВЕРНИТЕСЬ ЗА ШТУРВАЛ" if flight.stalled else "БОЛЬШОЙ УГОЛ АТАКИ — ВЕРНИТЕСЬ ЗА ШТУРВАЛ"
+		_scene_prompt(prompt)
+	else:
+		_scene_prompt(scene_notice if not scene_notice.is_empty() else prompt)
+func _can_view_cabin_terrain() -> bool:
+	return view_mode == ViewMode.CABIN and flight.state != FlightModelScript.State.CRASHED
+
+func _cabin_pitch() -> float:
+	return flight.pitch_deg if flight.state == FlightModelScript.State.FLYING else 0.0
+
+func _cabin_pose() -> Transform2D:
+	if view_mode != ViewMode.CABIN:
+		return Transform2D.IDENTITY
+	return AircraftArt.pitch_transform(_aircraft_origin(), _aircraft_scale(), _aircraft_mirrored(), _cabin_pitch())
+
+func _cabin_ground_visible() -> bool:
+	return flight.altitude_m - world.height_at(flight.position_km) < 100.0
+
+func _cabin_terrain_span_m() -> float:
+	return 500.0 * pow(1.5, maxi(0, cabin_terrain_zoom - 1))
+
+func _update_cabin_terrain_profile() -> void:
+	cabin_terrain_timer = 0.1
+	cabin_terrain_profile.clear()
+	# Section along actual ground motion, including drift, not just nose heading.
+	var velocity: Vector2 = world.heading_vector(flight.heading_deg) * flight.speed_kmh + flight.current_wind_kmh
+	var direction: Vector2 = velocity.normalized() if velocity.length_squared() > 0.01 else world.heading_vector(flight.heading_deg)
+	var screen_direction := 1.0 if _aircraft_mirrored() else -1.0
+	var span := _cabin_terrain_span_m()
+	var count := ceili(span / 2.0)
+	for i in range(count + 1):
+		var offset := lerpf(-span * 0.5, span * 0.5, float(i) / count)
+		var point: Vector2 = flight.position_km + direction * offset * screen_direction / 1000.0
+		cabin_terrain_profile.append(Vector2(offset, world.height_at(point)))
+
+func _draw_cabin_terrain() -> void:
+	var rect := Rect2(36, 115, size.x - 72, size.y - 200)
+	# Equal horizontal/vertical scale preserves terrain slopes. The schematic
+	# airframe is represented as a 12 m aircraft instead of a screen-sized cabin.
+	var pixels_per_m := minf(rect.size.x / _cabin_terrain_span_m(), rect.size.y / 190.0)
+	var anchor := Vector2(rect.get_center().x, rect.position.y + rect.size.y * 0.28)
+	var previous := Vector2.ZERO
+	_draw_cabin_weather(false)
+	var ground_visible := _cabin_ground_visible()
+	for i in cabin_terrain_profile.size():
+		var sample := cabin_terrain_profile[i]
+		var point := anchor + Vector2(sample.x, flight.altitude_m - sample.y) * pixels_per_m
+		if i > 0 and ground_visible:
+			var segment := _clip_line_to_rect(previous, point, rect)
+			if segment.size() == 2:
+				draw_line(segment[0], segment[1], AircraftArt.INK, 1.6, true)
+		previous = point
+	var aircraft_scale := 12.0 * pixels_per_m / 1000.0
+	AircraftArt.draw_small_aircraft(self, anchor - Vector2(500, AircraftArt.GROUND_Y) * aircraft_scale, aircraft_scale, _aircraft_mirrored(), _cabin_pitch())
+	_draw_cabin_weather(true)
+	var prompt := "Колесо: масштаб • Enter / Esc: в салон • X: за штурвал"
+	if flight.stall_warning_active():
+		prompt = "СВАЛИВАНИЕ — ВЕРНИТЕСЬ ЗА ШТУРВАЛ" if flight.stalled else "БОЛЬШОЙ УГОЛ АТАКИ — ВЕРНИТЕСЬ ЗА ШТУРВАЛ"
+	draw_string(ThemeDB.fallback_font, Vector2(36, size.y - 39), prompt, HORIZONTAL_ALIGNMENT_CENTER, size.x - 72, 15, AircraftArt.INK)
+	draw_string(ThemeDB.fallback_font, Vector2(36, size.y - 17), "Вид вниз вдоль пути • полёт продолжается • Ctrl+Q: выход", HORIZONTAL_ALIGNMENT_CENTER, size.x - 72, 11, AircraftArt.INK)
+
+func _cabin_weather_scale() -> float:
+	if cabin_terrain_zoom == 0:
+		return _aircraft_scale() * 1000.0 / 12.0
+	return minf((size.x - 72.0) / _cabin_terrain_span_m(), (size.y - 200.0) / 190.0)
+
+func _cabin_cloud_base_y(fraction: float) -> float:
+	var scale_y := _cabin_weather_scale()
+	var reference_y := _aircraft_origin().y + AircraftArt.GROUND_Y * _aircraft_scale()
+	var terrain: float = world.height_at(flight.position_km)
+	if cabin_terrain_zoom > 0:
+		reference_y = 115.0 + (size.y - 200.0) * 0.28
+		if not cabin_terrain_profile.is_empty():
+			var offset := (fraction - 0.5) * (size.x - 72.0) / scale_y
+			var sample_index := clampf((offset / _cabin_terrain_span_m() + 0.5) * (cabin_terrain_profile.size() - 1), 0.0, cabin_terrain_profile.size() - 1)
+			var left := floori(sample_index)
+			terrain = lerpf(cabin_terrain_profile[left].y, cabin_terrain_profile[mini(left + 1, cabin_terrain_profile.size() - 1)].y, sample_index - left)
+	var world_x := (fraction - 0.5) * (size.x - 72.0) / scale_y
+	return reference_y + (flight.altitude_m - terrain - 100.0 + 0.25 * sin(world_x * TAU / 30.0 + status_timer * 0.2)) * scale_y
+
+func _draw_cabin_weather(foreground: bool) -> void:
+	var rect := Rect2(36, 115, size.x - 72, size.y - 200)
+	var severity: float = flight.storm_intensity
+	var time := status_timer
+	if not foreground:
+		# The cloud base stays in world space, even after entering the layer.
+		var edge := PackedVector2Array()
+		for i in range(121):
+			var fraction := i / 120.0
+			var y := _cabin_cloud_base_y(fraction)
+			edge.append(Vector2(lerpf(rect.position.x, rect.end.x, fraction), clampf(y, rect.position.y, rect.end.y)))
+		var fill := PackedVector2Array([rect.position, Vector2(rect.end.x, rect.position.y)])
+		for i in range(edge.size() - 1, -1, -1):
+			fill.append(edge[i])
+		var cloud_depth := 0.0
+		for point in edge:
+			cloud_depth = maxf(cloud_depth, point.y - rect.position.y)
+		if cloud_depth > 0.1:
+			draw_colored_polygon(fill, Color("c9c3a7").lerp(Color("b5af98"), severity * 0.45))
+		draw_polyline(edge, Color("b9ac8e"), 1.3, true)
+		return
+	var fog_bottom := PackedFloat32Array()
+	for i in range(61):
+		fog_bottom.append(_cabin_cloud_base_y(i / 60.0))
+	if fog_bottom[30] > rect.position.y or fog_bottom[0] > rect.position.y or fog_bottom[60] > rect.position.y:
+		# Light translucent fog ribbons leave the schematic cabin legible.
+		for row in range(7):
+			var ribbon := PackedVector2Array()
+			for i in range(61):
+				var fraction := i / 60.0
+				# Wave pattern travels from nose to tail, slowly enough to retain
+				# the quiet schematic style. Adjacent bands have slight parallax.
+				var phase := (fraction * rect.size.x + cabin_fog_travel_px * (0.85 + row * 0.05)) * 12.0 / rect.size.x
+				var y := rect.position.y + rect.size.y * (row + 0.5) / 7.0 + sin(phase + row * 2.0) * 12.0
+				ribbon.append(Vector2(lerpf(rect.position.x, rect.end.x, fraction), y))
+			for i in range(1, ribbon.size()):
+				var cloud_bottom := minf(fog_bottom[i - 1], fog_bottom[i]) - 6.0
+				var clip_rect := rect
+				clip_rect.size.y = clampf(cloud_bottom - rect.position.y, 0.0, rect.size.y)
+				if clip_rect.size.y <= 0.0:
+					continue
+				var segment := _clip_line_to_rect(ribbon[i - 1], ribbon[i], clip_rect)
+				if segment.size() == 2:
+					draw_line(segment[0], segment[1], Color(0.91, 0.88, 0.76, 0.28), 12.0, true)
+	if severity > 0.0:
+		var zone := 0 if severity < 0.35 else (1 if severity < 0.70 else 2)
+		var count: int = [45, 110, 220][zone]
+		var rain := Color("537c94") if cabin_rain_blue else Color("9b825f")
+		rain.a = [0.40, 0.52, 0.65][zone]
+		for i in count:
+			var x := fposmod(i * 137.507 - time * (35.0 + zone * 18.0), rect.size.x)
+			var y := fposmod(i * 97.31 + time * (180.0 + zone * 90.0), rect.size.y)
+			var start := rect.position + Vector2(x, y)
+			var end := start + Vector2(-6.0 - zone * 3.0, 14.0 + zone * 8.0)
+			var clipped := _clip_line_to_rect(start, end, rect)
+			if clipped.size() == 2:
+				draw_line(clipped[0], clipped[1], rain, 1.0 + zone * 0.25, true)
+
 func _rounded_box(fill: Color, border: Color, border_width: float, radius: float) -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
 	box.bg_color = fill
@@ -621,7 +928,8 @@ func _draw_airport_scene() -> void:
 	_draw_building(operations_x, floor_y, Vector2(250, 220), "ЛЁТНАЯ СЛУЖБА", Color("b4a77e"))
 	_draw_building(cargo_x, floor_y, Vector2(230, 180), "ГРУЗЫ", Color("aaa17e"))
 	_draw_building(shop_x, floor_y, Vector2(190, 150), "МАГАЗИН", Color("c0ae7f"))
-	_draw_pilot(Vector2(scene_player_x, floor_y - 10))
+	# Feet rest on the path in front of the lowest doorstep, not above it.
+	_draw_pilot(Vector2(scene_player_x, floor_y + 12))
 	_draw_scene_hotspots()
 	var prompt := "Стрелки: идти"
 	if absf(scene_player_x - operations_x) < 115.0:
@@ -701,8 +1009,102 @@ func _draw() -> void:
 
 func _draw_map_on(canvas: Control) -> void:
 	map_canvas = canvas
-	_draw_map()
+	if large_weather_radar:
+		if flight.engine_running:
+			weather_radar_cache.update_cache(world, flight, status_timer, RADAR_RANGES_KM[radar_range_index])
+		WeatherRadarArt.draw_large(canvas,map_rect(),world,flight,weather_radar_cache.get_texture(),RADAR_RANGES_KM[radar_range_index])
+		if flight.engine_running:
+			_draw_radar_measurements(canvas)
+	else:
+		_draw_map()
 	map_canvas = null
+
+func _toggle_weather_radar() -> void:
+	weather_radar_cache.invalidate()
+	large_weather_radar = not large_weather_radar
+	# Preserve map camera, finished marks and a pending line, but stop gestures.
+	dragging_map = false
+	map_drag_candidate = false
+	point_drag_candidate = false
+	dragging_measure_point = false
+	dragged_measure_connections.clear()
+	_queue_map_redraw()
+	queue_redraw()
+
+func _radar_contains(point: Vector2) -> bool:
+	return point.distance_to(WeatherRadarArt.scope_center(map_rect())) <= WeatherRadarArt.scope_radius(map_rect())
+
+func _measurement_to_screen(point: Vector2) -> Vector2:
+	if not large_weather_radar:
+		return world_to_screen(point)
+	return WeatherRadarArt.scope_center(map_rect()) + (point - flight.position_km).rotated(-deg_to_rad(flight.heading_deg)) * WeatherRadarArt.scope_radius(map_rect()) / float(RADAR_RANGES_KM[radar_range_index])
+
+func _measurement_from_screen(point: Vector2) -> Vector2:
+	if not large_weather_radar:
+		return screen_to_world(point)
+	return flight.position_km + ((point - WeatherRadarArt.scope_center(map_rect())) * float(RADAR_RANGES_KM[radar_range_index]) / WeatherRadarArt.scope_radius(map_rect())).rotated(deg_to_rad(flight.heading_deg))
+
+func _clamp_measurement_screen(point: Vector2) -> Vector2:
+	if large_weather_radar:
+		var center := WeatherRadarArt.scope_center(map_rect())
+		return center + (point - center).limit_length(WeatherRadarArt.scope_radius(map_rect()) - 3.0)
+	var rect := map_rect().grow(-3.0)
+	return point.clamp(rect.position, rect.end)
+
+func _draw_radar_measurements(canvas: CanvasItem) -> void:
+	for line in radar_measurement_lines:
+		_draw_radar_measurement(canvas, line.a, line.b, Color("e8d274"))
+	if radar_pending_measure != null:
+		_draw_radar_measurement(canvas, radar_pending_measure, _snap_map_point(_clamp_measurement_screen(get_local_mouse_position())), Color("b9c9ce"))
+
+func _draw_radar_measurement(canvas: CanvasItem, a_world: Vector2, b_world: Vector2, color: Color, center := Vector2.INF, radius := -1.0) -> void:
+	var range_km := WeatherRadarArt.RANGE_KM
+	if radius < 0.0:
+		range_km = RADAR_RANGES_KM[radar_range_index]
+		center = WeatherRadarArt.scope_center(map_rect())
+		radius = WeatherRadarArt.scope_radius(map_rect())
+	var a: Vector2 = center + (a_world - flight.position_km).rotated(-deg_to_rad(flight.heading_deg)) * radius / range_km
+	var b: Vector2 = center + (b_world - flight.position_km).rotated(-deg_to_rad(flight.heading_deg)) * radius / range_km
+	var clipped := WeatherRadarArt.clip_segment(a, b, center, radius - 2.0)
+	if clipped.size() == 2:
+		canvas.draw_line(clipped[0], clipped[1], color, 1.7 if radius > 50.0 else 1.0, true)
+	for point in [a,b]:
+		if point.distance_to(center) < radius - 4.0:
+			canvas.draw_circle(point, 3.5 if radius > 50.0 else 1.3, color)
+
+func _handle_radar_mouse_button(event: InputEventMouseButton) -> void:
+	var inside: bool = _radar_contains(event.position) and flight.engine_running
+	if inside and event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+		radar_range_index = clampi(radar_range_index + (1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1), 0, RADAR_RANGES_KM.size() - 1)
+		_queue_map_redraw()
+		return
+	if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed and inside:
+		if radar_pending_measure != null:
+			radar_pending_measure = null
+		else:
+			_erase_nearest_measurement(event.position)
+	elif event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed and inside:
+			map_press_position = event.position
+			if radar_pending_measure == null:
+				dragged_measure_connections = _find_measure_connections(event.position)
+			else:
+				dragged_measure_connections.clear()
+			point_drag_candidate = not dragged_measure_connections.is_empty()
+			map_drag_candidate = not point_drag_candidate
+		elif not event.pressed:
+			if dragging_measure_point:
+				_snap_dragged_measure_point_to_endpoint(_clamp_measurement_screen(event.position))
+				_refresh_measurement_max_heights(dragged_measure_connections)
+			elif inside and (map_drag_candidate or point_drag_candidate):
+				_handle_map_click(event.position)
+			map_drag_candidate = false
+			point_drag_candidate = false
+			dragging_measure_point = false
+			dragged_measure_connections.clear()
+			dragging_throttle = false
+			dragging_yoke = false
+	_queue_map_redraw()
 
 func _queue_map_redraw() -> void:
 	if map_render_layer != null:
@@ -946,8 +1348,7 @@ func _draw_approach_direction(airport: Dictionary, approach_sign: float) -> void
 		map_canvas.draw_colored_polygon(diamond, Color("d7d0ad"))
 		map_canvas.draw_polyline(PackedVector2Array([diamond[0], diamond[1], diamond[2], diamond[3], diamond[0]]), Color("185f61"), 2.0)
 		var desired_altitude: float = marker.altitude_m
-		var beacon_distance_km := approach_position.distance_to(Vector2(airport.position))
-		var label := "%.1f км • %.0f м • %.1f м/с" % [beacon_distance_km, desired_altitude, approach_vertical_speed]
+		var label := "%.1f км • %.0f м • %.1f м/с" % [float(marker.distance_km), desired_altitude, approach_vertical_speed]
 		var text_size := ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 10)
 		var label_position := point + Vector2(12.0, 4.0)
 		label_position.x = clampf(label_position.x, map_rect().position.x + 4.0, map_rect().end.x - text_size.x - 4.0)
@@ -1079,6 +1480,7 @@ func _draw_panel() -> void:
 		if flight.wheel_brakes_applied:
 			draw_string(ThemeDB.fallback_font, speed_center + Vector2(-INSTRUMENT_RADIUS, INSTRUMENT_RADIUS + 34), "ТОРМОЗ", HORIZONTAL_ALIGNMENT_CENTER, INSTRUMENT_RADIUS * 2.0, 11, Color("ef645e"))
 		_draw_round_gauge(_instrument_center(1, gauge_y), INSTRUMENT_RADIUS, "ВЫСОТА", "%.0f" % flight.altitude_m, "м", flight.altitude_m / 5000.0)
+		_draw_radio_altimeter(_instrument_center(1, gauge_y))
 		_draw_variometer(_instrument_center(2, gauge_y), INSTRUMENT_RADIUS)
 		_draw_compass(_instrument_center(3, gauge_y), INSTRUMENT_RADIUS)
 		_draw_horizon(_instrument_center(4, gauge_y), INSTRUMENT_RADIUS)
@@ -1099,20 +1501,30 @@ func _draw_panel() -> void:
 	elif not simulation_paused and flight.stall_warning_active():
 		status_text = "ПРЕДУПРЕЖДЕНИЕ: БОЛЬШОЙ УГОЛ АТАКИ"
 		state_color = Color("e8d274")
-	elif not simulation_paused and flight.vne_exceeded():
+	elif not simulation_paused and flight.state == FlightModelScript.State.FLYING and flight.vne_exceeded():
 		status_text = "ПРЕВЫШЕНА VNE — УМЕНЬШИТЬ СКОРОСТЬ"
 		state_color = Color("ef645e")
-	elif not simulation_paused and flight.overspeed_warning_active():
+	elif not simulation_paused and flight.state == FlightModelScript.State.FLYING and flight.overspeed_warning_active():
 		status_text = "ВЫСОКАЯ СКОРОСТЬ — ИЗБЕГАТЬ РЕЗКИХ МАНЁВРОВ"
 		state_color = Color("e8d274")
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, rect.size.y - 10), status_text, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 330, 15, state_color)
 	draw_string(ThemeDB.fallback_font, Vector2(rect.end.x - 470, rect.end.y - 10), "W/S: газ  •  стрелки: штурвал  •  R: новая карта", HORIZONTAL_ALIGNMENT_RIGHT, 446, 12, Color("aebbc1"))
 
+func _draw_radio_altimeter(center: Vector2) -> void:
+	var height_m: float = flight.radio_height_m()
+	var label := "РВ %.0f м" % height_m if height_m >= 0.0 else "РВ —"
+	draw_string(ThemeDB.fallback_font, center + Vector2(-INSTRUMENT_RADIUS, INSTRUMENT_RADIUS + 34), label, HORIZONTAL_ALIGNMENT_CENTER, INSTRUMENT_RADIUS * 2.0, 11, Color("73d6d0"))
+
 func _draw_unpowered_instruments(gauge_y: float) -> void:
-	# Keep instrument housings and names, but no scales, tuning markers,
-	# readings or signal warnings. Power only affects presentation, not simulation.
+	# Pitot/static instruments and the independent clock remain available.
+	_draw_speedometer(_instrument_center(0,gauge_y),INSTRUMENT_RADIUS)
+	_draw_round_gauge(_instrument_center(1,gauge_y),INSTRUMENT_RADIUS,"ВЫСОТА","%.0f" % flight.altitude_m,"м",flight.altitude_m/5000.0)
+	_draw_variometer(_instrument_center(2,gauge_y),INSTRUMENT_RADIUS)
 	var titles := ["СКОРОСТЬ", "ВЫСОТА", "ВАРИОМЕТР", "КОМПАС", "АВИАГОРИЗОНТ", "ПРИЁМНИК 1", "ПРИЁМНИК 2", "ЧАСЫ", "ТОПЛИВО"]
-	for index in titles.size():
+	for index in range(3,titles.size()):
+		if index == 7:
+			_draw_clock(_instrument_center(index, gauge_y), INSTRUMENT_RADIUS)
+			continue
 		var center := _instrument_center(index, gauge_y)
 		draw_circle(center, INSTRUMENT_RADIUS, Color("0a0e10"))
 		draw_arc(center, INSTRUMENT_RADIUS - 2, 0, TAU, 48, Color("7d8b91"), 2)
@@ -1120,7 +1532,10 @@ func _draw_unpowered_instruments(gauge_y: float) -> void:
 	_draw_unpowered_display(get_ils_rect(), "ILS")
 	var radar_rect := get_weather_radar_rect()
 	if radar_rect.size.x >= 150.0:
-		_draw_unpowered_display(radar_rect, "МЕТЕОРАДАР")
+		if large_weather_radar:
+			WeatherRadarArt.draw_map_button(self,radar_rect)
+		else:
+			_draw_unpowered_display(radar_rect, "МЕТЕОРАДАР [B]")
 
 func _draw_unpowered_display(rect: Rect2, title: String) -> void:
 	draw_rect(rect, Color("0a0e10"), true)
@@ -1131,42 +1546,21 @@ func _draw_weather_radar() -> void:
 	var rect := get_weather_radar_rect()
 	if rect.size.x < 150.0:
 		return
+	if large_weather_radar:
+		WeatherRadarArt.draw_map_button(self,rect)
+		return
 	draw_rect(rect, Color("071012"), true)
 	draw_rect(rect, Color("6f7f85"), false, 1.5)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(6, 12), "МЕТЕОРАДАР 30 км", HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 12, 9, Color("b8c5c8"))
+	draw_string(ThemeDB.fallback_font, rect.position + Vector2(6, 12), "МЕТЕОРАДАР 30 км [B]", HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 12, 9, Color("b8c5c8"))
 	var center := rect.position + Vector2(37, 41)
 	var radius := 23.0
 	draw_arc(center, radius, 0, TAU, 40, Color("557176"), 1.0)
 	draw_arc(center, radius * 0.5, 0, TAU, 32, Color(0.35, 0.48, 0.50, 0.55), 1.0)
 	draw_line(center, center + Vector2(0, -radius), Color("8ca1a4"), 1.0)
 	draw_circle(center, 2.0, Color("d7c65c"))
-	for storm in world.storms:
-		var relative: Vector2 = world.storm_position(storm) - flight.position_km
-		var radar_relative := relative.rotated(-deg_to_rad(flight.heading_deg))
-		if radar_relative.length() > 30.0 + float(storm.radius_km):
-			continue
-		var storm_center := center + radar_relative / 30.0 * radius
-		var storm_radius := maxf(2.0, float(storm.radius_km) / 30.0 * radius)
-		var peak_intensity: float = storm.intensity
-		var radar_lobes: Array = storm.get("radar_lobes", [{"offset_km": Vector2.ZERO, "radius_scale": 1.0, "strength": 1.0}])
-		# Several overlapping lobes make an irregular echo while the inexpensive
-		# circular influence field remains unchanged. Draw all weak areas first,
-		# then strong and severe zones so later lobes cannot cover a red core.
-		for zone in [
-			{"threshold": 0.0, "color": Color(0.72, 0.76, 0.20, 0.40)},
-			{"threshold": 0.35, "color": Color(0.94, 0.65, 0.10, 0.72)},
-			{"threshold": 0.70, "color": Color(0.88, 0.16, 0.11, 0.82)},
-		]:
-			var threshold: float = zone.threshold
-			for lobe in radar_lobes:
-				var lobe_peak: float = peak_intensity * float(lobe.strength)
-				if lobe_peak <= threshold:
-					continue
-				var zone_ratio := 1.0 if threshold <= 0.0 else sqrt(1.0 - threshold / lobe_peak)
-				var lobe_offset: Vector2 = Vector2(lobe.offset_km).rotated(-deg_to_rad(flight.heading_deg))
-				var lobe_center := storm_center + lobe_offset / 30.0 * radius
-				var lobe_radius := maxf(1.2, storm_radius * float(lobe.radius_scale) * zone_ratio)
-				draw_circle(lobe_center, lobe_radius, zone.color)
+	WeatherRadarArt.draw_echoes(self,world,flight,center,radius)
+	for line in radar_measurement_lines:
+		_draw_radar_measurement(self, line.a, line.b, Color("e8d274"), center, radius)
 	var info_x := rect.position.x + 68.0
 	var danger_color := Color("ef645e") if flight.storm_intensity > 0.65 else Color("e8d274")
 	if flight.storm_intensity > 0.05:
@@ -1612,6 +2006,17 @@ func _gui_input(event: InputEvent) -> void:
 		_handle_mouse_motion(event)
 
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
+	if flight.state == FlightModelScript.State.CRASHED and (view_mode != ViewMode.COCKPIT or not map_rect().has_point(event.position)):
+		return
+	if view_mode == ViewMode.CABIN and event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN and _can_view_cabin_terrain():
+			cabin_terrain_zoom = mini(3, cabin_terrain_zoom + 1)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			cabin_terrain_zoom = maxi(0, cabin_terrain_zoom - 1)
+		if cabin_terrain_zoom > 0:
+			_update_cabin_terrain_profile()
+		queue_redraw()
+		return
 	if view_mode == ViewMode.OPERATIONS:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			if get_building_exit_rect().has_point(event.position):
@@ -1630,6 +2035,12 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 			_click_side_scene(event.position)
 		return
 	var mrect := map_rect()
+	if event.button_index == MOUSE_BUTTON_LEFT and event.pressed and get_weather_radar_rect().has_point(event.position):
+		_toggle_weather_radar()
+		return
+	if large_weather_radar and (mrect.has_point(event.position) or map_drag_candidate or point_drag_candidate or dragging_measure_point):
+		_handle_radar_mouse_button(event)
+		return
 	var hovered_receiver := _receiver_at_point(event.position)
 	if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN] and event.pressed and hovered_receiver >= 0:
 		active_receiver = hovered_receiver
@@ -1656,6 +2067,7 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 				flight.yoke = Vector2.ZERO
 			elif get_engine_button_rect().has_point(event.position):
 				flight.toggle_engine()
+				_queue_map_redraw()
 			elif get_cabin_button_rect().has_point(event.position):
 				_enter_cabin()
 			elif get_ils_rect().has_point(event.position):
@@ -1702,28 +2114,29 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	queue_redraw()
 
 func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
+	if flight.state == FlightModelScript.State.CRASHED and view_mode != ViewMode.COCKPIT:
+		return
 	if view_mode != ViewMode.COCKPIT:
 		queue_redraw()
 		return
 	if point_drag_candidate and not dragging_measure_point and event.position.distance_to(map_press_position) >= 4.0:
 		dragging_measure_point = true
 	if dragging_measure_point:
-		var rect := map_rect().grow(-3.0)
-		var clamped_screen := Vector2(
-			clampf(event.position.x, rect.position.x, rect.end.x),
-			clampf(event.position.y, rect.position.y, rect.end.y)
-		)
-		var new_world := screen_to_world(clamped_screen)
+		var clamped_screen := _clamp_measurement_screen(event.position)
+		var new_world := _measurement_from_screen(clamped_screen)
 		new_world.x = clampf(new_world.x, 0.0, FlightWorldScript.SIZE_KM)
 		new_world.y = clampf(new_world.y, 0.0, FlightWorldScript.SIZE_KM)
 		for connection in dragged_measure_connections:
-			measurement_lines[connection.line_index][connection.endpoint] = new_world
+			active_measurement_lines[connection.line_index][connection.endpoint] = new_world
 		_refresh_measurement_max_heights(dragged_measure_connections)
 		_queue_map_redraw()
 		queue_redraw()
 		return
 	if map_drag_candidate and not dragging_map and event.position.distance_to(map_press_position) >= 6.0:
-		dragging_map = true
+		if large_weather_radar:
+			map_drag_candidate = false
+		else:
+			dragging_map = true
 	if dragging_map:
 		map_center -= event.relative / pixels_per_km()
 		_clamp_map_center()
@@ -1732,7 +2145,7 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 		_update_yoke(event.position)
 	if dragging_throttle:
 		_update_throttle(event.position)
-	if pending_measure != null:
+	if active_pending_measure != null:
 		_queue_map_redraw()
 
 func _update_yoke(mouse: Vector2) -> void:
@@ -1809,24 +2222,25 @@ func screen_to_world(point: Vector2) -> Vector2:
 func _erase_nearest_measurement(mouse: Vector2) -> void:
 	var closest := -1
 	var closest_distance := 18.0
-	for i in measurement_lines.size():
-		var a := world_to_screen(measurement_lines[i].a)
-		var b := world_to_screen(measurement_lines[i].b)
+	for i in active_measurement_lines.size():
+		var a := _measurement_to_screen(active_measurement_lines[i].a)
+		var b := _measurement_to_screen(active_measurement_lines[i].b)
 		var nearest := Geometry2D.get_closest_point_to_segment(mouse, a, b)
 		var distance := mouse.distance_to(nearest)
 		if distance < closest_distance:
 			closest = i
 			closest_distance = distance
 	if closest >= 0:
-		measurement_lines.remove_at(closest)
+		active_measurement_lines.remove_at(closest)
 
 func _handle_map_click(screen_position: Vector2) -> void:
 	var point := _snap_map_point(screen_position)
-	if pending_measure == null:
-		pending_measure = point
+	if active_pending_measure == null:
+		active_pending_measure = point
 	else:
-		measurement_lines.append({"a": pending_measure, "b": point, "max_height_m": _maximum_terrain_height_on_line(pending_measure, point)})
-		pending_measure = null
+		var height := -1.0 if large_weather_radar else _maximum_terrain_height_on_line(active_pending_measure, point)
+		active_measurement_lines.append({"a": active_pending_measure, "b": point, "max_height_m": height})
+		active_pending_measure = null
 
 func _maximum_terrain_height_on_line(a: Vector2, b: Vector2) -> float:
 	var sample_count: int = maxi(1, ceili(a.distance_to(b) / 0.10))
@@ -1848,6 +2262,8 @@ func _maximum_terrain_height_on_line(a: Vector2, b: Vector2) -> float:
 	return maximum_height + 8.0
 
 func _refresh_measurement_max_heights(connections: Array[Dictionary]) -> void:
+	if large_weather_radar:
+		return # Radar annotations neither need nor reveal terrain heights.
 	var refreshed: Dictionary = {}
 	for connection in connections:
 		var line_index: int = connection.line_index
@@ -1861,10 +2277,13 @@ func _find_measure_connections(screen_position: Vector2) -> Array[Dictionary]:
 	var selected_world := Vector2.ZERO
 	var closest_pixels := 12.0
 	var found := false
-	for line in measurement_lines:
+	for line in active_measurement_lines:
 		for endpoint_key in ["a", "b"]:
 			var endpoint: Vector2 = line[endpoint_key]
-			var distance := screen_position.distance_to(world_to_screen(endpoint))
+			var endpoint_screen := _measurement_to_screen(endpoint)
+			if large_weather_radar and not _radar_contains(endpoint_screen):
+				continue
+			var distance := screen_position.distance_to(endpoint_screen)
 			if distance < closest_pixels:
 				closest_pixels = distance
 				selected_world = endpoint
@@ -1872,9 +2291,9 @@ func _find_measure_connections(screen_position: Vector2) -> Array[Dictionary]:
 	var connections: Array[Dictionary] = []
 	if not found:
 		return connections
-	for line_index in measurement_lines.size():
+	for line_index in active_measurement_lines.size():
 		for endpoint_key in ["a", "b"]:
-			var endpoint: Vector2 = measurement_lines[line_index][endpoint_key]
+			var endpoint: Vector2 = active_measurement_lines[line_index][endpoint_key]
 			if endpoint.is_equal_approx(selected_world):
 				connections.append({"line_index": line_index, "endpoint": endpoint_key})
 	return connections
@@ -1887,23 +2306,28 @@ func _snap_dragged_measure_point_to_endpoint(screen_position: Vector2) -> void:
 	# released, so every connected line lands on the exact beacon coordinate.
 	for beacon in world.beacons:
 		var beacon_position: Vector2 = beacon.position
-		var pixel_distance := screen_position.distance_to(world_to_screen(beacon_position))
+		if large_weather_radar:
+			continue # Do not reveal invisible beacons through radar snapping.
+		var pixel_distance := screen_position.distance_to(_measurement_to_screen(beacon_position))
 		if pixel_distance < closest_pixels:
 			closest_pixels = pixel_distance
 			snap_target = beacon_position
-	for line_index in measurement_lines.size():
+	for line_index in active_measurement_lines.size():
 		for endpoint_key in ["a", "b"]:
 			if _is_dragged_measure_connection(line_index, endpoint_key):
 				continue
-			var endpoint: Vector2 = measurement_lines[line_index][endpoint_key]
-			var pixel_distance := screen_position.distance_to(world_to_screen(endpoint))
+			var endpoint: Vector2 = active_measurement_lines[line_index][endpoint_key]
+			var endpoint_screen := _measurement_to_screen(endpoint)
+			if large_weather_radar and not _radar_contains(endpoint_screen):
+				continue
+			var pixel_distance := screen_position.distance_to(endpoint_screen)
 			if pixel_distance < closest_pixels:
 				closest_pixels = pixel_distance
 				snap_target = endpoint
 	if snap_target == null:
 		return
 	for connection in dragged_measure_connections:
-		measurement_lines[connection.line_index][connection.endpoint] = snap_target
+		active_measurement_lines[connection.line_index][connection.endpoint] = snap_target
 
 func _is_dragged_measure_connection(line_index: int, endpoint_key: String) -> bool:
 	for connection in dragged_measure_connections:
@@ -1912,19 +2336,26 @@ func _is_dragged_measure_connection(line_index: int, endpoint_key: String) -> bo
 	return false
 
 func _snap_map_point(screen_position: Vector2) -> Vector2:
-	var unsnapped := screen_to_world(screen_position)
+	var unsnapped := _measurement_from_screen(screen_position)
+	if large_weather_radar:
+		unsnapped = unsnapped.clamp(Vector2.ZERO, Vector2.ONE * FlightWorldScript.SIZE_KM)
 	var closest_world := unsnapped
 	var closest_pixels := 14.0
 	for beacon in world.beacons:
 		var beacon_position: Vector2 = beacon.position
-		var pixel_distance := screen_position.distance_to(world_to_screen(beacon_position))
+		if large_weather_radar:
+			continue
+		var pixel_distance := screen_position.distance_to(_measurement_to_screen(beacon_position))
 		if pixel_distance < closest_pixels:
 			closest_pixels = pixel_distance
 			closest_world = beacon_position
-	for line in measurement_lines:
+	for line in active_measurement_lines:
 		for endpoint_key in ["a", "b"]:
 			var endpoint: Vector2 = line[endpoint_key]
-			var pixel_distance := screen_position.distance_to(world_to_screen(endpoint))
+			var endpoint_screen := _measurement_to_screen(endpoint)
+			if large_weather_radar and not _radar_contains(endpoint_screen):
+				continue
+			var pixel_distance := screen_position.distance_to(endpoint_screen)
 			if pixel_distance < closest_pixels:
 				closest_pixels = pixel_distance
 				closest_world = endpoint

@@ -49,6 +49,12 @@ func _run() -> void:
 		scene.flight.prepare_at_airport(0,reverse_direction)
 		scene._enter_cabin()
 		var mirrored: bool = scene._aircraft_mirrored()
+		check(mirrored, "Nose must face right for either departure direction")
+		var departure_heading: float = scene.flight.heading_deg
+		for heading in [0.0, 90.0, 180.0, 270.0]:
+			scene.flight.heading_deg = heading
+			check(scene._aircraft_mirrored(), "Changing heading must not flip the side view")
+		scene.flight.heading_deg = departure_heading
 		for local_x in [scene.AircraftArt.SEAT_X, 335.0, 370.0, scene.AircraftArt.DOOR_X]:
 			scene.scene_player_x = scene._aircraft_point(Vector2(local_x, 0)).x
 			var expected: Vector2 = scene._aircraft_point(Vector2(local_x, scene.AircraftArt.cabin_floor_y(local_x)))
@@ -87,10 +93,36 @@ func _run() -> void:
 		check(is_equal_approx(scene.scene_player_x,bounds.x),"Click must immediately move within cabin bounds")
 		scene.flight.state = scene.FlightModelScript.State.FLYING
 		scene.flight.speed_kmh = 150
-		click_and_walk(scene,scene._scene_hotspots()[1])
+		check(scene._scene_hotspots().size() == 1, "Only seat hotspot must remain in flight")
+		var seat_spot: Dictionary = scene._scene_hotspots()[0]
+		check(seat_spot.label_y < scene._aircraft_point(Vector2(0,scene.AircraftArt.FLOOR_Y)).y, "Seat label must be inside fuselage below raised deck")
+		var door_position: Vector2 = scene._aircraft_point(Vector2(scene.AircraftArt.DOOR_X,scene.AircraftArt.FLOOR_Y))
+		scene._click_side_scene(door_position)
+		scene._interact_in_scene()
 		check(scene.view_mode == scene.ViewMode.CABIN,"Door must stay closed in flight")
+		check(scene.scene_notice.is_empty(), "Airborne door must not offer an action or warning")
 		scene.flight.state = scene.FlightModelScript.State.ROLLING
 		click_and_walk(scene,scene._scene_hotspots()[1])
 		check(scene.view_mode == scene.ViewMode.CABIN,"Door must stay closed during rollout")
-	print("Side scenes: both orientations, click travel, boarding, service, seat and bounds — ", "FAIL" if failed else "OK")
+	var key := InputEventKey.new()
+	key.keycode = KEY_X
+	key.pressed = true
+	for zoom in range(4):
+		scene._enter_cabin()
+		scene.scene_player_x = scene._aircraft_point(Vector2(scene.AircraftArt.WALK_MAX,0)).x
+		scene.cabin_terrain_zoom = zoom
+		scene._input(key)
+		check(scene.view_mode == scene.ViewMode.COCKPIT and scene.cabin_terrain_zoom == 0, "X must return from anywhere in cabin at every zoom")
+		check(scene.map_render_layer.visible, "X must restore instrument/navigation view")
+		scene._input(key)
+		check(scene.view_mode == scene.ViewMode.CABIN, "X must still enter cabin")
+		key.echo = true
+		scene._input(key)
+		check(scene.view_mode == scene.ViewMode.CABIN, "Holding X must not toggle repeatedly")
+		key.echo = false
+	key.keycode = KEY_NONE
+	key.physical_keycode = KEY_X
+	scene._input(key)
+	check(scene.view_mode == scene.ViewMode.COCKPIT, "Physical X must work with alternate keyboard layout")
+	print("Side scenes: both orientations, click travel, boarding, service, seat, bounds and X toggle — ", "FAIL" if failed else "OK")
 	quit(1 if failed else 0)

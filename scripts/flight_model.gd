@@ -11,6 +11,7 @@ const STALL_RECOVERY_SPEED_KMH := 75.0
 const STALL_RECOVERY_YOKE_MAX := 0.25
 const STALL_RECOVERY_HOLD_SECONDS := 0.75
 const GROUND_CONTACT_CLEARANCE_M := 0.1
+const RADIO_ALTIMETER_MAX_HEIGHT_M := 750.0
 const CRUISE_SPEED_KMH := 200.0
 const MAX_LEVEL_SPEED_KMH := 220.0
 const VNO_KMH := 220.0
@@ -68,6 +69,14 @@ func _init(flight_world) -> void:
 	world = flight_world
 	turbulence_rng.seed = world.seed_value + 918273
 	prepare_at_airport(0)
+
+func radio_height_m() -> float:
+	# Simplified downward-looking instrument, not a forward terrain warning.
+	# Negative means no reading (unpowered or above its measuring range).
+	if not engine_running:
+		return -1.0
+	var height_m := maxf(0.0, altitude_m - world.height_at(position_km))
+	return height_m if height_m <= RADIO_ALTIMETER_MAX_HEIGHT_M else -1.0
 
 func prepare_at_airport(index: int, reverse_direction: bool = false) -> void:
 	airport_index = index
@@ -228,6 +237,10 @@ func update(delta: float) -> void:
 	var powered_throttle := throttle if engine_running else 0.0
 	var target_speed: float = glide_speed + powered_throttle * 185.0 * altitude_power_factor() - climb_drag - high_angle_drag - dive_drag - unsupported_climb * 8.0 + gravity_dive_bonus
 	var acceleration: float = (target_speed - speed_kmh) * 0.22
+	# Blend only below the landing power range. The established 10--30% final
+	# approach remains unchanged; idle and engine-out flight use a glide polar.
+	var glide_blend := 1.0-smoothstep(0.0,0.10,powered_throttle) if state == State.FLYING else 0.0
+	acceleration = lerpf(acceleration,_glide_acceleration_kmh_s(),glide_blend)
 	# There is intentionally no operational hard speed cap. Aerodynamic drag
 	# limits level flight, while a sufficiently steep dive can carry the aircraft
 	# through the caution range and beyond VNE.
@@ -251,6 +264,7 @@ func update(delta: float) -> void:
 	var low_speed_sink: float = 0.0 if speed_kmh >= 62.0 else (62.0 - speed_kmh) * 0.17
 	var separated_flow_sink: float = (6.0 + maxf(0.0, angle_of_attack_deg - STALL_AOA_DEG) * 0.45) if stalled else 0.0
 	var target_vs: float = pitch_climb - low_power_sink - low_speed_sink - separated_flow_sink + storm_vertical_flow_mps
+	target_vs = lerpf(target_vs,_glide_vertical_speed_mps()+storm_vertical_flow_mps,glide_blend)
 	# Outside storms the established response stays untouched. In a severe cell
 	# aircraft inertia prevents it from instantly following a newly encountered
 	# vertical air current; that temporary relative airflow changes AoA and can
@@ -293,6 +307,24 @@ func update(delta: float) -> void:
 			return
 		var landing_failure := _landing_failure_reason()
 		_crash(landing_failure if not landing_failure.is_empty() else "Столкновение с рельефом: высота земли %.0f м" % terrain)
+
+func _glide_acceleration_kmh_s() -> float:
+	# Approximate energy balance: gravity along the flight path versus parasite
+	# and induced drag. At ~100 km/h the unpowered trim sinks about 3.6 m/s.
+	var airspeed_mps := maxf(speed_kmh/3.6,8.0)
+	var air_vertical_speed := vertical_speed_mps-storm_vertical_flow_mps
+	var gravity_acceleration := clampf(-9.81*air_vertical_speed/airspeed_mps,-9.81,9.81)
+	var drag_acceleration := 0.001*airspeed_mps*airspeed_mps+0.5*pow((100.0/3.6)/airspeed_mps,2)
+	return (gravity_acceleration-drag_acceleration)*3.6
+
+func _glide_vertical_speed_mps() -> float:
+	# Supporting the same weight requires increasing AoA as speed decreases.
+	# Unlike the old speed-scaled sink term, slowing down cannot remove the
+	# need for lift and produce a comfortable 46 km/h glide.
+	var support_aoa := minf(40.0,7.5*pow(100.0/maxf(speed_kmh,25.0),2))
+	var path_angle := clampf(pitch_deg-support_aoa,-70.0,20.0)
+	var sink_from_separation := maxf(0.0,angle_of_attack_deg-STALL_AOA_DEG)*0.5
+	return maxf(speed_kmh/3.6,8.0)*sin(deg_to_rad(path_angle))-sink_from_separation
 
 func _try_land() -> bool:
 	for i in world.airports.size():

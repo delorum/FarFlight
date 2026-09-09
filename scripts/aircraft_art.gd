@@ -165,8 +165,31 @@ static func _draw_propeller(c: CanvasItem, powered: bool, phase: float) -> void:
 	c.draw_circle(Vector2(107,264), 8, PAPER)
 	c.draw_arc(Vector2(107,264), 8, 0, TAU, 20, INK, 2, true)
 
-static func draw_aircraft(c: CanvasItem, origin: Vector2, scale_value: float, mirrored: bool, cutaway: bool, powered: bool = false, propeller_phase: float = 0.0) -> void:
+static func pitch_transform(origin: Vector2, scale_value: float, mirrored: bool, pitch_deg: float) -> Transform2D:
+	var pivot := origin + Vector2(500,264) * scale_value
+	var angle := deg_to_rad(pitch_deg) * (-1.0 if mirrored else 1.0)
+	return Transform2D(angle, pivot - pivot.rotated(angle))
+
+static func draw_small_aircraft(c: CanvasItem, origin: Vector2, scale_value: float, mirrored: bool, pitch_deg: float = 0.0) -> void:
+	# Same raised cockpit, cargo body and round tail, with screen-space strokes
+	# instead of subpixel outlines from scaling down the detailed cabin artwork.
+	var transform := Transform2D(0.0, Vector2(-scale_value if mirrored else scale_value, scale_value), 0.0, origin + Vector2(1000.0 * scale_value if mirrored else 0.0, 0))
+	transform = pitch_transform(origin, scale_value, mirrored, pitch_deg) * transform
+	var outline := PackedVector2Array([
+		Vector2(132,236), Vector2(150,214), Vector2(192,203), Vector2(241,152),
+		Vector2(287,150), Vector2(330,182), Vector2(706,230), Vector2(788,272),
+		Vector2(836,130), Vector2(868,103), Vector2(887,105), Vector2(915,155),
+		Vector2(934,336), Vector2(918,350), Vector2(845,364), Vector2(540,345),
+		Vector2(329,345), Vector2(153,314), Vector2(132,296)])
+	poly(c, transform * outline, PAPER, INK, 1.2)
+	for pair in [[Vector2(289,137), Vector2(534,137)], [Vector2(319,328), Vector2(522,328)], [Vector2(107,184), Vector2(107,344)], [Vector2(327,345), Vector2(327,393)]]:
+		line(c, transform * pair[0], transform * pair[1], INK, 1.2)
+	c.draw_circle(transform * Vector2(327,393), maxf(1.2, scale_value * 33.0), INK)
+	c.draw_circle(transform * Vector2(905,412), maxf(0.8, scale_value * 14.0), INK)
+
+static func draw_aircraft(c: CanvasItem, origin: Vector2, scale_value: float, mirrored: bool, cutaway: bool, powered: bool = false, propeller_phase: float = 0.0, pitch_deg: float = 0.0) -> void:
 	var airframe_transform := Transform2D(0.0, Vector2(-scale_value if mirrored else scale_value, scale_value), 0.0, origin + Vector2(1000.0 * scale_value if mirrored else 0.0, 0))
+	airframe_transform = pitch_transform(origin, scale_value, mirrored, pitch_deg) * airframe_transform
 	c.draw_set_transform_matrix(airframe_transform)
 	# Rounded vertical tail behind the tapering fuselage.
 	poly(c, rounded(PackedVector2Array([Vector2(783,295), Vector2(808,210), Vector2(836,130), Vector2(850,110), Vector2(868,103), Vector2(887,105), Vector2(903,122), Vector2(915,155), Vector2(931,327), Vector2(862,347)]),0.22))
@@ -261,8 +284,11 @@ static func draw_aircraft(c: CanvasItem, origin: Vector2, scale_value: float, mi
 		line(c, Vector2(497,147), Vector2(481,320), INK, 3)
 		line(c, Vector2(342,149), Vector2(478,318), LIGHT, 1)
 	else:
-		line(c,Vector2(335,147),Vector2(343,189),LIGHT,1)
-		line(c,Vector2(497,147),Vector2(491,193),LIGHT,1)
+		# End exactly on the straight sections of the outer fuselage roof.
+		var front_attach_y := lerpf(178.0, 189.0, (343.0 - 313.0) / (370.0 - 313.0))
+		var rear_attach_y := lerpf(189.0, 230.0, (491.0 - 370.0) / (706.0 - 370.0))
+		line(c,Vector2(335,146),Vector2(343,front_attach_y),INK,1.5)
+		line(c,Vector2(497,146),Vector2(491,rear_attach_y),INK,1.5)
 	box(c, Rect2(319,320,203,16), PAPER, wing_ink, 7)
 	# Horizontal tailplane.
 	poly(c, rounded(PackedVector2Array([Vector2(819,318), Vector2(901,309), Vector2(949,318), Vector2(952,326), Vector2(891,333), Vector2(820,328)])))
