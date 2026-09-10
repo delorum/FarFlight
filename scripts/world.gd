@@ -4,7 +4,8 @@ extends RefCounted
 const SIZE_KM := 100.0
 const RUNWAY_LENGTH_KM := 2.0
 const RUNWAY_WIDTH_KM := 0.05
-const BEACON_FREQUENCIES := [305.0, 327.0, 348.0, 371.0, 392.0, 415.0]
+const BEACON_MIN_FREQUENCY_KHZ := 300
+const BEACON_MAX_FREQUENCY_KHZ := 400
 const LOCATOR_RANGE_KM := 15.0
 const ROUTE_NDB_RANGE_KM := 30.0
 const ILS_RANGE_KM := 15.0
@@ -170,14 +171,23 @@ func _generate_beacons() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value + 9187
 	beacons.clear()
+	# Separate RNG keeps beacon positions unchanged when frequency rules change.
+	var frequency_rng := RandomNumberGenerator.new()
+	frequency_rng.seed = seed_value + 51793
+	var available := range(BEACON_MIN_FREQUENCY_KHZ, BEACON_MAX_FREQUENCY_KHZ + 1)
+	var frequencies: Array[int] = []
+	for i in airports.size() + 4:
+		var selected := frequency_rng.randi_range(0, available.size() - 1)
+		frequencies.append(available[selected])
+		available.remove_at(selected)
 	# Runway locator beacons share the runway centre so their bearing and range
 	# are identical for approaches from either direction.
 	for i in airports.size():
 		var airport: Dictionary = airports[i]
-		beacons.append({"name": "RWY-%d" % (i + 1), "frequency": BEACON_FREQUENCIES[i], "position": airport.position, "runway": i, "range_km": LOCATOR_RANGE_KM, "class": "LOC"})
+		beacons.append({"name": "RWY-%d" % (i + 1), "frequency": frequencies[i], "position": airport.position, "runway": i, "range_km": LOCATOR_RANGE_KM, "class": "LOC"})
 	for i in 4:
 		var p := Vector2(rng.randf_range(12, 88), rng.randf_range(12, 88))
-		beacons.append({"name": "NDB-%s" % char(65 + i), "frequency": BEACON_FREQUENCIES[i + 2], "position": p, "runway": -1, "range_km": ROUTE_NDB_RANGE_KM, "class": "MH"})
+		beacons.append({"name": "NDB-%s" % char(65 + i), "frequency": frequencies[i + airports.size()], "position": p, "runway": -1, "range_km": ROUTE_NDB_RANGE_KM, "class": "MH"})
 
 func beacon_signal(beacon: Dictionary, aircraft_position_km: Vector2, aircraft_altitude_m: float) -> Dictionary:
 	var beacon_position: Vector2 = beacon.position

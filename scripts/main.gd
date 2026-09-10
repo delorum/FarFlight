@@ -102,7 +102,8 @@ var crash_description: Label
 func _ready() -> void:
 	Engine.max_fps = 60
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
-	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+	if not OS.has_feature("web"):
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 	map_render_layer = MapRenderLayerScript.new()
 	map_render_layer.controller = self
 	map_render_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -116,10 +117,19 @@ func _ready() -> void:
 	queue_redraw()
 
 func _input(event: InputEvent) -> void:
+	# Godot dispatches input to children before the shell. Let Esc reach the
+	# pause menu before cabin interactions or receiver text entry consume it.
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE and get_parent().has_method("_pause_game"):
+		get_parent()._pause_game()
+		get_viewport().set_input_as_handled()
+		return
 	# Global exit, including side scenes and frequency entry; physical Q also
 	# works when the keyboard layout is Russian.
 	if event is InputEventKey and event.pressed and not event.echo and event.ctrl_pressed and (event.keycode == KEY_Q or event.physical_keycode == KEY_Q):
-		get_tree().quit()
+		if OS.has_feature("web") and get_parent().has_method("_pause_game"):
+			get_parent()._pause_game()
+		else:
+			get_tree().quit()
 		get_viewport().set_input_as_handled()
 		return
 	if flight != null and flight.state == FlightModelScript.State.CRASHED:
