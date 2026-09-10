@@ -52,7 +52,7 @@ const assert = require('node:assert/strict');
     });
     await click(435);
     await page.screenshot({ path: '/tmp/farflight-web-quota.png' });
-    console.log('failedWrites', await page.evaluate(() => window.failedWrites), 'errors', errors);
+    assert.equal(await page.evaluate(() => window.failedWrites), 2, 'Save must attempt writing and handle quota failure');
     assert.equal(await read(), saved, 'Failed write must retain previous slot');
     await page.evaluate(() => { Storage.prototype.setItem = window.originalSetItem; });
     await click(435);

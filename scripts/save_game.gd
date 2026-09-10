@@ -20,12 +20,15 @@ static func web_read_script() -> String:
 	return "(() => { try { return localStorage.getItem(%s) || ''; } catch (_) { return ''; } })()" % JSON.stringify(WEB_KEY)
 
 static func web_write_script(encoded: String) -> String:
+	# Numeric status plus readback avoids relying on a bridged JS boolean.
 	return "(() => { try { localStorage.setItem(%s, %s); return 0; } catch (_) { return 1; } })()" % [JSON.stringify(WEB_KEY), JSON.stringify(encoded)]
 
 static func slot_exists(path: String = PATH) -> bool:
 	if OS.has_feature("web") and path == PATH:
-		return not str(JavaScriptBridge.eval(web_read_script())).is_empty()
+		var encoded: Variant = JavaScriptBridge.eval(web_read_script())
+		return encoded is String and not encoded.is_empty()
 	return FileAccess.file_exists(path)
+
 const UI_FIELDS := [
 	"receiver_frequencies", "map_zoom", "map_center", "measurement_lines", "pending_measure",
 	"radar_measurement_lines", "radar_pending_measure", "radar_range_index", "large_weather_radar",
