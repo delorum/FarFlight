@@ -6,12 +6,13 @@ const FlightModelScript = preload("res://scripts/flight_model.gd")
 func _init() -> void:
 	for seed_value in range(10001, 10031):
 		var world = FlightWorldScript.new(seed_value)
-		assert(world.airports.size() == 2)
-		assert(world.beacons.size() == 6)
+		assert(world.airports.size() == 8)
+		assert(world.beacons.size() == 24)
 		assert(world.beacons[0].range_km == 15.0)
-		assert(world.beacons[2].range_km == 30.0)
-		var distance: float = world.airports[0].position.distance_to(world.airports[1].position)
-		assert(distance >= 45.0 and distance <= 58.0, "Airport distance %.2f for seed %d" % [distance, seed_value])
+		assert(world.beacons[world.airports.size()].range_km == 30.0)
+		for pair_start in range(0, world.airports.size(), 2):
+			var distance: float = world.airports[pair_start].position.distance_to(world.airports[pair_start + 1].position)
+			assert(distance >= 45.0 and distance <= 58.0, "Airport distance %.2f for seed %d" % [distance, seed_value])
 		for airport in world.airports:
 			var direction: Vector2 = world.heading_vector(airport.heading)
 			assert(world.height_at(airport.position) < 1.0)
@@ -259,11 +260,12 @@ func _init() -> void:
 	assert(short_landing.message.begins_with("Касание до ВПП"))
 
 	# Isolate repeatable landing checks from moving weather and earlier flights.
-	for airport_index in 2:
+	for airport_index in FlightWorldScript.AIRPORT_COUNT:
 		for reverse_direction in [false,true]:
 			assert(_test_approach(airport_index,reverse_direction))
-			assert(_test_wind_guidance(airport_index,reverse_direction))
-	print("Smoke test: 30 worlds, takeoff, four runway approaches and wind guidance OK")
+			if airport_index < 2:
+				assert(_test_wind_guidance(airport_index,reverse_direction))
+	print("Smoke test: 30 worlds, takeoff, all 16 runway approaches and wind guidance OK")
 	quit()
 
 func _test_approach(airport_index: int, reverse_direction: bool) -> bool:
@@ -326,7 +328,7 @@ func _test_approach(airport_index: int, reverse_direction: bool) -> bool:
 		if approach.state == FlightModelScript.State.LANDED or approach.state == FlightModelScript.State.CRASHED:
 			break
 	var final_coords: Vector2 = landing_world.runway_coordinates(approach.position_km, approach_airport)
-	print("Approach airport=%d reverse=%s: state=%d along=%.3f cross=%.3f alt=%.1f speed=%.1f vs=%.2f beacon=%.3f" % [airport_index, reverse_direction, approach.state, final_coords.x, final_coords.y, approach.altitude_m, approach.speed_kmh, approach.vertical_speed_mps, approach.position_km.distance_to(landing_beacon.position)])
+	print("Approach airport=%d reverse=%s: state=%d along=%.3f cross=%.3f alt=%.1f speed=%.1f vs=%.2f beacon=%.3f heading=%.2f/%.2f wind=%s message=%s" % [airport_index, reverse_direction, approach.state, final_coords.x, final_coords.y, approach.altitude_m, approach.speed_kmh, approach.vertical_speed_mps, approach.position_km.distance_to(landing_beacon.position), approach.heading_deg, approach_heading, approach.current_wind_kmh, approach.message])
 	assert(touched_down)
 	assert(approach.state == FlightModelScript.State.LANDED, approach.message)
 	assert(is_zero_approx(approach.speed_kmh))

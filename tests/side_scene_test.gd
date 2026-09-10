@@ -48,6 +48,7 @@ func _run() -> void:
 	for reverse_direction in [false,true]:
 		scene.flight.prepare_at_airport(0,reverse_direction)
 		scene._enter_cabin()
+		var cabin_aircraft_origin: Vector2 = scene._aircraft_origin()
 		var mirrored: bool = scene._aircraft_mirrored()
 		check(mirrored, "Nose must face right for either departure direction")
 		var departure_heading: float = scene.flight.heading_deg
@@ -75,6 +76,7 @@ func _run() -> void:
 		click_and_walk(scene,scene._scene_hotspots()[1])
 		check(scene.view_mode == scene.ViewMode.APRON,"Click on cabin door must reach apron")
 		check(scene._aircraft_mirrored() == mirrored,"Cutaway and exterior must use the same orientation")
+		check(scene._aircraft_origin().is_equal_approx(cabin_aircraft_origin), "Cutaway and apron aircraft must keep the same screen position")
 		click_and_walk(scene,scene._scene_hotspots()[1])
 		check(scene.view_mode == scene.ViewMode.AIRPORT,"Click airport exit must reach airport")
 		click_and_walk(scene,scene._scene_hotspots()[0])

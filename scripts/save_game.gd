@@ -1,9 +1,9 @@
 extends RefCounted
 ## One local slot. No object deserialization; an atomic rename keeps the old
 ## slot intact until the replacement has been written and validated.
-const VERSION := 1
+const VERSION := 3
 const PATH := "user://flight_save.dat"
-const WEB_KEY := "farflight.save.v1"
+const WEB_KEY := "farflight.save.v3"
 
 # Synchronous localStorage replacement survives an immediate page close. Keep
 # Variant's binary encoding: JSON alone loses Vector2 and 64-bit RNG state.
@@ -37,7 +37,8 @@ const UI_FIELDS := [
 	"trajectory_elapsed_seconds", "trajectory_distance_km", "trajectory_last_position",
 	"ils_airport_index", "simulation_paused", "wind_overlay_index", "view_mode",
 	"scene_player_facing", "scene_walk_phase", "apron_aircraft_on_left", "scene_notice",
-	"propeller_phase", "cabin_terrain_zoom", "cabin_fog_travel_px"
+	"propeller_phase", "cabin_terrain_zoom", "cabin_fog_travel_px",
+	"selected_inventory_slot", "in_fuel_bay", "last_economy_flight_state", "fuel_amount_litres"
 ]
 
 static func flight_fields(flight) -> Dictionary:
@@ -61,13 +62,14 @@ static func capture(game) -> Dictionary:
 			"beacons": game.world.beacons, "wind_layers": game.world.wind_layers,
 			"storms": game.world.storms, "time": game.world.weather_time_seconds},
 		"flight": flight_fields(game.flight), "rng_state": game.flight.turbulence_rng.state,
+		"economy": game.economy.snapshot(),
 		"ui": ui,
 	}.duplicate(true)
 
 static func valid(data: Variant) -> bool:
 	if not data is Dictionary or data.get("version") != VERSION:
 		return false
-	for key in ["world", "flight", "ui"]:
+	for key in ["world", "flight", "ui", "economy"]:
 		if not data.get(key) is Dictionary:
 			return false
 	var world: Dictionary = data.world
@@ -79,7 +81,7 @@ static func valid(data: Variant) -> bool:
 		for item in world[key]:
 			if not item is Dictionary:
 				return false
-	if world.airports.size() != 2 or world.beacons.size() != 6 or world.wind_layers.size() < 2:
+	if world.airports.size() != 8 or world.beacons.size() != 24 or world.wind_layers.size() < 2:
 		return false
 	for airport in world.airports:
 		if not airport.get("position") is Vector2 or not airport.get("heading") is float or not airport.get("name") is String:
@@ -111,9 +113,9 @@ static func valid(data: Variant) -> bool:
 	for key in ["pending_measure", "radar_pending_measure"]:
 		if data.ui[key] != null and not data.ui[key] is Vector2:
 			return false
-	if not data.ui.map_center is Vector2 or not data.ui.map_zoom is float or data.ui.map_zoom < 1.0 or data.ui.map_zoom > 12.0:
+	if not data.ui.map_center is Vector2 or not data.ui.map_zoom is float or data.ui.map_zoom < 1.0 or data.ui.map_zoom > 24.0:
 		return false
-	if data.flight.get("airport_index", -1) not in [0,1] or data.ui.ils_airport_index not in [0,1] or data.ui.wind_overlay_index not in range(5):
+	if data.flight.get("airport_index", -1) not in range(world.airports.size()) or data.ui.ils_airport_index not in range(world.airports.size()) or data.ui.wind_overlay_index not in range(5):
 		return false
 	for key in ["measurement_lines", "radar_measurement_lines", "flight_trajectory"]:
 		if not data.ui[key] is Array:
@@ -125,7 +127,11 @@ static func valid(data: Variant) -> bool:
 				return false
 			if key == "flight_trajectory" and (not entry.get("position") is Vector2 or not entry.has_all(["time_seconds", "distance_km"])):
 				return false
-	return data.flight.get("position_km") is Vector2 and data.flight.get("state") in range(5) and data.ui.view_mode in range(5) and data.ui.radar_range_index in range(4) and data.ui.cabin_terrain_zoom in range(4)
+	if not data.economy.has_all(["money", "hunger", "fatigue", "inventory", "carried_item", "offers_by_airport", "fuel_airports", "food_airports", "hotel_airports"]):
+		return false
+	if not data.economy.inventory is Array or data.economy.inventory.size() != 6:
+		return false
+	return data.flight.get("position_km") is Vector2 and data.flight.get("state") in range(5) and data.ui.view_mode in range(9) and data.ui.radar_range_index in range(4) and data.ui.cabin_terrain_zoom in range(4)
 
 static func read_slot(path: String = PATH) -> Dictionary:
 	if OS.has_feature("web") and path == PATH:
@@ -175,6 +181,9 @@ static func restore(game, data: Dictionary) -> bool:
 	new_world.storms.assign(data.world.storms)
 	new_world.weather_time_seconds = data.world.time
 	var new_flight = game.FlightModelScript.new(new_world)
+	var new_economy = game.EconomyScript.new()
+	if not new_economy.restore(data.economy):
+		return false
 	# Reject incomplete/incompatible flight data before changing the live game.
 	for field in flight_fields(new_flight):
 		if not data.flight.has(field) or typeof(data.flight[field]) != typeof(new_flight.get(field)):
@@ -186,6 +195,7 @@ static func restore(game, data: Dictionary) -> bool:
 			return false
 	game.world = new_world
 	game.flight = new_flight
+	game.economy = new_economy
 	game._set_view_mode(data.ui.view_mode)
 	for field in UI_FIELDS:
 		if game.get(field) is Array:
@@ -200,6 +210,7 @@ static func restore(game, data: Dictionary) -> bool:
 	game.flight.wheel_brakes_applied = false
 	game.receiver_frequency_entry = ""
 	game.active_receiver = -1
+	game._normalize_map_camera()
 	game._build_contours()
 	game._build_approach_markers()
 	game._update_receiver_signals()

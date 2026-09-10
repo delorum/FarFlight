@@ -1,0 +1,47 @@
+extends SceneTree
+
+const World = preload("res://scripts/world.gd")
+const Economy = preload("res://scripts/economy.gd")
+
+func _init() -> void:
+	var world = World.new(424242)
+	var economy = Economy.new(world)
+	assert(economy.fuel_airports.size() == 3)
+	assert(economy.food_airports.size() == 3)
+	assert(economy.hotel_airports.size() == 3)
+	assert(economy.offers_at(0).size() == 3)
+	var destinations := {}
+	for offer in economy.offers_at(0):
+		assert(int(offer.destination) != 0)
+		assert(not destinations.has(offer.destination))
+		destinations[offer.destination] = true
+		assert(offer.urgent_reward == offer.normal_reward * 2)
+		assert(is_equal_approx(float(offer.urgent_deadline), -1.0))
+	var parcel: Dictionary = economy.accept_offer(0, 0)
+	assert(not parcel.is_empty() and parcel.urgent_deadline > economy.elapsed_seconds)
+	assert(economy.store_carried())
+	assert(economy.take_slot(0))
+	var destination := int(parcel.destination)
+	var expected := int(parcel.urgent_reward)
+	var delivery: Dictionary = economy.deliver_carried(destination)
+	assert(delivery.urgent and delivery.paid == expected)
+	var old_offers: Array = economy.offers_at(0).duplicate(true)
+	economy.arrive_at_airport(0, world)
+	assert(economy.offers_at(0) == old_offers)
+	economy.arrive_at_airport(destination, world)
+	assert(economy.offers_at(destination).size() == 3)
+	assert(economy.buy_canister())
+	assert(economy.fill_carried_canister(20) == 20)
+	assert(economy.transfer_carried_fuel(7, 7.9) == 7)
+	assert(economy.carried_item.fuel_l == 13)
+	var snapshot := economy.snapshot()
+	var restored = Economy.new()
+	assert(restored.restore(snapshot) and restored.snapshot() == snapshot)
+	var needs = Economy.new(world)
+	needs.advance_time(3600.0)
+	assert(needs.hunger == 5 and needs.fatigue == 5)
+	needs.fatigue = 1
+	needs.sleep_hour(false)
+	assert(needs.fatigue == 4 and needs.hunger == 4)
+	print("economy_test: OK")
+	quit()

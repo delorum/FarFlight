@@ -15,6 +15,12 @@ func _run() -> void:
 	root.add_child(scene)
 	await process_frame
 	scene.set_process(false)
+	var map_size: Vector2 = scene.map_rect().size
+	var world_span_px: float = scene.FlightWorldScript.SIZE_KM * scene.pixels_per_km()
+	check(world_span_px + 0.01 >= maxf(map_size.x, map_size.y), "Maximum zoom-out must cover the whole map viewport without side gaps")
+	check(scene.map_center.is_equal_approx(Vector2(scene.world.airports[scene.flight.airport_index].position)), "New game map must be centred on the departure airport")
+	var initial_radius: float = maxf(map_size.x, map_size.y) / (scene.pixels_per_km() * 2.0)
+	check(initial_radius <= scene.INITIAL_MAP_RADIUS_KM + 0.01, "Initial map view must show about a 40 km radius")
 	scene.map_zoom = 4.0
 	scene.map_center = Vector2(45,55)
 	scene.measurement_lines.append({"a":Vector2(20,30),"b":Vector2(40,60),"max_height_m":500.0})

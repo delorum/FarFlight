@@ -23,6 +23,9 @@ func _run() -> void:
 	shell._close_about()
 	shell._new_game()
 	var game = shell.game
+	game.economy.money = 347
+	game.economy.hunger = 4
+	game.economy.inventory[2] = {"type":"food"}
 	check(not shell.menu_open and game.is_processing(), "New game must start simulation")
 	game.set_process(false)
 	game.flight.state = game.FlightModelScript.State.FLYING
@@ -78,6 +81,7 @@ func _run() -> void:
 	check(loaded.view_mode == game.ViewMode.CABIN and loaded.cabin_terrain_zoom == 2, "Side scene and zoom must survive loading")
 	check(is_equal_approx(loaded.scene_player_x,game.scene_player_x), "Cabin character position must survive loading")
 	check(loaded.clock_seconds == clock_before and loaded.receiver_frequencies == [333,377], "Time and radio tuning must survive loading")
+	check(loaded.economy.money == 347 and loaded.economy.hunger == 4 and loaded.economy.inventory[2].type == "food", "Money, needs and cargo must survive loading")
 	for frame in 60:
 		game.flight.update(1.0/60.0)
 		loaded.flight.update(1.0/60.0)

@@ -1,7 +1,16 @@
 class_name FlightWorld
 extends RefCounted
 
-const SIZE_KM := 100.0
+const SIZE_KM := 200.0
+const REGION_SIZE_KM := 100.0
+const REGIONS_PER_AXIS := 2
+const AIRPORTS_PER_REGION := 2
+const ROUTE_NDB_PER_REGION := 4
+const MIN_AIRPORT_SEPARATION_KM := 45.0
+const MAX_REGIONAL_AIRPORT_DISTANCE_KM := 58.0
+const AIRPORT_COUNT := REGIONS_PER_AXIS * REGIONS_PER_AXIS * AIRPORTS_PER_REGION
+const ROUTE_NDB_COUNT := REGIONS_PER_AXIS * REGIONS_PER_AXIS * ROUTE_NDB_PER_REGION
+const BEACON_COUNT := AIRPORT_COUNT + ROUTE_NDB_COUNT
 const RUNWAY_LENGTH_KM := 2.0
 const RUNWAY_WIDTH_KM := 0.05
 const BEACON_MIN_FREQUENCY_KHZ := 300
@@ -12,7 +21,9 @@ const ILS_RANGE_KM := 15.0
 const ILS_HALF_CONE_DEG := 30.0
 const ILS_AIM_OFFSET_KM := 0.06
 const MIN_RADIO_BLOCKING_TERRAIN_M := 250.0
-const WEATHER_STORM_COUNT := 9
+const STORMS_PER_REGION := 9
+const WEATHER_STORM_COUNT := REGIONS_PER_AXIS * REGIONS_PER_AXIS * STORMS_PER_REGION
+const AIRPORT_NAMES := ["Северный", "Озёрный", "Речной", "Степной", "Туманный", "Каменный", "Западный", "Дальний"]
 
 var seed_value: int
 var noise := FastNoiseLite.new()
@@ -40,26 +51,29 @@ func _generate_weather() -> void:
 	for altitude_m in [0.0, 1500.0, 3000.0, 5000.0]:
 		wind_layers.append({"altitude_m": altitude_m, "from_deg": rng.randf_range(0.0, 360.0), "speed_kmh": rng.randf_range(8.0, 32.0)})
 	storms.clear()
-	for index in WEATHER_STORM_COUNT:
-		var drift_heading := rng.randf_range(0.0, 360.0)
-		var storm_radius := rng.randf_range(4.0, 8.0)
-		var radar_lobes: Array[Dictionary] = [
-			{"offset_km": Vector2.ZERO, "radius_scale": 0.68, "strength": 1.0},
-		]
-		for lobe_index in 6:
-			var offset_direction := heading_vector(rng.randf_range(0.0, 360.0))
-			radar_lobes.append({
-				"offset_km": offset_direction * storm_radius * rng.randf_range(0.15, 0.43),
-				"radius_scale": rng.randf_range(0.38, 0.62),
-				"strength": rng.randf_range(0.72, 1.05),
-			})
-		storms.append({
-			"origin": Vector2(rng.randf_range(12.0, 88.0), rng.randf_range(12.0, 88.0)),
-			"radius_km": storm_radius,
-			"intensity": rng.randf_range(0.55, 1.0),
-			"drift_kmh": heading_vector(drift_heading) * rng.randf_range(8.0, 18.0),
-			"radar_lobes": radar_lobes,
-		})
+	for region_y in REGIONS_PER_AXIS:
+		for region_x in REGIONS_PER_AXIS:
+			var region_origin := Vector2(region_x, region_y) * REGION_SIZE_KM
+			for index in STORMS_PER_REGION:
+				var drift_heading := rng.randf_range(0.0, 360.0)
+				var storm_radius := rng.randf_range(4.0, 8.0)
+				var radar_lobes: Array[Dictionary] = [
+					{"offset_km": Vector2.ZERO, "radius_scale": 0.68, "strength": 1.0},
+				]
+				for lobe_index in 6:
+					var offset_direction := heading_vector(rng.randf_range(0.0, 360.0))
+					radar_lobes.append({
+						"offset_km": offset_direction * storm_radius * rng.randf_range(0.15, 0.43),
+						"radius_scale": rng.randf_range(0.38, 0.62),
+						"strength": rng.randf_range(0.72, 1.05),
+					})
+				storms.append({
+					"origin": region_origin + Vector2(rng.randf_range(8.0, 92.0), rng.randf_range(8.0, 92.0)),
+					"radius_km": storm_radius,
+					"intensity": rng.randf_range(0.55, 1.0),
+					"drift_kmh": heading_vector(drift_heading) * rng.randf_range(8.0, 18.0),
+					"radar_lobes": radar_lobes,
+				})
 
 func update_weather(delta: float) -> void:
 	weather_time_seconds += delta
@@ -142,30 +156,77 @@ func heading_vector(degrees: float) -> Vector2:
 func _generate_airports() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value
-	var first := _find_low_point(rng, Vector2(12, 12), Vector2(88, 88), [])
-	var candidates: Array[Vector2] = []
-	for i in 1800:
-		var p := Vector2(rng.randf_range(10, 90), rng.randf_range(10, 90))
-		var d := p.distance_to(first)
-		if d >= 45.0 and d <= 58.0 and raw_height_at(p) < 550.0:
-			candidates.append(p)
-	var second := candidates[rng.randi_range(0, candidates.size() - 1)] if not candidates.is_empty() else Vector2(78, 78)
-	var route_heading := vector_heading(second - first)
-	airports = [
-		{"name": "Северный", "position": first, "heading": fmod(route_heading + rng.randf_range(-28, 28) + 360.0, 360.0)},
-		{"name": "Озёрный", "position": second, "heading": fmod(route_heading + 180.0 + rng.randf_range(-28, 28) + 360.0, 360.0)},
-	]
+	airports.clear()
+	var positions: Array[Vector2] = []
+	# A locally good pair can block an airport in a neighbouring region. Retry
+	# the complete layout so the 45 km rule applies to all eight airports.
+	for layout_attempt in 80:
+		positions.clear()
+		var complete := true
+		for region_y in REGIONS_PER_AXIS:
+			for region_x in REGIONS_PER_AXIS:
+				var region_origin := Vector2(region_x, region_y) * REGION_SIZE_KM
+				var pair := _find_airport_pair(rng, region_origin, positions)
+				if pair.is_empty():
+					complete = false
+					break
+				positions.append_array(pair)
+			if not complete:
+				break
+		if complete:
+			break
+	if positions.size() != AIRPORT_COUNT:
+		positions = _fallback_airport_layout()
+	for region_y in REGIONS_PER_AXIS:
+		for region_x in REGIONS_PER_AXIS:
+			var pair_start := (region_y * REGIONS_PER_AXIS + region_x) * AIRPORTS_PER_REGION
+			var route_heading := vector_heading(positions[pair_start + 1] - positions[pair_start])
+			for pair_index in AIRPORTS_PER_REGION:
+				var airport_index := pair_start + pair_index
+				var base_heading: float = route_heading + (180.0 if pair_index == 1 else 0.0)
+				airports.append({
+					"name": AIRPORT_NAMES[airport_index],
+					"position": positions[airport_index],
+					"heading": fmod(base_heading + rng.randf_range(-28.0, 28.0) + 360.0, 360.0),
+					"region": Vector2i(region_x, region_y),
+				})
 
-func _find_low_point(rng: RandomNumberGenerator, low: Vector2, high: Vector2, excluded: Array) -> Vector2:
-	var best := Vector2(20, 20)
-	var best_height := INF
-	for i in 1200:
-		var p := Vector2(rng.randf_range(low.x, high.x), rng.randf_range(low.y, high.y))
-		var h := raw_height_at(p)
-		if h < best_height:
-			best = p
-			best_height = h
-	return best
+func _find_airport_pair(rng: RandomNumberGenerator, region_origin: Vector2, occupied: Array[Vector2]) -> Array[Vector2]:
+	# Search pairs directly: every 100 km region gets two low sites separated by
+	# a useful route, while no airport may approach any earlier one too closely.
+	var best_pair: Array[Vector2] = []
+	var best_score := INF
+	for attempt in 2600:
+		var first := region_origin + Vector2(rng.randf_range(12.0, 88.0), rng.randf_range(12.0, 88.0))
+		var second := first + heading_vector(rng.randf_range(0.0, 360.0)) * rng.randf_range(MIN_AIRPORT_SEPARATION_KM, MAX_REGIONAL_AIRPORT_DISTANCE_KM)
+		var local_second := second - region_origin
+		if local_second.x < 12.0 or local_second.x > 88.0 or local_second.y < 12.0 or local_second.y > 88.0:
+			continue
+		var separated := true
+		for other in occupied:
+			if first.distance_to(other) < MIN_AIRPORT_SEPARATION_KM or second.distance_to(other) < MIN_AIRPORT_SEPARATION_KM:
+				separated = false
+				break
+		if not separated:
+			continue
+		var first_height := raw_height_at(first)
+		var second_height := raw_height_at(second)
+		var score := maxf(first_height, second_height) + (first_height + second_height) * 0.20
+		if score < best_score:
+			best_score = score
+			best_pair = [first, second]
+	return best_pair
+
+func _fallback_airport_layout() -> Array[Vector2]:
+	# Repeated offsets form a lattice whose shortest distance is about 53.9 km,
+	# including across shared region borders.
+	var result: Array[Vector2] = []
+	for region_y in REGIONS_PER_AXIS:
+		for region_x in REGIONS_PER_AXIS:
+			var origin := Vector2(region_x, region_y) * REGION_SIZE_KM
+			result.append(origin + Vector2(20.0, 25.0))
+			result.append(origin + Vector2(70.0, 45.0))
+	return result
 
 func _generate_beacons() -> void:
 	var rng := RandomNumberGenerator.new()
@@ -176,7 +237,7 @@ func _generate_beacons() -> void:
 	frequency_rng.seed = seed_value + 51793
 	var available := range(BEACON_MIN_FREQUENCY_KHZ, BEACON_MAX_FREQUENCY_KHZ + 1)
 	var frequencies: Array[int] = []
-	for i in airports.size() + 4:
+	for i in BEACON_COUNT:
 		var selected := frequency_rng.randi_range(0, available.size() - 1)
 		frequencies.append(available[selected])
 		available.remove_at(selected)
@@ -185,9 +246,26 @@ func _generate_beacons() -> void:
 	for i in airports.size():
 		var airport: Dictionary = airports[i]
 		beacons.append({"name": "RWY-%d" % (i + 1), "frequency": frequencies[i], "position": airport.position, "runway": i, "range_km": LOCATOR_RANGE_KM, "class": "LOC"})
-	for i in 4:
-		var p := Vector2(rng.randf_range(12, 88), rng.randf_range(12, 88))
-		beacons.append({"name": "NDB-%s" % char(65 + i), "frequency": frequencies[i + airports.size()], "position": p, "runway": -1, "range_km": ROUTE_NDB_RANGE_KM, "class": "MH"})
+	var ndb_index := 0
+	for region_y in REGIONS_PER_AXIS:
+		for region_x in REGIONS_PER_AXIS:
+			var region_origin := Vector2(region_x, region_y) * REGION_SIZE_KM
+			# One NDB in each 50×50 subcell prevents clusters and empty areas.
+			for cell_y in 2:
+				for cell_x in 2:
+					var cell_origin := region_origin + Vector2(cell_x, cell_y) * (REGION_SIZE_KM * 0.5)
+					var p := cell_origin + Vector2(rng.randf_range(10.0, 40.0), rng.randf_range(10.0, 40.0))
+					for retry in 12:
+						var too_close := false
+						for airport in airports:
+							if p.distance_to(Vector2(airport.position)) < 6.0:
+								too_close = true
+								break
+						if not too_close:
+							break
+						p = cell_origin + Vector2(rng.randf_range(10.0, 40.0), rng.randf_range(10.0, 40.0))
+					beacons.append({"name": "NDB-%s" % char(65 + ndb_index), "frequency": frequencies[airports.size() + ndb_index], "position": p, "runway": -1, "range_km": ROUTE_NDB_RANGE_KM, "class": "MH"})
+					ndb_index += 1
 
 func beacon_signal(beacon: Dictionary, aircraft_position_km: Vector2, aircraft_altitude_m: float) -> Dictionary:
 	var beacon_position: Vector2 = beacon.position

@@ -30,6 +30,10 @@ enum State { PARKED, FLYING, ROLLING, LANDED, CRASHED }
 
 var world
 var position_km := Vector2.ZERO
+# Compensates float32 Vector2 rounding over thousands of tiny frame movements.
+# This becomes important in a 200 km world where uncompensated drift can reach
+# tens of metres—enough to miss a 50 m runway despite an exact heading.
+var position_integration_error_km := Vector2.ZERO
 var altitude_m := 0.0
 var speed_kmh := 0.0
 var heading_deg := 0.0
@@ -83,6 +87,7 @@ func prepare_at_airport(index: int, reverse_direction: bool = false) -> void:
 	var airport: Dictionary = world.airports[index]
 	var departure_heading: float = fposmod(float(airport.heading) + (180.0 if reverse_direction else 0.0), 360.0)
 	position_km = Vector2(airport.position) - world.heading_vector(departure_heading) * 0.78
+	position_integration_error_km = Vector2.ZERO
 	heading_deg = departure_heading
 	altitude_m = 0.0
 	speed_kmh = 0.0
@@ -273,7 +278,7 @@ func update(delta: float) -> void:
 	vertical_speed_mps = move_toward(vertical_speed_mps, target_vs, delta * vertical_response)
 
 	var direction: Vector2 = world.heading_vector(heading_deg)
-	position_km += (direction * speed_kmh + current_wind_kmh) / 3600.0 * delta
+	_move_position((direction * speed_kmh + current_wind_kmh) / 3600.0 * delta)
 	var terrain: float = world.height_at(position_km)
 	var next_altitude: float = altitude_m + vertical_speed_mps * delta
 
@@ -364,7 +369,7 @@ func _update_ground_roll(delta: float) -> void:
 	# steering. This lets the pilot remove a crosswind crab after touchdown.
 	var steering_authority := clampf(speed_kmh / 25.0, 0.25, 1.0)
 	heading_deg = fposmod(heading_deg + yoke.x * 28.0 * steering_authority * delta, 360.0)
-	position_km += world.heading_vector(heading_deg) * (speed_kmh / 3600.0) * delta
+	_move_position(world.heading_vector(heading_deg) * (speed_kmh / 3600.0) * delta)
 	altitude_m = 0.0
 	vertical_speed_mps = 0.0
 	var coords: Vector2 = world.runway_coordinates(position_km, airport)
@@ -377,6 +382,12 @@ func _update_ground_roll(delta: float) -> void:
 		speed_kmh = 0.0
 		state = State.LANDED
 		_show_message("Успешная посадка в аэропорту «%s»" % airport.name, -1.0)
+
+func _move_position(displacement_km: Vector2) -> void:
+	var corrected := displacement_km - position_integration_error_km
+	var next_position := position_km + corrected
+	position_integration_error_km = (next_position - position_km) - corrected
+	position_km = next_position
 
 func _landing_failure_reason() -> String:
 	var nearest_airport: Dictionary = {}

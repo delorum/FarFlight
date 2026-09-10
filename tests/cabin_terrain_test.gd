@@ -21,6 +21,28 @@ func _run() -> void:
 	wheel.button_index = MOUSE_BUTTON_WHEEL_DOWN
 	scene._handle_mouse_button(wheel)
 	check(scene.cabin_terrain_zoom == 1, "Zoom must also work while parked")
+	var parked_airport_view: Dictionary = scene._cabin_visible_airport()
+	check(not parked_airport_view.is_empty() and float(parked_airport_view.start_m) <= 0.0 and float(parked_airport_view.end_m) >= 0.0, "Parked side view must contain the runway beneath the aircraft")
+	var runway_start_before: float = float(parked_airport_view.runway_start_m)
+	var airport_centre_before: float = float(parked_airport_view.centre_m)
+	scene.flight.position_km += scene._cabin_ground_direction() * 0.05
+	var moving_airport_view: Dictionary = scene._cabin_visible_airport()
+	check(absf(float(moving_airport_view.runway_start_m) - (runway_start_before - 50.0)) < 0.1, "Runway markings must move backwards with the aircraft")
+	check(absf(float(moving_airport_view.centre_m) - (airport_centre_before - 50.0)) < 0.1, "Distant airport buildings must move backwards with the aircraft")
+	var airport: Dictionary = scene.world.airports[0]
+	var approach_direction: Vector2 = scene.world.heading_vector(float(airport.heading))
+	var threshold: Vector2 = Vector2(airport.position) - approach_direction * scene.FlightWorldScript.RUNWAY_LENGTH_KM * 0.5
+	scene.flight.position_km = threshold - approach_direction * 0.3
+	scene.flight.heading_deg = float(airport.heading)
+	scene.flight.speed_kmh = 90.0
+	scene.flight.current_wind_kmh = Vector2.ZERO
+	scene.cabin_terrain_zoom = 2
+	scene._update_cabin_terrain_profile()
+	var approach_airport_view: Dictionary = scene._cabin_visible_airport()
+	check(not approach_airport_view.is_empty() and float(approach_airport_view.start_m) > 250.0, "Runway must enter the side view ahead on final approach")
+	var runway_right := Vector2(approach_direction.y, -approach_direction.x)
+	scene.flight.position_km += runway_right * 0.1
+	check(scene._cabin_visible_airport().is_empty(), "Side view must not invent a runway when the flight path misses it")
 	scene.cabin_terrain_zoom = 0
 	scene.flight.state = scene.FlightModelScript.State.FLYING
 	scene.flight.position_km = Vector2(50, 50)
