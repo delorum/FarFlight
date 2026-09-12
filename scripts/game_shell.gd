@@ -101,11 +101,13 @@ func _rebuild_menu() -> void:
 	elif game != null:
 		content.add_child(_label("ПАУЗА", 14))
 		_button("Продолжить", _resume_game)
+		_button("Новая игра", _new_game)
 		_button("Сохранить и выйти", _save_and_exit)
 	else:
-		_button("Новая игра", _new_game)
 		var slot := SaveGame.read_slot(save_path)
-		_button("Продолжить", _continue_game, slot.is_empty())
+		if not slot.is_empty():
+			_button("Продолжить", _continue_game)
+		_button("Новая игра", _new_game)
 		_button("Об игре", _open_about)
 		_button("Выход", _exit_game)
 		if SaveGame.slot_exists(save_path) and slot.is_empty():
@@ -139,6 +141,11 @@ func _create_game() -> Control:
 	return instance
 
 func _new_game() -> void:
+	if game != null:
+		game.set_process(false)
+		game.set_process_input(false)
+		game.hide()
+		game.queue_free()
 	game = _create_game()
 	error_text = ""
 	_resume_game()
@@ -176,6 +183,7 @@ func _pause_game() -> void:
 	game.map_drag_candidate = false
 	game.point_drag_candidate = false
 	game.dragging_measure_point = false
+	game.dragging_fuel_slider = false
 	game.dragged_measure_connections.clear()
 	game.scene_is_walking = false
 	menu_root.show()
@@ -230,10 +238,7 @@ func _close_about() -> void:
 func _input(event: InputEvent) -> void:
 	if not event is InputEventKey or not event.pressed or event.echo:
 		return
-	if event.ctrl_pressed and (event.keycode == KEY_Q or event.physical_keycode == KEY_Q):
-		get_viewport().set_input_as_handled()
-		_exit_game()
-	elif event.keycode == KEY_ESCAPE:
+	if event.keycode == KEY_ESCAPE:
 		get_viewport().set_input_as_handled()
 		if about_open:
 			_close_about()

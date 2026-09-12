@@ -22,7 +22,7 @@ static func draw_echoes(canvas: CanvasItem, world, flight, center: Vector2, radi
 			var relative: Vector2 = (world.storm_position(storm)-flight.position_km).rotated(-deg_to_rad(flight.heading_deg))
 			if relative.length() > range_km+float(storm.radius_km)*1.2:
 				continue
-			var lobes: Array = storm.get("radar_lobes",[{"offset_km":Vector2.ZERO,"radius_scale":1.0,"strength":1.0}])
+			var lobes: Array = world.storm_lobes(storm)
 			for lobe in lobes:
 				var peak: float = float(storm.intensity)*float(lobe.strength)
 				if peak <= float(zone.threshold):

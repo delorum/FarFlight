@@ -49,5 +49,14 @@ func _initialize() -> void:
 				check(ndbs_here == World.ROUTE_NDB_PER_REGION, "Each 100×100 region must contain four route NDBs")
 				check(occupied_subcells.size() == 4, "Each 50×50 subcell must contain one route NDB")
 				check(storms_here == World.STORMS_PER_REGION, "Each region must start with equal storm density")
+	var shape_world = World.new(424242)
+	shape_world.storms.clear()
+	shape_world.storms.append({
+		"origin":Vector2(50.0, 50.0), "radius_km":10.0, "intensity":0.8,
+		"drift_kmh":Vector2.ZERO,
+		"radar_lobes":[{"offset_km":Vector2(2.0, 0.0), "radius_scale":0.5, "strength":0.75}],
+	})
+	check(is_equal_approx(shape_world.storm_intensity_at(Vector2(52.0, 50.0)), 0.6), "Physical storm peak must match the radar lobe peak")
+	check(is_zero_approx(shape_world.storm_intensity_at(Vector2(50.0, 56.0))), "Area outside every visible radar lobe must have no rain or turbulence")
 	print("200×200 world: evenly distributed; shortest airport pair %.2f km; highest raw airport site %.0f m: %s" % [shortest_airport_distance, highest_airport_site, "FAIL" if failed else "OK"])
 	quit(1 if failed else 0)

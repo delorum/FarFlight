@@ -1,9 +1,10 @@
 extends RefCounted
 ## One local slot. No object deserialization; an atomic rename keeps the old
 ## slot intact until the replacement has been written and validated.
-const VERSION := 3
+const VERSION := 4
 const PATH := "user://flight_save.dat"
-const WEB_KEY := "farflight.save.v3"
+const WEB_KEY := "farflight.save.v4"
+const LEGACY_WEB_KEY := "farflight.save.v3"
 
 # Synchronous localStorage replacement survives an immediate page close. Keep
 # Variant's binary encoding: JSON alone loses Vector2 and 64-bit RNG state.
@@ -17,7 +18,7 @@ static func decode_web(encoded: String) -> Dictionary:
 	return data if valid(data) else {}
 
 static func web_read_script() -> String:
-	return "(() => { try { return localStorage.getItem(%s) || ''; } catch (_) { return ''; } })()" % JSON.stringify(WEB_KEY)
+	return "(() => { try { return localStorage.getItem(%s) || localStorage.getItem(%s) || ''; } catch (_) { return ''; } })()" % [JSON.stringify(WEB_KEY), JSON.stringify(LEGACY_WEB_KEY)]
 
 static func web_write_script(encoded: String) -> String:
 	# Numeric status plus readback avoids relying on a bridged JS boolean.
@@ -38,7 +39,8 @@ const UI_FIELDS := [
 	"ils_airport_index", "simulation_paused", "wind_overlay_index", "view_mode",
 	"scene_player_facing", "scene_walk_phase", "apron_aircraft_on_left", "scene_notice",
 	"propeller_phase", "cabin_terrain_zoom", "cabin_fog_travel_px",
-	"selected_inventory_slot", "in_fuel_bay", "last_economy_flight_state", "fuel_amount_litres"
+	"selected_inventory_slot", "in_fuel_bay", "last_economy_flight_state", "fuel_amount_litres",
+	"time_scale_index", "cabin_sleeping", "cabin_sleep_progress_seconds"
 ]
 
 static func flight_fields(flight) -> Dictionary:
@@ -67,7 +69,7 @@ static func capture(game) -> Dictionary:
 	}.duplicate(true)
 
 static func valid(data: Variant) -> bool:
-	if not data is Dictionary or data.get("version") != VERSION:
+	if not data is Dictionary or data.get("version") not in [3, VERSION]:
 		return false
 	for key in ["world", "flight", "ui", "economy"]:
 		if not data.get(key) is Dictionary:
@@ -100,7 +102,8 @@ static func valid(data: Variant) -> bool:
 		for lobe in storm.radar_lobes:
 			if not lobe is Dictionary or not lobe.get("offset_km") is Vector2 or not lobe.has_all(["radius_scale", "strength"]):
 				return false
-	for field in UI_FIELDS:
+	var required_ui_fields := UI_FIELDS if data.version == VERSION else UI_FIELDS.slice(0, UI_FIELDS.size() - 3)
+	for field in required_ui_fields:
 		if not data.ui.has(field):
 			return false
 	if not data.ui.has_all(["player_screen_fraction", "player_aircraft_x"]):
@@ -131,7 +134,10 @@ static func valid(data: Variant) -> bool:
 		return false
 	if not data.economy.inventory is Array or data.economy.inventory.size() != 6:
 		return false
-	return data.flight.get("position_km") is Vector2 and data.flight.get("state") in range(5) and data.ui.view_mode in range(9) and data.ui.radar_range_index in range(4) and data.ui.cabin_terrain_zoom in range(4)
+	var time_state_valid := true
+	if data.version == VERSION:
+		time_state_valid = data.ui.time_scale_index is int and data.ui.time_scale_index in range(5) and data.ui.cabin_sleeping is bool and data.ui.cabin_sleep_progress_seconds is float and data.ui.cabin_sleep_progress_seconds >= 0.0 and data.ui.cabin_sleep_progress_seconds < 1200.0
+	return data.flight.get("position_km") is Vector2 and data.flight.get("state") in range(5) and data.ui.view_mode in range(9) and data.ui.radar_range_index in range(4) and data.ui.cabin_terrain_zoom in range(4) and time_state_valid
 
 static func read_slot(path: String = PATH) -> Dictionary:
 	if OS.has_feature("web") and path == PATH:
@@ -191,6 +197,10 @@ static func restore(game, data: Dictionary) -> bool:
 		new_flight.set(field, data.flight[field])
 	new_flight.turbulence_rng.state = data.rng_state
 	for field in UI_FIELDS:
+		if not data.ui.has(field):
+			continue
+		if field == "fuel_amount_litres" and data.ui[field] is int:
+			continue
 		if typeof(data.ui[field]) != typeof(game.get(field)) and field not in ["pending_measure", "radar_pending_measure"]:
 			return false
 	game.world = new_world
@@ -198,8 +208,12 @@ static func restore(game, data: Dictionary) -> bool:
 	game.economy = new_economy
 	game._set_view_mode(data.ui.view_mode)
 	for field in UI_FIELDS:
+		if not data.ui.has(field):
+			continue
 		if game.get(field) is Array:
 			game.get(field).assign(data.ui[field])
+		elif field == "fuel_amount_litres":
+			game.set(field, float(data.ui[field]))
 		else:
 			game.set(field, data.ui[field])
 	if game.view_mode in [game.ViewMode.CABIN, game.ViewMode.APRON]:

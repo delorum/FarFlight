@@ -8,6 +8,8 @@ const FUEL_PRICE_PER_L := 1
 const CANISTER_PRICE := 6
 const FOOD_PRICE := 12
 const HOTEL_PRICE := 18
+const HOTEL_REST_SECONDS := 20.0 * 60.0
+const HOTEL_REST_PRICE := HOTEL_PRICE / 3
 const PARKING_PRICE := 5
 const BASE_REWARD_50_KM := 60
 const URGENT_MULTIPLIER := 2
@@ -169,19 +171,23 @@ func buy_canister() -> bool:
 	carried_item = {"type": "canister", "fuel_l": 0}
 	return true
 
-func fill_carried_canister(litres: int) -> int:
+func fill_carried_canister(litres: float) -> float:
 	if carried_item.get("type", "") != "canister":
-		return 0
-	var room := CANISTER_CAPACITY_L - int(carried_item.get("fuel_l", 0))
-	var bought := clampi(litres, 0, mini(room, money / FUEL_PRICE_PER_L))
-	carried_item.fuel_l = int(carried_item.get("fuel_l", 0)) + bought
-	money -= bought * FUEL_PRICE_PER_L
+		return 0.0
+	var current: float = float(carried_item.get("fuel_l", 0.0))
+	var room: float = CANISTER_CAPACITY_L - current
+	var affordable: float = float(money) / FUEL_PRICE_PER_L
+	var limit: float = minf(room, affordable)
+	var requested: float = clampf(litres, 0.0, limit)
+	var bought: float = limit if limit <= litres + 0.05001 else floorf(requested * 10.0 + 0.0001) / 10.0
+	carried_item.fuel_l = snappedf(current + bought, 0.1)
+	money -= ceili(bought * FUEL_PRICE_PER_L)
 	return bought
 
 func sell_carried_canister() -> int:
 	if carried_item.get("type", "") != "canister":
 		return 0
-	var paid := CANISTER_PRICE + int(carried_item.get("fuel_l", 0)) * FUEL_PRICE_PER_L
+	var paid := CANISTER_PRICE + floori(float(carried_item.get("fuel_l", 0.0)) * FUEL_PRICE_PER_L)
 	money += paid
 	carried_item = {}
 	return paid
@@ -193,11 +199,16 @@ func eat_carried() -> bool:
 	carried_item = {}
 	return true
 
-func transfer_carried_fuel(requested_litres: int, aircraft_room_l: float) -> int:
+func transfer_carried_fuel(requested_litres: float, aircraft_room_l: float) -> float:
 	if carried_item.get("type", "") != "canister":
-		return 0
-	var moved := clampi(requested_litres, 0, mini(int(carried_item.get("fuel_l", 0)), floori(aircraft_room_l)))
-	carried_item.fuel_l = int(carried_item.get("fuel_l", 0)) - moved
+		return 0.0
+	var current: float = float(carried_item.get("fuel_l", 0.0))
+	var limit: float = minf(current, maxf(0.0, aircraft_room_l))
+	var requested: float = clampf(requested_litres, 0.0, limit)
+	# Fuel burn leaves arbitrary fractions in the tank. A selection within half
+	# a decilitre of the remaining room means "fill to full".
+	var moved: float = limit if limit <= requested_litres + 0.05001 else floorf(requested * 10.0 + 0.0001) / 10.0
+	carried_item.fuel_l = maxf(0.0, current - moved)
 	return moved
 
 func pay_parking() -> bool:
@@ -206,15 +217,22 @@ func pay_parking() -> bool:
 	money -= PARKING_PRICE
 	return true
 
-func sleep_hour(in_hotel: bool) -> bool:
-	if in_hotel:
-		if money < HOTEL_PRICE:
-			return false
-		money -= HOTEL_PRICE
-	advance_time(3600.0, true, 6 if in_hotel else 4)
+func buy_hotel_rest() -> bool:
+	if money < HOTEL_REST_PRICE or fatigue >= NEED_SEGMENTS:
+		return false
+	money -= HOTEL_REST_PRICE
+	advance_time(HOTEL_REST_SECONDS, true)
+	if game_over_reason.is_empty():
+		fatigue = mini(NEED_SEGMENTS, fatigue + 1)
 	return true
 
-func advance_time(delta: float, sleeping: bool = false, sleep_cap: int = 6) -> void:
+func recover_aircraft_bed_unit() -> bool:
+	if fatigue >= 2:
+		return false
+	fatigue += 1
+	return true
+
+func advance_time(delta: float, resting: bool = false, _unused_sleep_cap: int = 6) -> void:
 	if not game_over_reason.is_empty() or delta <= 0.0:
 		return
 	elapsed_seconds += delta
@@ -222,9 +240,7 @@ func advance_time(delta: float, sleeping: bool = false, sleep_cap: int = 6) -> v
 	while need_accumulator_seconds >= 3600.0:
 		need_accumulator_seconds -= 3600.0
 		hunger -= 1
-		if sleeping:
-			fatigue = maxi(fatigue, mini(sleep_cap, fatigue + 3))
-		else:
+		if not resting:
 			fatigue -= 1
 		if hunger <= 0:
 			hunger = 0

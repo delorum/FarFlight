@@ -12,12 +12,20 @@ func check(ok: bool, message: String) -> void:
 		failed = true
 		push_error(message)
 
+func button_texts(shell) -> Array[String]:
+	var result: Array[String] = []
+	for child in shell.content.get_children():
+		if child is Button:
+			result.append(child.text)
+	return result
+
 func _run() -> void:
 	var shell = load("res://scenes/game_shell.tscn").instantiate()
 	shell.save_path = slot
 	root.add_child(shell)
 	await process_frame
 	check(shell.menu_open and shell.game == null, "Startup must show title menu without running a flight")
+	check(button_texts(shell) == ["Новая игра", "Об игре", "Выход"], "Startup without a save must hide Continue and keep the requested order")
 	shell._open_about()
 	check(shell.about_open, "About page must open")
 	shell._close_about()
@@ -38,6 +46,9 @@ func _run() -> void:
 	game.receiver_frequencies = [333,377]
 	game.world.weather_time_seconds = 123.45
 	game.clock_seconds = 43777.0
+	game.time_scale_index = 3
+	game.cabin_sleeping = true
+	game.cabin_sleep_progress_seconds = 777.0
 	game.measurement_lines.append({"a":Vector2(20,30),"b":Vector2(40,50),"max_height_m":500.0})
 	game.radar_measurement_lines.append({"a":Vector2(50,50),"b":Vector2(52,48),"max_height_m":-1.0})
 	game.pending_measure = Vector2(23,31)
@@ -53,6 +64,7 @@ func _run() -> void:
 	Input.parse_input_event(escape)
 	await process_frame
 	check(shell.menu_open and not game.is_processing() and not game.visible, "Escape must pause and cover cabin with title menu")
+	check(button_texts(shell) == ["Продолжить", "Новая игра", "Сохранить и выйти"], "Pause menu buttons must keep the requested order")
 	check(not game.throttle_down_held, "Pause must release held throttle input")
 	var clock_before: float = game.clock_seconds
 	await process_frame
@@ -81,6 +93,7 @@ func _run() -> void:
 	check(loaded.view_mode == game.ViewMode.CABIN and loaded.cabin_terrain_zoom == 2, "Side scene and zoom must survive loading")
 	check(is_equal_approx(loaded.scene_player_x,game.scene_player_x), "Cabin character position must survive loading")
 	check(loaded.clock_seconds == clock_before and loaded.receiver_frequencies == [333,377], "Time and radio tuning must survive loading")
+	check(loaded.time_scale_index == 3 and loaded.cabin_sleeping and loaded.cabin_sleep_progress_seconds == 777.0, "Time scale and continuous bed rest must survive loading")
 	check(loaded.economy.money == 347 and loaded.economy.hunger == 4 and loaded.economy.inventory[2].type == "food", "Money, needs and cargo must survive loading")
 	for frame in 60:
 		game.flight.update(1.0/60.0)
@@ -108,6 +121,7 @@ func _run() -> void:
 	var second_shell = load("res://scenes/game_shell.tscn").instantiate()
 	second_shell.save_path = slot
 	root.add_child(second_shell)
+	check(button_texts(second_shell) == ["Продолжить", "Новая игра", "Об игре", "Выход"], "Startup with a save must show Continue first")
 	second_shell._continue_game()
 	check(second_shell.game != null and not second_shell.menu_open, "Startup Continue must load the slot")
 	for path in [slot, slot + ".tmp", corrupt_path]:

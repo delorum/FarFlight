@@ -99,7 +99,11 @@ func _run() -> void:
 	check(scene.scene_player_x == final_player_x and scene.flight.position_km == final_position and scene.clock_seconds == final_time,"Crash must freeze walking, interactions and simulation")
 	scene._show_crash_map()
 	check(scene.view_mode == scene.ViewMode.COCKPIT and not scene.crash_overlay.visible and scene.trajectory_finished,"Debrief must show the completed trajectory")
-	scene._restart_after_crash()
-	check(scene.flight.state == Flight.State.PARKED and not scene.crash_overlay.visible,"Restart must clear crash state")
+	var restart_key := InputEventKey.new()
+	restart_key.keycode = KEY_R
+	restart_key.physical_keycode = KEY_R
+	restart_key.pressed = true
+	scene._input(restart_key)
+	check(scene.flight.state == Flight.State.CRASHED and scene.flight.position_km == final_position,"R must not reset the game after a crash")
 	print("Engine-out physics and cabin crash: ","FAIL" if failed else "OK")
 	quit(1 if failed else 0)

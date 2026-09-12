@@ -82,6 +82,12 @@ func storm_position(storm: Dictionary) -> Vector2:
 	var moved: Vector2 = storm.origin + Vector2(storm.drift_kmh) * weather_time_seconds / 3600.0
 	return Vector2(fposmod(moved.x, SIZE_KM), fposmod(moved.y, SIZE_KM))
 
+func storm_lobes(storm: Dictionary) -> Array:
+	var lobes: Array = storm.get("radar_lobes", [])
+	if lobes.is_empty():
+		return [{"offset_km":Vector2.ZERO, "radius_scale":1.0, "strength":1.0}]
+	return lobes
+
 func wind_at(altitude_m: float) -> Vector2:
 	var lower: Dictionary = wind_layers[0]
 	var upper: Dictionary = wind_layers[-1]
@@ -98,9 +104,16 @@ func wind_at(altitude_m: float) -> Vector2:
 func storm_intensity_at(position_km: Vector2) -> float:
 	var result := 0.0
 	for storm in storms:
-		var ratio := position_km.distance_to(storm_position(storm)) / float(storm.radius_km)
-		if ratio < 1.0:
-			result = maxf(result, float(storm.intensity) * (1.0 - ratio * ratio))
+		var storm_center := storm_position(storm)
+		for lobe in storm_lobes(storm):
+			var radius: float = float(storm.radius_km) * float(lobe.radius_scale)
+			if radius <= 0.0:
+				continue
+			var lobe_center: Vector2 = storm_center + Vector2(lobe.offset_km)
+			var ratio := position_km.distance_to(lobe_center) / radius
+			if ratio < 1.0:
+				var peak: float = float(storm.intensity) * float(lobe.strength)
+				result = maxf(result, peak * (1.0 - ratio * ratio))
 	return result
 
 func weather_report(airport: Dictionary) -> String:

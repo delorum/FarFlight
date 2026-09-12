@@ -27,7 +27,7 @@ const assert = require('node:assert/strict');
     };
     const key = async name => { await page.keyboard.press(name); await page.waitForTimeout(1500); };
     const click = async y => { await page.mouse.click(240, y); await page.waitForTimeout(1500); };
-    const read = () => page.evaluate(() => localStorage.getItem('farflight.save.v3'));
+    const read = () => page.evaluate(() => localStorage.getItem('farflight.save.v4'));
     await page.goto(process.env.WEB_URL || 'http://127.0.0.1:8765');
     await ready();
     await click(350); // New game.
