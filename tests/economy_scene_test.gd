@@ -15,14 +15,30 @@ func _run() -> void:
 	root.add_child(scene)
 	await process_frame
 	scene.set_process(false)
+	var canister_rect := Rect2(10, 20, 24, 24)
+	var empty_liquid: Rect2 = scene._canister_liquid_rect(canister_rect, 0.0)
+	var half_liquid: Rect2 = scene._canister_liquid_rect(canister_rect, 10.0)
+	var full_liquid: Rect2 = scene._canister_liquid_rect(canister_rect, 20.0)
+	check(not empty_liquid.has_area(), "Empty canisters must not show liquid")
+	check(is_equal_approx(half_liquid.size.y, full_liquid.size.y * 0.5), "Liquid height must reflect the fuel fraction")
+	check(half_liquid.end == full_liquid.end, "Canisters must fill from the bottom")
+	check(full_liquid == canister_rect.grow(-3.0), "Full liquid must remain inside the canister contour")
+	check(scene._canister_liquid_rect(canister_rect, 30.0) == full_liquid, "Liquid must not overflow the canister")
 	var time_key := InputEventKey.new()
 	time_key.keycode = KEY_Z
 	time_key.pressed = true
-	scene._input(time_key)
-	check(scene.time_scale_index == 1, "Z must cycle time to 2x")
 	time_key.shift_pressed = true
 	scene._input(time_key)
-	check(scene.time_scale_index == 0, "Shift+Z must immediately restore 1x")
+	check(scene.time_scale_index == 1, "Shift+Z must cycle time to 2x")
+	for expected_index in [2, 3, 4, 0]:
+		scene._input(time_key)
+		check(scene.time_scale_index == expected_index, "Shift+Z must cycle all time scales and wrap to 1x")
+	scene.time_scale_index = 4
+	time_key.shift_pressed = false
+	scene._input(time_key)
+	check(scene.time_scale_index == 0, "Z must immediately restore 1x")
+	scene._input(time_key)
+	check(scene.time_scale_index == 0, "Repeated Z must keep time at 1x")
 	scene.time_scale_index = 3
 	var turn_key := InputEventKey.new()
 	turn_key.keycode = KEY_RIGHT
@@ -64,6 +80,14 @@ func _run() -> void:
 	var offer: Dictionary = scene.economy.offers_at(0)[0]
 	scene._handle_economy_click(scene._economy_button_rect(0).get_center())
 	check(scene.economy.carried_item.get("id") == offer.id, "Clicking an offer must hand parcel to player")
+	var original_deadline: float = float(scene.economy.carried_item.urgent_deadline)
+	scene.economy.carried_item.urgent_deadline = scene.economy.elapsed_seconds + 42.0
+	var carried_caption: String = scene._carried_item_caption(scene.economy.carried_item)
+	check(carried_caption.contains(scene.world.airports[int(scene.economy.carried_item.destination)].name), "Carried parcel caption must show its destination")
+	check(carried_caption.contains("42 с"), "Carried parcel caption must switch to seconds during the final minute")
+	scene.economy.carried_item.urgent_deadline = scene.economy.elapsed_seconds - 1.0
+	check(not scene._carried_item_caption(scene.economy.carried_item).contains("срочно"), "Expired urgent time must disappear from the carried parcel caption")
+	scene.economy.carried_item.urgent_deadline = original_deadline
 	scene._enter_cabin()
 	check(scene._handle_inventory_click(scene._inventory_rect(0).get_center()), "Cabin cargo slot must be clickable")
 	check(scene.economy.carried_item.is_empty() and scene.economy.inventory[0].get("type") == "parcel", "Parcel must be stored physically")
@@ -76,6 +100,14 @@ func _run() -> void:
 	check(parcel_hover.contains("срочный срок истёк"), "Parcel hover must report an expired urgent deadline")
 	check(scene._handle_inventory_click(scene._inventory_rect(0).get_center()), "Stored parcel must be retrievable")
 	check(scene.economy.carried_item.get("type") == "parcel", "Parcel must return to hands")
+	var destination_airport: int = int(scene.economy.carried_item.destination)
+	scene.flight.airport_index = destination_airport
+	scene.economy.elapsed_seconds = float(scene.economy.carried_item.urgent_deadline) - 1.0
+	var urgent_delivery_button: String = scene._delivery_button_text(scene.economy.carried_item)
+	check(urgent_delivery_button.contains("%d монет" % int(scene.economy.carried_item.urgent_reward)) and urgent_delivery_button.contains("срочный тариф"), "Delivery button must show urgent payout and tariff")
+	scene.economy.elapsed_seconds = float(scene.economy.carried_item.urgent_deadline) + 1.0
+	var normal_delivery_button: String = scene._delivery_button_text(scene.economy.carried_item)
+	check(normal_delivery_button.contains("%d монет" % int(scene.economy.carried_item.normal_reward)) and normal_delivery_button.contains("обычный тариф"), "Delivery button must show normal payout and tariff after the urgent deadline")
 	scene.economy.carried_item = {}
 	var fuel_airport: int = scene.economy.fuel_airports[0]
 	scene.flight.airport_index = fuel_airport
@@ -154,18 +186,40 @@ func _run() -> void:
 	down.pressed = true
 	scene._input(down)
 	check(scene.in_fuel_bay, "Down on the ramp must enter the fuel bay")
+	check(scene.scene_player_facing > 0.0, "Entering the fuel bay with Down must face the fuel device")
 	check(is_equal_approx(scene._cabin_player_position().y, scene._aircraft_point(Vector2(315, scene.AircraftArt.FLOOR_Y)).y), "Fuel bay must keep pilot feet on cabin floor")
 	var left := InputEventKey.new()
 	left.keycode = KEY_LEFT
 	left.pressed = true
 	scene._input(left)
 	check(not scene.in_fuel_bay and scene.scene_player_x < scene._aircraft_point(Vector2(scene.AircraftArt.COCKPIT_RAMP_BOTTOM_X, 0)).x, "Left must exit past the ramp into the cabin")
+	scene.scene_player_x = scene._aircraft_point(Vector2(355, 0)).x
+	scene._interact_in_scene()
+	check(scene.in_fuel_bay, "Enter near the cockpit ramp must open the same fuel interaction as Down and mouse click")
+	scene._input(left)
 	var fuel_device_click: Vector2 = scene._fuel_device_transform() * Vector2(20.0, 20.0)
+	var fuel_device_scene_x: float = (scene._cabin_pose().affine_inverse() * fuel_device_click).x
+	scene.scene_player_x = fuel_device_scene_x - 60.0
+	scene.scene_player_facing = -1.0
 	scene._click_side_scene(fuel_device_click)
 	check(scene.in_fuel_bay, "Clicking the cabin fuel device must enter the fuel bay")
+	check(scene.scene_player_facing > 0.0, "Entering the fuel bay must face the fuel device")
+	scene.scene_player_x = fuel_device_scene_x + 80.0
+	scene.scene_player_facing = -1.0
+	scene._click_side_scene(fuel_device_click)
+	check(scene.in_fuel_bay and scene.scene_player_facing > 0.0, "Clicking the fuel device from its right must still face the tank after entering")
+	scene.scene_player_facing = -1.0
+	scene._update_scene_walking(0.1)
+	check(scene.scene_player_facing > 0.0, "A restored fuel-bay pose must also face the tank")
 	var cabin_destination: Vector2 = scene._aircraft_point(Vector2(500.0, scene.AircraftArt.FLOOR_Y))
 	scene._click_side_scene(scene._cabin_pose() * cabin_destination)
 	check(not scene.in_fuel_bay and is_equal_approx(scene.scene_player_x, cabin_destination.x), "Clicking elsewhere must leave the fuel bay and move the pilot")
+	var pointer_left := Vector2(scene.scene_player_x - 50.0, cabin_destination.y)
+	scene._click_side_scene(scene._cabin_pose() * pointer_left)
+	check(scene.scene_player_facing < 0.0, "Clicking left must turn the pilot left instead of moving backward")
+	var pointer_right := Vector2(scene.scene_player_x + 50.0, cabin_destination.y)
+	scene._click_side_scene(scene._cabin_pose() * pointer_right)
+	check(scene.scene_player_facing > 0.0, "Clicking right must turn the pilot right instead of moving backward")
 	scene.in_fuel_bay = true
 	scene.economy.carried_item = {"type":"canister", "fuel_l":1.0}
 	scene.flight.fuel_l = 39.94

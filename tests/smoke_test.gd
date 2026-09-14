@@ -216,7 +216,12 @@ func _init() -> void:
 	assert(flight.state == FlightModelScript.State.LANDED)
 	assert(flight.speed_kmh == 0.0)
 	assert(is_equal_approx(FlightWorldScript.RUNWAY_WIDTH_KM, 0.05))
-	flight.wheel_brakes_applied = false
+	flight.toggle_engine()
+	flight.toggle_engine()
+	assert(not flight.engine_running)
+	assert(flight.message == FlightModelScript.DEPARTURE_BLOCKED_MESSAGE)
+	flight.prepare_at_airport(flight.airport_index)
+	flight.toggle_engine()
 	flight.throttle = 1.0
 	flight.yoke.y = 0.55
 	for frame in 900:

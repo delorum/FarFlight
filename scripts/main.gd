@@ -7,6 +7,7 @@ const AircraftArt = preload("res://scripts/aircraft_art.gd")
 const WeatherRadarArt = preload("res://scripts/weather_radar_art.gd")
 const WeatherRadarCache = preload("res://scripts/weather_radar_cache.gd")
 const EconomyScript = preload("res://scripts/economy.gd")
+const FlightCalculatorScript = preload("res://scripts/flight_calculator.gd")
 
 const MAP_MARGIN := 14.0
 const PANEL_HEIGHT := 280.0
@@ -23,8 +24,11 @@ const APPROACH_DETAIL_MIN_ZOOM := 20.0
 const WIND_OVERLAY_ALTITUDES := [0.0, 1500.0, 3000.0, 5000.0]
 const TIME_SCALES := [1.0, 2.0, 4.0, 8.0, 16.0]
 const FLIGHT_TIME_STEP := 1.0 / 30.0
+# Mirrored scene: both door-to-inventory and inventory-to-chair gaps are 19 units.
+const CABIN_TABLE_X := 473.0
+const CABIN_TABLE_SEAT_X := CABIN_TABLE_X - 10.0
 
-enum ViewMode { COCKPIT, CABIN, APRON, AIRPORT, OPERATIONS, MAIL, SHOP, HOTEL, FUEL }
+enum ViewMode { COCKPIT, CABIN, APRON, AIRPORT, OPERATIONS, MAIL, SHOP, HOTEL, FUEL, REPAIR }
 
 var world
 var flight
@@ -111,9 +115,12 @@ var last_economy_flight_state := -1
 var fuel_amount_litres := 20.0
 var dragging_fuel_slider := false
 var hovered_airport_index := -1
+var hovered_wind_arrow := false
 var time_scale_index := 0
 var cabin_sleeping := false
+var cabin_table_seated := false
 var cabin_sleep_progress_seconds := 0.0
+var flight_calculator: PanelContainer
 
 func _ready() -> void:
 	Engine.max_fps = 60
@@ -124,6 +131,9 @@ func _ready() -> void:
 	map_render_layer.controller = self
 	map_render_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(map_render_layer)
+	flight_calculator = FlightCalculatorScript.new()
+	flight_calculator.controller = self
+	add_child(flight_calculator)
 	weather_radar_cache = WeatherRadarCache.new()
 	add_child(weather_radar_cache)
 	_build_crash_overlay()
@@ -133,11 +143,15 @@ func _ready() -> void:
 	queue_redraw()
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and flight_calculator != null and flight_calculator.editing() and not flight_calculator.get_global_rect().has_point(event.position):
+		get_viewport().gui_release_focus()
 	# Godot dispatches input to children before the shell. Let Esc reach the
 	# pause menu before cabin interactions or receiver text entry consume it.
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE and get_parent().has_method("_pause_game"):
 		get_parent()._pause_game()
 		get_viewport().set_input_as_handled()
+		return
+	if flight_calculator != null and flight_calculator.editing() and event is InputEventKey:
 		return
 	if flight != null and flight.state == FlightModelScript.State.CRASHED:
 		if event is InputEventKey and event.pressed and not event.echo:
@@ -147,16 +161,16 @@ func _input(event: InputEvent) -> void:
 		return
 	if event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_Z or event.physical_keycode == KEY_Z):
 		if event.shift_pressed:
-			_reset_time_scale()
-		else:
 			_cycle_time_scale()
+		else:
+			_reset_time_scale()
 		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and event.pressed and not event.echo and _key_causes_time_reset(event):
 		_reset_time_scale_for_action()
 	if event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_X or event.physical_keycode == KEY_X) and view_mode in [ViewMode.COCKPIT, ViewMode.CABIN]:
 		if view_mode == ViewMode.COCKPIT:
-			_enter_cabin()
+			_enter_cabin(true)
 		else:
 			_set_view_mode(ViewMode.COCKPIT)
 		get_viewport().set_input_as_handled()
@@ -164,10 +178,7 @@ func _input(event: InputEvent) -> void:
 	if view_mode != ViewMode.COCKPIT:
 		if event is InputEventKey and event.pressed and not event.echo:
 			if view_mode == ViewMode.CABIN and cabin_terrain_zoom == 0 and event.keycode == KEY_DOWN and _near_cabin_ramp():
-				in_fuel_bay = true
-				scene_player_x = _aircraft_point(Vector2(315, 0)).x
-				_set_default_fuel_amount()
-				scene_notice = ""
+				_enter_fuel_bay()
 				queue_redraw()
 				get_viewport().set_input_as_handled()
 				return
@@ -304,7 +315,7 @@ func _process(delta: float) -> void:
 		return
 	if view_mode != ViewMode.COCKPIT:
 		_update_scene_walking(delta)
-	elif absf(Input.get_axis("ui_left", "ui_right")) > 0.05 or absf(Input.get_axis("ui_up", "ui_down")) > 0.05 or throttle_up_held or throttle_down_held or dragging_yoke or dragging_throttle or dragging_map or dragging_measure_point:
+	elif not flight_calculator.editing() and (absf(Input.get_axis("ui_left", "ui_right")) > 0.05 or absf(Input.get_axis("ui_up", "ui_down")) > 0.05 or throttle_up_held or throttle_down_held or dragging_yoke or dragging_throttle or dragging_map or dragging_measure_point):
 		# Also catches a control that was already held when Z was pressed.
 		_reset_time_scale_for_action()
 	if simulation_paused:
@@ -331,6 +342,8 @@ func _process(delta: float) -> void:
 		Input.get_axis("ui_left", "ui_right"),
 		Input.get_axis("ui_up", "ui_down")
 	)
+	if flight_calculator != null and flight_calculator.editing():
+		keyboard_yoke = Vector2.ZERO
 	if view_mode == ViewMode.COCKPIT and not dragging_yoke:
 		if absf(keyboard_yoke.x) > 0.05:
 			flight.yoke.x = keyboard_yoke.x
@@ -347,7 +360,14 @@ func _process(delta: float) -> void:
 	var flight_time_remaining: float = game_delta
 	while flight_time_remaining > 0.000001 and flight.state != FlightModelScript.State.CRASHED:
 		var flight_step := minf(FLIGHT_TIME_STEP, flight_time_remaining)
+		var was_flying: bool = flight.state == FlightModelScript.State.FLYING
+		var position_before_step: Vector2 = flight.position_km
 		flight.update(flight_step)
+		if was_flying:
+			# Integrate the real path over the ground. This naturally includes
+			# headwind, tailwind, crosswind and turns without endpoint-speed error.
+			trip_air_distance_km += position_before_step.distance_to(flight.position_km)
+			trip_elapsed_seconds += flight_step
 		flight_time_remaining -= flight_step
 		# A coherent storm roll can begin between rendered frames while time is
 		# accelerated. Expose it immediately so the pilot can take control.
@@ -355,6 +375,7 @@ func _process(delta: float) -> void:
 			_reset_time_scale()
 	if flight.state == FlightModelScript.State.LANDED and last_economy_flight_state != FlightModelScript.State.LANDED:
 		economy.arrive_at_airport(flight.airport_index, world)
+		_queue_map_redraw()
 	last_economy_flight_state = flight.state
 	# Match the small scope: heading and motion must be rendered every frame,
 	# independently of the once-per-second radio/ILS signal checks.
@@ -379,9 +400,6 @@ func _process(delta: float) -> void:
 		dragging_yoke = false
 		dragging_throttle = false
 		_update_crash_overlay()
-	if flight.state == FlightModelScript.State.FLYING:
-		trip_air_distance_km += flight.speed_kmh / 3600.0 * game_delta
-		trip_elapsed_seconds += game_delta
 	status_timer += game_delta
 	if flight.state == FlightModelScript.State.FLYING:
 		# Accumulate travel rather than multiplying time by current speed: this
@@ -504,19 +522,7 @@ func _reset_trip_counter() -> void:
 	trip_air_distance_km = 0.0
 	trip_elapsed_seconds = 0.0
 	if flight != null and flight.state != FlightModelScript.State.CRASHED:
-		flight._show_message("Счётчик воздушного пути сброшен", 3.0, "")
-
-func _prepare_for_departure() -> void:
-	var next_airport: int = flight.airport_index
-	if not economy.pay_parking():
-		flight._show_message("Не хватает денег на стоянку и подготовку", 3.0, "")
-		return
-	flight.prepare_at_airport(next_airport)
-	_reset_flight_trajectory()
-	_tune_receivers_to_departure_airport()
-	_update_receiver_signals()
-	_update_ils_touchdown_prediction()
-	ils_prediction_timer = 1.0
+		flight._show_message("Счётчик пройденного пути сброшен", 3.0, "")
 
 func _prepare_from_operations(reverse_direction: bool) -> void:
 	flight.prepare_at_airport(flight.airport_index, reverse_direction)
@@ -538,6 +544,15 @@ func _pay_and_prepare(reverse_direction: bool) -> void:
 func _near_cabin_ramp() -> bool:
 	var ramp_x := _aircraft_point(Vector2((AircraftArt.COCKPIT_RAMP_TOP_X + AircraftArt.COCKPIT_RAMP_BOTTOM_X) * 0.5, 0)).x
 	return absf(scene_player_x - ramp_x) < 55.0
+
+func _enter_fuel_bay() -> void:
+	cabin_table_seated = false
+	in_fuel_bay = true
+	scene_player_facing = 1.0
+	scene_player_x = _aircraft_point(Vector2(315, 0)).x
+	_set_default_fuel_amount()
+	scene_notice = ""
+	scene_is_walking = false
 
 func _refuel_from_carried_canister() -> void:
 	var moved: float = economy.transfer_carried_fuel(fuel_amount_litres, flight.fuel_capacity_l - flight.fuel_l)
@@ -569,12 +584,12 @@ func _handle_economy_click(position: Vector2) -> void:
 					return
 		ViewMode.SHOP:
 			if _economy_button_rect(0).has_point(position):
-				scene_notice = "Еда куплена — отнесите её в самолёт" if economy.buy_food() else "Не хватает денег или руки заняты"
+				scene_notice = "Еда куплена — отнесите её в самолёт" if economy.buy_food(flight.airport_index) else "Не хватает денег или руки заняты"
 		ViewMode.HOTEL:
 			if _economy_button_rect(0).has_point(position):
 				if economy.fatigue >= EconomyScript.NEED_SEGMENTS:
 					scene_notice = "Вы уже полностью отдохнули"
-				elif economy.buy_hotel_rest():
+				elif economy.buy_hotel_rest(flight.airport_index):
 					clock_seconds = fmod(clock_seconds + EconomyScript.HOTEL_REST_SECONDS, 86400.0)
 					world.update_weather(EconomyScript.HOTEL_REST_SECONDS)
 					scene_notice = "Отдых 20 минут • бодрость %d/6" % economy.fatigue
@@ -590,12 +605,24 @@ func _handle_economy_click(position: Vector2) -> void:
 			elif _set_fuel_amount_from_mouse(position):
 				scene_notice = "Выбрано %.1f л" % fuel_amount_litres
 			elif _economy_button_rect(2).has_point(position):
-				var bought: float = economy.fill_carried_canister(fuel_amount_litres)
+				var bought: float = economy.fill_carried_canister(fuel_amount_litres, flight.airport_index)
 				_set_default_fuel_amount()
 				scene_notice = "Куплено %.1f л топлива" % bought if bought > 0 else "Возьмите канистру или проверьте деньги"
 			elif _economy_button_rect(3).has_point(position):
 				var paid: int = economy.sell_carried_canister()
 				scene_notice = "Получено %d монет" % paid if paid > 0 else "Возьмите канистру"
+		ViewMode.REPAIR:
+			if _economy_button_rect(0).has_point(position):
+				var missing: float = FlightModelScript.MAX_AIRFRAME_CONDITION - float(flight.airframe_condition)
+				if missing <= 0.001:
+					scene_notice = "Самолёт уже полностью исправен"
+				else:
+					var repaired: float = economy.buy_repair(missing, flight.airport_index)
+					if repaired > 0.0:
+						flight.airframe_condition = minf(FlightModelScript.MAX_AIRFRAME_CONDITION, flight.airframe_condition + repaired)
+						scene_notice = "Отремонтировано %.1f • состояние %.1f/100" % [repaired, flight.airframe_condition]
+					else:
+						scene_notice = "Не хватает денег на ремонт"
 
 func _tune_receivers_to_departure_airport() -> void:
 	for beacon in world.beacons:
@@ -630,8 +657,13 @@ func _update_flight_trajectory(previous_state: int, previous_speed: float, delta
 	if previous_state == FlightModelScript.State.LANDED and previous_speed <= 0.05 and flight.speed_kmh > 0.05:
 		_reset_flight_trajectory()
 	var moved_distance := trajectory_last_position.distance_to(flight.position_km)
+	var was_recording := trajectory_recording_started
 	if moved_distance > 0.000001 or flight.speed_kmh > 0.05:
 		trajectory_recording_started = true
+	if trajectory_recording_started and not was_recording:
+		# The known departure marker must disappear as soon as dead reckoning
+		# begins; from this point the map intentionally hides live position.
+		_queue_map_redraw()
 	if trajectory_recording_started:
 		trajectory_elapsed_seconds += delta
 		trajectory_distance_km += moved_distance
@@ -660,6 +692,7 @@ func _format_trajectory_time(seconds_value: float) -> String:
 	return "%02d:%02d:%02d" % [hours, minutes, seconds]
 
 func _set_view_mode(next_mode: int) -> void:
+	cabin_table_seated = false
 	if next_mode != ViewMode.CABIN:
 		_stop_cabin_sleep()
 	weather_radar_cache.invalidate()
@@ -735,52 +768,77 @@ func _scene_hotspots() -> Array[Dictionary]:
 			var point := _aircraft_point(Vector2(entry[0],AircraftArt.cabin_floor_y(entry[0])))
 			var label_y := point.y + 14.0 * _aircraft_scale() if entry[0] == AircraftArt.SEAT_X else _aircraft_point(Vector2(0,AircraftArt.FLOOR_Y)).y+44
 			var label_x := point.x + (16.0 * _aircraft_scale() if entry[0] == AircraftArt.SEAT_X else 0.0)
-			result.append({"x":point.x,"rect":Rect2(point-Vector2(43,105),Vector2(86,137)),"label":entry[1],"label_y":label_y,"label_x":label_x})
+			result.append({"x":point.x,"rect":Rect2(point-Vector2(43,105),Vector2(86,137)),"label":entry[1],"label_y":label_y,"label_x":label_x,"range":38.0})
 	elif view_mode == ViewMode.APRON:
 		var point := _aircraft_point(Vector2(AircraftArt.DOOR_X,AircraftArt.FLOOR_Y))
-		result.append({"x":point.x,"rect":Rect2(point-Vector2(46,110),Vector2(92,210)),"label":"В самолёт"})
+		result.append({"x":point.x,"rect":Rect2(point-Vector2(46,110),Vector2(92,210)),"label":"В самолёт","range":55.0})
 		var exit_x := _airport_exit_x()
-		result.append({"x":exit_x,"rect":Rect2(exit_x-43,size.y*0.76-88,86,120),"label":"В аэропорт"})
+		result.append({"x":exit_x,"rect":Rect2(exit_x-43,size.y*0.76-88,86,120),"label":"В аэропорт","range":50.0})
 	elif view_mode == ViewMode.AIRPORT:
 		var buildings := _airport_buildings()
 		for index in buildings.size():
 			var x: float = size.x * (index + 1.0) / (buildings.size() + 1.0)
-			result.append({"x":x,"rect":Rect2(x-65,size.y*0.76-170,130,200),"label":buildings[index].label,"kind":buildings[index].kind})
-		result.append({"x":45.0,"rect":Rect2(16,size.y*0.76-80,58,110),"label":"На ВПП"})
+			result.append({"x":x,"rect":Rect2(x-65,size.y*0.76-170,130,200),"label":buildings[index].label,"kind":buildings[index].kind,"range":110.0})
+		result.append({"x":45.0,"rect":Rect2(16,size.y*0.76-80,58,110),"label":"На ВПП","range":28.0})
 	return result
+
+func _scene_hotspot_is_near(spot: Dictionary) -> bool:
+	return absf(scene_player_x - float(spot.x)) < float(spot.get("range", 38.0))
+
+func _nearby_scene_hotspot() -> Dictionary:
+	for spot in _scene_hotspots():
+		if _scene_hotspot_is_near(spot):
+			return spot
+	return {}
 
 func _draw_scene_hotspots() -> void:
 	if flight.state == FlightModelScript.State.CRASHED:
 		return
 	var pose := _cabin_pose()
 	draw_set_transform_matrix(pose)
+	var mouse_position := pose.affine_inverse() * get_local_mouse_position()
 	for spot in _scene_hotspots():
 		var rect: Rect2 = spot.rect
-		var hovered := rect.has_point(pose.affine_inverse() * get_local_mouse_position())
-		var color := Color("#785022") if hovered else AircraftArt.INK
+		var active := rect.has_point(mouse_position) or _scene_hotspot_is_near(spot)
+		var color := Color("#785022") if active else AircraftArt.INK
 		var label: String = spot.label
 		var width := ThemeDB.fallback_font.get_string_size(label,HORIZONTAL_ALIGNMENT_LEFT,-1,12).x+20
 		var x := clampf(float(spot.get("label_x", spot.x))-width*0.5,12,size.x-width-12)
 		var y: float = spot.get("label_y", rect.end.y + 12)
 		draw_string(ThemeDB.fallback_font,Vector2(x+10,y),label,HORIZONTAL_ALIGNMENT_CENTER,width-20,12,color)
-		if hovered:
+		if active:
 			draw_line(Vector2(x+10,y+5),Vector2(x+width-10,y+5),color,1,true)
 	draw_set_transform_matrix(Transform2D.IDENTITY)
 
 func _click_side_scene(position: Vector2) -> void:
 	if cabin_terrain_zoom > 0:
 		return
+	if flight.state == FlightModelScript.State.CRASHED:
+		return
+	cabin_table_seated = false
+	var scene_position := _cabin_pose().affine_inverse() * position
+	var pointer_direction := scene_position.x - scene_player_x
+	if absf(pointer_direction) > 0.5:
+		scene_player_facing = signf(pointer_direction)
 	if view_mode == ViewMode.CABIN and _bed_has_point(position):
 		if not cabin_sleeping:
 			_start_cabin_sleep()
 		queue_redraw()
 		return
 	if view_mode == ViewMode.CABIN and _fuel_device_has_point(position):
-		in_fuel_bay = true
-		scene_player_x = _aircraft_point(Vector2(315, 0)).x
-		_set_default_fuel_amount()
-		scene_notice = ""
+		_enter_fuel_bay()
+		queue_redraw()
+		return
+	if view_mode == ViewMode.CABIN and _table_has_point(position):
+		in_fuel_bay = false
+		dragging_fuel_slider = false
+		if cabin_sleeping:
+			_stop_cabin_sleep()
+		scene_player_x = _aircraft_point(Vector2(CABIN_TABLE_SEAT_X, 0)).x
+		scene_player_facing = 1.0
 		scene_is_walking = false
+		cabin_table_seated = true
+		scene_notice = ""
 		queue_redraw()
 		return
 	if in_fuel_bay:
@@ -788,21 +846,16 @@ func _click_side_scene(position: Vector2) -> void:
 		dragging_fuel_slider = false
 	if cabin_sleeping:
 		_stop_cabin_sleep()
-	if flight.state == FlightModelScript.State.CRASHED:
-		return
-	position = _cabin_pose().affine_inverse() * position
 	var interact := false
 	var bounds := _scene_walk_bounds()
-	var destination := clampf(position.x,bounds.x,bounds.y)
+	var destination := clampf(scene_position.x,bounds.x,bounds.y)
 	for spot in _scene_hotspots():
 		var hit_rect: Rect2 = spot.rect
 		hit_rect.size.y += 32.0
-		if hit_rect.has_point(position):
+		if hit_rect.has_point(scene_position):
 			destination = clampf(float(spot.x),bounds.x,bounds.y)
 			interact = true
 			break
-	if not is_equal_approx(destination, scene_player_x):
-		scene_player_facing = signf(destination - scene_player_x)
 	scene_player_x = destination
 	scene_is_walking = false
 	scene_notice = ""
@@ -810,7 +863,9 @@ func _click_side_scene(position: Vector2) -> void:
 		_interact_in_scene()
 	queue_redraw()
 
-func _enter_cabin() -> void:
+func _enter_cabin(from_cockpit: bool = false) -> void:
+	if from_cockpit:
+		flight.leave_cockpit_on_ground()
 	_set_view_mode(ViewMode.CABIN)
 	scene_player_x = _aircraft_point(Vector2(AircraftArt.SEAT_X, 0)).x
 	scene_player_facing = -1.0 if not _aircraft_mirrored() else 1.0
@@ -825,6 +880,7 @@ func _update_scene_walking(delta: float) -> void:
 		return
 	if in_fuel_bay:
 		scene_is_walking = false
+		scene_player_facing = 1.0
 		return
 	if flight.state == FlightModelScript.State.CRASHED:
 		return
@@ -836,6 +892,7 @@ func _update_scene_walking(delta: float) -> void:
 	scene_is_walking = false
 	var bounds := _scene_walk_bounds()
 	if absf(movement) > 0.05:
+		cabin_table_seated = false
 		_reset_time_scale_for_action()
 		scene_player_facing = signf(movement)
 		scene_player_x = clampf(scene_player_x + movement * 190.0 * delta, bounds.x, bounds.y)
@@ -855,11 +912,23 @@ func _interact_in_scene() -> void:
 			if in_fuel_bay:
 				_refuel_from_carried_canister()
 				return
+			if _at_cabin_table():
+				_eat_at_table()
+				return
+			if _near_cabin_table():
+				cabin_table_seated = true
+				scene_player_x = _aircraft_point(Vector2(CABIN_TABLE_SEAT_X, 0)).x
+				scene_player_facing = 1.0
+				scene_is_walking = false
+				scene_notice = ""
+				return
 			var seat := _aircraft_point(Vector2(AircraftArt.SEAT_X, 0)).x
 			var door := _aircraft_point(Vector2(AircraftArt.DOOR_X, 0)).x
 			var bed := _aircraft_point(Vector2(735.0, 0)).x
 			if absf(scene_player_x - seat) < 38.0:
 				_set_view_mode(ViewMode.COCKPIT)
+			elif _near_cabin_ramp():
+				_enter_fuel_bay()
 			elif absf(scene_player_x - bed) < 38.0:
 				_start_cabin_sleep()
 			elif flight.state != FlightModelScript.State.FLYING and absf(scene_player_x - door) < 38.0:
@@ -886,13 +955,13 @@ func _interact_in_scene() -> void:
 						break
 		ViewMode.OPERATIONS:
 			_set_view_mode(ViewMode.AIRPORT)
-		ViewMode.MAIL, ViewMode.SHOP, ViewMode.HOTEL, ViewMode.FUEL:
+		ViewMode.MAIL, ViewMode.SHOP, ViewMode.HOTEL, ViewMode.FUEL, ViewMode.REPAIR:
 			_set_view_mode(ViewMode.AIRPORT)
 func _leave_current_scene() -> void:
 	match view_mode:
 		ViewMode.OPERATIONS:
 			_set_view_mode(ViewMode.AIRPORT)
-		ViewMode.MAIL, ViewMode.SHOP, ViewMode.HOTEL, ViewMode.FUEL:
+		ViewMode.MAIL, ViewMode.SHOP, ViewMode.HOTEL, ViewMode.FUEL, ViewMode.REPAIR:
 			_set_view_mode(ViewMode.AIRPORT)
 		ViewMode.AIRPORT:
 			_enter_apron()
@@ -912,21 +981,25 @@ func _scene_prompt(text: String) -> void:
 	draw_string(ThemeDB.fallback_font, Vector2(36, size.y - 17), controls_text, HORIZONTAL_ALIGNMENT_CENTER, size.x - 72, 11, Color("#ad9271"))
 func _draw_pilot(position: Vector2, rotation: float = 0.0) -> void:
 	var stride := sin(scene_walk_phase) * 6.0 if scene_is_walking else 0.0
+	var seated := _at_cabin_table() and not scene_is_walking
 	var pilot_scale := _aircraft_scale() * AircraftArt.PILOT_SCALE if view_mode in [ViewMode.CABIN, ViewMode.APRON] else AircraftArt.PILOT_SCALE
-	draw_set_transform_matrix(_cabin_pose() * Transform2D(rotation, Vector2(scene_player_facing, 1) * pilot_scale, 0.0, position))
+	draw_set_transform_matrix(_cabin_pose() * Transform2D(rotation, Vector2(1.0 if seated else scene_player_facing, 1) * pilot_scale, 0.0, position))
 	var ink := Color("#795e3c")
 	var cloth := Color("#cbb892")
-	draw_line(Vector2(-3,-21), Vector2(-7+stride,-3), ink, 5, true)
-	draw_line(Vector2(3,-21), Vector2(6-stride,-3), ink, 5, true)
-	draw_line(Vector2(-7+stride,-2), Vector2(-1+stride,-2), ink, 4, true)
-	draw_line(Vector2(6-stride,-2), Vector2(12-stride,-2), ink, 4, true)
+	if seated:
+		draw_polyline(PackedVector2Array([Vector2(-3,-21), Vector2(12,-21), Vector2(12,-3), Vector2(18,-3)]), ink, 4, true)
+	else:
+		draw_line(Vector2(-3,-21), Vector2(-7+stride,-3), ink, 5, true)
+		draw_line(Vector2(3,-21), Vector2(6-stride,-3), ink, 5, true)
+		draw_line(Vector2(-7+stride,-2), Vector2(-1+stride,-2), ink, 4, true)
+		draw_line(Vector2(6-stride,-2), Vector2(12-stride,-2), ink, 4, true)
 	AircraftArt.poly(self, PackedVector2Array([Vector2(-7,-49),Vector2(5,-50),Vector2(9,-25),Vector2(-8,-23)]), cloth, ink, 1.5)
 	draw_circle(Vector2(1,-60), 8, Color("#ead3ac"))
 	draw_arc(Vector2(1,-60), 8, 0, TAU, 24, ink, 1.5, true)
 	draw_line(Vector2(-7,-67), Vector2(12,-67), ink, 3, true)
 	draw_rect(Rect2(-6,-73,13,6), cloth)
 	draw_line(Vector2(-6,-73), Vector2(7,-73), ink, 2)
-	draw_line(Vector2(0,-46), Vector2(7-stride*0.7,-30), ink, 3, true)
+	draw_line(Vector2(0,-46), Vector2(20,-40) if seated else Vector2(7-stride*0.7,-30), ink, 3, true)
 	draw_line(Vector2(-6,-27), Vector2(7,-28), ink, 2)
 	draw_circle(Vector2(7,-61), 1, ink)
 	draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
@@ -950,10 +1023,35 @@ func _draw_item_icon(rect: Rect2, item: Dictionary, faint: bool = false, show_la
 	elif type == "food":
 		draw_arc(rect.get_center(), rect.size.x * 0.22, 0, TAU, 18, ink, 1.5, true)
 	elif type == "canister":
+		var liquid := _canister_liquid_rect(rect, float(item.get("fuel_l", 0.0)))
+		_draw_fuel_hatching(liquid, ink)
 		draw_rect(Rect2(rect.position + Vector2(rect.size.x * 0.58, -3), Vector2(rect.size.x * 0.25, 5)), fill, true)
 		draw_rect(Rect2(rect.position + Vector2(rect.size.x * 0.58, -3), Vector2(rect.size.x * 0.25, 5)), ink, false, 1.0)
 	if show_label and not faint and not type.is_empty():
 		draw_string(ThemeDB.fallback_font, rect.end + Vector2(4, -4), _item_label(item), HORIZONTAL_ALIGNMENT_LEFT, 95, 8, ink)
+
+func _canister_liquid_rect(rect: Rect2, fuel_l: float) -> Rect2:
+	return _liquid_level_rect(rect.grow(-3.0), fuel_l, float(EconomyScript.CANISTER_CAPACITY_L))
+
+func _liquid_level_rect(interior: Rect2, fuel_l: float, capacity_l: float) -> Rect2:
+	var ratio := clampf(fuel_l / capacity_l, 0.0, 1.0) if capacity_l > 0.0 else 0.0
+	var height := maxf(0.0, interior.size.y) * ratio
+	return Rect2(Vector2(interior.position.x, interior.end.y - height), Vector2(maxf(0.0, interior.size.x), height))
+
+func _draw_fuel_hatching(liquid: Rect2, ink: Color) -> void:
+	if not liquid.has_area():
+		return
+	# The same clipped diagonal strokes and surface for cans and tank glass.
+	var offset := -liquid.size.y
+	while offset < liquid.size.x:
+		var start := maxf(0.0, -offset)
+		var finish := minf(liquid.size.y, liquid.size.x - offset)
+		if finish > start:
+			var a := liquid.position + Vector2(offset + start, liquid.size.y - start)
+			var b := liquid.position + Vector2(offset + finish, liquid.size.y - finish)
+			draw_line(a, b, ink, 0.8, true)
+		offset += 5.0
+	draw_line(liquid.position, Vector2(liquid.end.x, liquid.position.y), ink, 1.0, true)
 
 func _inventory_rect(slot: int) -> Rect2:
 	var column := slot % 3
@@ -968,7 +1066,48 @@ func _draw_cabin_economy_objects() -> void:
 		var rect := _inventory_rect(slot)
 		_draw_item_icon(rect, economy.inventory[slot], economy.inventory[slot].is_empty(), false)
 	_draw_cabin_bed()
+	_draw_cabin_table()
+	AircraftArt.draw_lower_wing(self, _aircraft_origin(), _aircraft_scale(), _aircraft_mirrored(), _cabin_pitch())
 	_draw_cabin_fuel_device()
+	draw_set_transform_matrix(Transform2D.IDENTITY)
+
+func _table_transform() -> Transform2D:
+	return _cabin_pose() * Transform2D(0.0, Vector2.ONE * _aircraft_scale(), 0.0, _aircraft_point(Vector2(CABIN_TABLE_X, AircraftArt.FLOOR_Y)))
+
+func _table_has_point(position: Vector2) -> bool:
+	return Rect2(-5, -55, 80, 72).has_point(_table_transform().affine_inverse() * position)
+
+func _at_cabin_table() -> bool:
+	return cabin_table_seated and _near_cabin_table()
+
+func _near_cabin_table() -> bool:
+	return view_mode == ViewMode.CABIN and not in_fuel_bay and not cabin_sleeping and absf(scene_player_x - _aircraft_point(Vector2(CABIN_TABLE_SEAT_X, 0)).x) < 12.0 * _aircraft_scale()
+
+func _eat_at_table() -> void:
+	if not _at_cabin_table():
+		scene_notice = "Поесть можно только за столом в салоне"
+		return
+	if economy.carried_item.get("type", "") != "food":
+		scene_notice = "Возьмите еду и принесите её к столу"
+		return
+	scene_notice = "Сытость %d/6" % economy.hunger if economy.eat_carried() else "Вы уже сыты"
+
+func _draw_cabin_table() -> void:
+	draw_set_transform_matrix(_table_transform())
+	var ink := AircraftArt.INK
+	# A plain wooden chair and narrow table, matching the bed's frame.
+	AircraftArt.box(self, Rect2(-1, -51, 4, 51), AircraftArt.PAPER, ink, 2)
+	AircraftArt.box(self, Rect2(2, -25, 20, 4), Color("ddd2b1"), ink, 2)
+	draw_line(Vector2(19,-21), Vector2(19,0), ink, 2, true)
+	AircraftArt.box(self, Rect2(24,-40,47,5), Color("ddd2b1"), ink, 2)
+	for x in [28.0, 67.0]:
+		draw_line(Vector2(x,-35), Vector2(x,0), ink, 2, true)
+	draw_line(Vector2(28,-12), Vector2(67,-12), AircraftArt.LIGHT, 1, true)
+	var active := _near_cabin_table() or _table_has_point(get_local_mouse_position())
+	var color := Color("785022") if active else ink
+	draw_string(ThemeDB.fallback_font, Vector2(21,17), "СТОЛ", HORIZONTAL_ALIGNMENT_CENTER, 42, 8, color)
+	if active:
+		draw_line(Vector2(31,21), Vector2(53,21), color, 1, true)
 	draw_set_transform_matrix(Transform2D.IDENTITY)
 
 func _bed_transform() -> Transform2D:
@@ -976,12 +1115,16 @@ func _bed_transform() -> Transform2D:
 
 func _bed_has_point(position: Vector2) -> bool:
 	var local_position := _bed_transform().affine_inverse() * position
-	return Rect2(-6, -25, 108, 67).has_point(local_position)
+	return Rect2(-6, -25, 108, 51).has_point(local_position)
+
+func _bed_is_near() -> bool:
+	return absf(scene_player_x - _aircraft_point(Vector2(735.0, 0)).x) < 38.0
 
 func _start_cabin_sleep() -> void:
 	if not economy.carried_item.is_empty():
 		scene_notice = "Перед сном освободите руки"
 		return
+	cabin_table_seated = false
 	scene_player_x = _aircraft_point(Vector2(735.0, 0)).x
 	in_fuel_bay = false
 	dragging_fuel_slider = false
@@ -1001,7 +1144,11 @@ func _draw_cabin_bed() -> void:
 	AircraftArt.box(self, Rect2(5, 0, 86, 9), Color("ddd2b1"), AircraftArt.INK, 3)
 	draw_line(Vector2(10, 6), Vector2(86, 6), AircraftArt.LIGHT, 1, true)
 	AircraftArt.box(self, Rect2(71, -4, 18, 5), Color("e1d6b8"), AircraftArt.LIGHT, 2)
-	draw_string(ThemeDB.fallback_font, Vector2(0, 39), "КРОВАТЬ • ENTER", HORIZONTAL_ALIGNMENT_CENTER, 96, 8, AircraftArt.INK)
+	var active := cabin_sleeping or _bed_is_near() or _bed_has_point(get_local_mouse_position())
+	var label_color := Color("#785022") if active else AircraftArt.INK
+	draw_string(ThemeDB.fallback_font, Vector2(0, 39), "КРОВАТЬ", HORIZONTAL_ALIGNMENT_CENTER, 96, 8, label_color)
+	if active:
+		draw_line(Vector2(25, 42), Vector2(71, 42), label_color, 1.0, true)
 
 func _draw_sleeping_pilot() -> void:
 	draw_set_transform_matrix(_bed_transform())
@@ -1025,20 +1172,32 @@ func _draw_cabin_fuel_device() -> void:
 	draw_polyline(PackedVector2Array([Vector2(40,30),Vector2(48,30),Vector2(48,12),Vector2(94,12)]), ink, 2, true)
 	AircraftArt.box(self, Rect2(0, 5, 39, 40), Color("d0c29d"), ink, 6)
 	for y in [14.0, 36.0]:
-		draw_line(Vector2(2,y), Vector2(37,y), AircraftArt.LIGHT, 2, true)
+		draw_line(Vector2(15,y), Vector2(37,y), AircraftArt.LIGHT, 2, true)
+	var glass := Rect2(3, 8, 10, 34)
+	draw_rect(glass, AircraftArt.PAPER, true)
+	_draw_fuel_hatching(_liquid_level_rect(glass, flight.fuel_l, flight.fuel_capacity_l), ink)
+	draw_line(Vector2(14, 7), Vector2(14, 43), ink, 1.0, true)
 	AircraftArt.box(self, Rect2(7, -1, 13, 6), AircraftArt.PAPER, ink, 2)
 	draw_line(Vector2(7,-3), Vector2(20,-3), ink, 2, true)
-	draw_circle(Vector2(13,23), 6, AircraftArt.PAPER)
-	draw_arc(Vector2(13,23), 6, 0, TAU, 20, ink, 1, true)
-	draw_line(Vector2(13,23), Vector2(16,20), ink, 1, true)
-	AircraftArt.box(self, Rect2(27,18,5,14), AircraftArt.PAPER, ink, 1)
-	draw_line(Vector2(29,29),Vector2(29,23),ink,2,true)
+	# Three equal gaps: glass divider → dial → vertical gauge → tank edge.
+	var instrument_gap := (39.0 - 14.0 - 10.0 - 5.0) / 3.0
+	var dial_center := Vector2(14.0 + instrument_gap + 5.0, 23.0)
+	var gauge_x := dial_center.x + 5.0 + instrument_gap
+	draw_circle(dial_center, 5, AircraftArt.PAPER)
+	draw_arc(dial_center, 5, 0, TAU, 20, ink, 1, true)
+	draw_line(dial_center, dial_center + Vector2(3,-3), ink, 1, true)
+	AircraftArt.box(self, Rect2(gauge_x,18,5,14), AircraftArt.PAPER, ink, 1)
+	draw_line(Vector2(gauge_x+2.5,29),Vector2(gauge_x+2.5,23),ink,2,true)
 	draw_circle(Vector2(48,12), 4, AircraftArt.PAPER)
 	draw_line(Vector2(44,8),Vector2(52,16),ink,1.5,true)
 	draw_line(Vector2(44,16),Vector2(52,8),ink,1.5,true)
 	draw_line(Vector2(5,45),Vector2(5,50),ink,2,true)
 	draw_line(Vector2(34,45),Vector2(34,50),ink,2,true)
-	draw_string(ThemeDB.fallback_font, Vector2(-10,64), "ЗАПРАВКА", HORIZONTAL_ALIGNMENT_CENTER, 65, 8, ink)
+	var active := in_fuel_bay or _near_cabin_ramp() or _fuel_device_has_point(get_local_mouse_position())
+	var label_color := Color("#785022") if active else ink
+	draw_string(ThemeDB.fallback_font, Vector2(-10,64), "ЗАПРАВКА", HORIZONTAL_ALIGNMENT_CENTER, 65, 8, label_color)
+	if active:
+		draw_line(Vector2(2, 67), Vector2(43, 67), label_color, 1.0, true)
 
 func _fuel_device_transform() -> Transform2D:
 	return _cabin_pose() * Transform2D(0.0, Vector2.ONE * _aircraft_scale(), 0.0, _aircraft_point(Vector2(295, 280)))
@@ -1057,9 +1216,32 @@ func _draw_carried_item(pilot_position: Vector2) -> void:
 		return
 	draw_set_transform_matrix(_cabin_pose())
 	# Keep the load in front of the pilot after either left/right turn.
-	var item_offset_x := 10.0 if scene_player_facing > 0.0 else -34.0
-	_draw_item_icon(Rect2(pilot_position + Vector2(item_offset_x, -44), Vector2(24, 24)), economy.carried_item)
+	var item_offset_x := 10.0 if scene_player_facing > 0.0 or _at_cabin_table() else -34.0
+	var item_rect := Rect2(pilot_position + Vector2(item_offset_x, -44), Vector2(24, 24))
+	if _at_cabin_table():
+		item_rect = Rect2(_aircraft_point(Vector2(CABIN_TABLE_X, AircraftArt.FLOOR_Y)) + Vector2(34, -64) * _aircraft_scale(), Vector2(24,24) * _aircraft_scale())
+	_draw_item_icon(item_rect, economy.carried_item, false, false)
+	var caption := _carried_item_caption(economy.carried_item)
+	var text_width := clampf(ThemeDB.fallback_font.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 9).x + 16.0, 64.0, 280.0)
+	var text_x := clampf(item_rect.get_center().x - text_width * 0.5, 12.0, size.x - text_width - 12.0)
+	# Keep the caption clear of both the carried object and the pilot's head.
+	draw_string(ThemeDB.fallback_font, Vector2(text_x, pilot_position.y - 82.0), caption, HORIZONTAL_ALIGNMENT_CENTER, text_width, 9, AircraftArt.INK)
 	draw_set_transform_matrix(Transform2D.IDENTITY)
+
+func _carried_item_caption(item: Dictionary) -> String:
+	match String(item.get("type", "")):
+		"parcel":
+			var destination: String = String(world.airports[int(item.destination)].name)
+			var remaining: float = float(item.get("urgent_deadline", 0.0)) - economy.elapsed_seconds
+			if remaining > 0.0:
+				var time_text: String = "%d с" % ceili(remaining) if remaining < 60.0 else _format_short_time(remaining)
+				return "ПОЧТА → %s • срочно %s" % [destination, time_text]
+			return "ПОЧТА → %s" % destination
+		"food":
+			return "ЕДА"
+		"canister":
+			return "КАНИСТРА • %.1f Л" % float(item.get("fuel_l", 0.0))
+	return ""
 
 func _handle_inventory_click(position: Vector2) -> bool:
 	if in_fuel_bay and _set_fuel_amount_from_mouse(position, Vector2(36, size.y - 152)):
@@ -1071,7 +1253,7 @@ func _handle_inventory_click(position: Vector2) -> bool:
 			scene_notice = "Предмет уложен" if economy.store_carried() else "Нет свободных слотов"
 			return true
 		if carried_type == "food" and _carried_action_rect(1).has_point(position):
-			scene_notice = "Сытость %d/6" % economy.hunger if economy.eat_carried() else "Вы уже сыты"
+			_eat_at_table()
 			return true
 		if carried_type == "canister" and _carried_action_rect(1).has_point(position):
 			if in_fuel_bay:
@@ -1121,7 +1303,7 @@ func _draw_carried_actions() -> void:
 		return
 	var middle_action := "ЗАПРАВИТЬ" if economy.carried_item.get("type", "") == "canister" else "СЪЕСТЬ"
 	var entries := [[0, "УЛОЖИТЬ"], [2, "ВЫБРОСИТЬ"]]
-	if economy.carried_item.get("type", "") in ["food", "canister"]:
+	if economy.carried_item.get("type", "") == "canister" or (economy.carried_item.get("type", "") == "food" and _at_cabin_table()):
 		entries.insert(1, [1, middle_action])
 	for entry in entries:
 		_draw_menu_button(_carried_action_rect(entry[0]), entry[1], 13)
@@ -1210,16 +1392,30 @@ func _draw_cabin_scene() -> void:
 	var prompt := "Грузовой отсек • самолёт продолжает полёт" if flight.state == FlightModelScript.State.FLYING else "Грузовой отсек • самолёт на стоянке"
 	if _can_view_cabin_terrain():
 		prompt += " • колесо вниз: отдалить"
-	for spot in _scene_hotspots():
-		if absf(scene_player_x - float(spot.x)) < 38:
-			prompt = "Enter: " + String(spot.label)
+	var nearby_spot := _nearby_scene_hotspot()
+	if not nearby_spot.is_empty():
+		prompt = "Enter: " + String(nearby_spot.label)
+	if _bed_is_near():
+		prompt = "Enter: встать с кровати" if cabin_sleeping else "Enter: лечь на кровать"
+	elif in_fuel_bay:
+		prompt = "Enter: заправить самолёт"
+	elif _near_cabin_ramp():
+		prompt = "Enter: перейти к заправке"
+	elif _at_cabin_table():
+		prompt = "Enter: съесть еду" if economy.carried_item.get("type", "") == "food" else "Возьмите еду и принесите её к столу"
+	elif _near_cabin_table():
+		prompt = "Enter: сесть за стол"
 	var inventory_description := _inventory_hover_description(get_local_mouse_position())
 	var fuel_description := _fuel_device_hover_description(get_local_mouse_position())
 	if flight.stall_warning_active():
 		prompt = "СВАЛИВАНИЕ — ВЕРНИТЕСЬ ЗА ШТУРВАЛ" if flight.stalled else "БОЛЬШОЙ УГОЛ АТАКИ — ВЕРНИТЕСЬ ЗА ШТУРВАЛ"
 		_scene_prompt(prompt)
 	else:
-		var hover_description := inventory_description if not inventory_description.is_empty() else fuel_description
+		var hover_description := inventory_description
+		if hover_description.is_empty() and not fuel_description.is_empty():
+			hover_description = fuel_description
+			if in_fuel_bay or _near_cabin_ramp():
+				hover_description += " • " + prompt
 		_scene_prompt(hover_description if not hover_description.is_empty() else (scene_notice if not scene_notice.is_empty() else prompt))
 func _can_view_cabin_terrain() -> bool:
 	return view_mode == ViewMode.CABIN and flight.state != FlightModelScript.State.CRASHED
@@ -1559,9 +1755,9 @@ func _draw_apron_scene() -> void:
 	_draw_carried_item(Vector2(scene_player_x,runway_y))
 	_draw_scene_hotspots()
 	var prompt := "Борт 02 • малый грузовой биплан"
-	for spot in _scene_hotspots():
-		if absf(scene_player_x - float(spot.x)) < 55:
-			prompt = "Enter: " + String(spot.label)
+	var nearby_spot := _nearby_scene_hotspot()
+	if not nearby_spot.is_empty():
+		prompt = "Enter: " + String(nearby_spot.label)
 	_scene_prompt(prompt)
 func _draw_building(center_x: float, floor_y: float, building_size: Vector2, label: String, _color: Color) -> void:
 	var r := Rect2(center_x-building_size.x/2,floor_y-building_size.y,building_size.x,building_size.y)
@@ -1596,10 +1792,9 @@ func _draw_airport_scene() -> void:
 	_draw_carried_item(Vector2(scene_player_x, floor_y + 12))
 	_draw_scene_hotspots()
 	var prompt := "Стрелки: идти"
-	for spot in _scene_hotspots():
-		if spot.has("kind") and absf(scene_player_x - float(spot.x)) < 110.0:
-			prompt = "ENTER: " + String(spot.label)
-			break
+	var nearby_spot := _nearby_scene_hotspot()
+	if not nearby_spot.is_empty():
+		prompt = "Enter: " + String(nearby_spot.label)
 	_scene_prompt(scene_notice if not scene_notice.is_empty() else prompt)
 
 func _airport_buildings() -> Array[Dictionary]:
@@ -1613,6 +1808,8 @@ func _airport_buildings() -> Array[Dictionary]:
 		buildings.append({"label":"Магазин", "kind":ViewMode.SHOP})
 	if flight.airport_index in economy.hotel_airports:
 		buildings.append({"label":"Гостиница", "kind":ViewMode.HOTEL})
+	if flight.airport_index in economy.repair_airports:
+		buildings.append({"label":"Ремонтный ангар", "kind":ViewMode.REPAIR})
 	return buildings
 
 func get_operations_refuel_rect() -> Rect2:
@@ -1648,8 +1845,14 @@ func _draw_operations_scene() -> void:
 func _economy_button_rect(index: int) -> Rect2:
 	return Rect2(size.x * 0.48, 165.0 + index * 64.0, minf(520.0, size.x * 0.46), 48.0)
 
+func _delivery_button_text(parcel: Dictionary) -> String:
+	var urgent: bool = economy.elapsed_seconds <= float(parcel.get("urgent_deadline", -1.0))
+	var reward := int(parcel.get("urgent_reward", 0) if urgent else parcel.get("normal_reward", 0))
+	var tariff_status := "срочный тариф" if urgent else "обычный тариф"
+	return "СДАТЬ ПОСЫЛКУ • %d монет • %s" % [reward, tariff_status]
+
 func _draw_economy_scene() -> void:
-	var titles := {ViewMode.MAIL:"ПОЧТА", ViewMode.SHOP:"МАГАЗИН", ViewMode.HOTEL:"ГОСТИНИЦА", ViewMode.FUEL:"ЗАПРАВКА"}
+	var titles := {ViewMode.MAIL:"ПОЧТА", ViewMode.SHOP:"МАГАЗИН", ViewMode.HOTEL:"ГОСТИНИЦА", ViewMode.FUEL:"ЗАПРАВКА", ViewMode.REPAIR:"РЕМОНТНЫЙ АНГАР"}
 	var title: String = titles.get(view_mode, "СЛУЖБА")
 	var floor_y := _draw_scene_background(title)
 	_draw_building(size.x * 0.23, floor_y, Vector2(size.x * 0.32, minf(340.0, floor_y - 190.0)), title, AircraftArt.PAPER)
@@ -1658,21 +1861,26 @@ func _draw_economy_scene() -> void:
 		ViewMode.MAIL:
 			var row := 0
 			if economy.carried_item.get("type", "") == "parcel" and int(economy.carried_item.get("destination", -1)) == flight.airport_index:
-				_draw_menu_button(_economy_button_rect(row), "СДАТЬ ПОСЫЛКУ • получить оплату")
+				_draw_menu_button(_economy_button_rect(row), _delivery_button_text(economy.carried_item))
 				row += 1
 			for offer in economy.offers_at(flight.airport_index):
 				var destination: String = world.airports[int(offer.destination)].name
 				_draw_menu_button(_economy_button_rect(row), "%s • %.0f км • %d / срочно %d" % [destination, offer.distance_km, offer.normal_reward, offer.urgent_reward])
 				row += 1
 		ViewMode.SHOP:
-			_draw_menu_button(_economy_button_rect(0), "КУПИТЬ ЕДУ • %d монет" % EconomyScript.FOOD_PRICE)
+			_draw_menu_button(_economy_button_rect(0), "КУПИТЬ ЕДУ • %d монет" % economy.food_price(flight.airport_index))
 		ViewMode.HOTEL:
-			_draw_menu_button(_economy_button_rect(0), "ОТДОХНУТЬ 20 МИНУТ • %d монет" % EconomyScript.HOTEL_REST_PRICE)
+			_draw_menu_button(_economy_button_rect(0), "ОТДОХНУТЬ 20 МИНУТ • %d монет" % economy.hotel_rest_price(flight.airport_index))
 		ViewMode.FUEL:
 			_draw_menu_button(_economy_button_rect(0), "КУПИТЬ ПУСТУЮ КАНИСТРУ • %d" % EconomyScript.CANISTER_PRICE)
 			_draw_fuel_amount_slider()
-			_draw_menu_button(_economy_button_rect(2), "КУПИТЬ %.1f Л • %d монет" % [fuel_amount_litres, ceili(fuel_amount_litres * EconomyScript.FUEL_PRICE_PER_L)])
+			_draw_menu_button(_economy_button_rect(2), "КУПИТЬ %.1f Л • %d монет" % [fuel_amount_litres, economy.fuel_purchase_cost(fuel_amount_litres, flight.airport_index)])
 			_draw_menu_button(_economy_button_rect(3), "ПРОДАТЬ КАНИСТРУ И ТОПЛИВО")
+		ViewMode.REPAIR:
+			var missing: float = maxf(0.0, FlightModelScript.MAX_AIRFRAME_CONDITION - float(flight.airframe_condition))
+			var full_cost: int = economy.repair_cost(missing, flight.airport_index)
+			draw_string(ThemeDB.fallback_font, Vector2(size.x * 0.48, 148), "Точное состояние: %.1f/100 • %.1f мон./ед." % [flight.airframe_condition, economy.repair_price_per_point(flight.airport_index)], HORIZONTAL_ALIGNMENT_LEFT, size.x * 0.46, 14, AircraftArt.INK)
+			_draw_menu_button(_economy_button_rect(0), "РЕМОНТ ДО 100 • %d монет" % full_cost)
 	_draw_menu_button(_economy_button_rect(5), "ВЫЙТИ В АЭРОПОРТ [ESC]")
 	_scene_prompt(scene_notice if not scene_notice.is_empty() else "Клик: действие • Esc: выйти")
 
@@ -1714,7 +1922,7 @@ func _draw() -> void:
 			_draw_airport_scene()
 		ViewMode.OPERATIONS:
 			_draw_operations_scene()
-		ViewMode.MAIL, ViewMode.SHOP, ViewMode.HOTEL, ViewMode.FUEL:
+		ViewMode.MAIL, ViewMode.SHOP, ViewMode.HOTEL, ViewMode.FUEL, ViewMode.REPAIR:
 			_draw_economy_scene()
 	if view_mode != ViewMode.COCKPIT:
 		_draw_economy_hud(self, false)
@@ -1727,9 +1935,36 @@ func _draw_economy_hud(canvas: CanvasItem, dark: bool) -> void:
 	var color := Color("e8e4d5") if dark else AircraftArt.INK
 	var x := size.x - 360.0
 	if view_mode != ViewMode.COCKPIT:
-		var goal_text := " • ЦЕЛЬ ДОСТИГНУТА" if economy.money >= EconomyScript.GOAL_COINS else " • цель %d" % EconomyScript.GOAL_COINS
-		canvas.draw_string(ThemeDB.fallback_font, Vector2(x, 34), "%d монет%s" % [economy.money, goal_text], HORIZONTAL_ALIGNMENT_LEFT, 330, 13, color)
-		canvas.draw_string(ThemeDB.fallback_font, Vector2(x, 53), "Сытость %s  Бодрость %s" % [_need_bar(economy.hunger), _need_bar(economy.fatigue)], HORIZONTAL_ALIGNMENT_LEFT, 330, 12, color)
+		var label_width := 82.0
+		var value_x := x + 94.0
+		canvas.draw_string(ThemeDB.fallback_font, Vector2(x, 30), "Деньги", HORIZONTAL_ALIGNMENT_LEFT, label_width, 12, color)
+		canvas.draw_string(ThemeDB.fallback_font, Vector2(value_x, 30), str(economy.money), HORIZONTAL_ALIGNMENT_LEFT, 58, 12, color)
+		var rows := [
+			["Сытость", _need_bar(economy.hunger)],
+			["Бодрость", _need_bar(economy.fatigue)],
+			["Планер", _airframe_bar()],
+		]
+		for row_index in rows.size():
+			var baseline_y := 50.0 + row_index * 18.0
+			canvas.draw_string(ThemeDB.fallback_font, Vector2(x, baseline_y), rows[row_index][0], HORIZONTAL_ALIGNMENT_LEFT, label_width, 12, color)
+			canvas.draw_string(ThemeDB.fallback_font, Vector2(value_x, baseline_y), rows[row_index][1], HORIZONTAL_ALIGNMENT_LEFT, 126, 12, color)
+
+func _airframe_condition_status() -> Dictionary:
+	if flight.airframe_condition >= 65.0:
+		return {"label":"НОРМА", "color":Color("567044")}
+	if flight.airframe_condition >= 30.0:
+		return {"label":"ИЗНОС", "color":Color("a67931")}
+	return {"label":"КРИТИЧЕСКОЕ", "color":Color("a3483f")}
+
+func _draw_airframe_condition_indicator(canvas: CanvasItem, position: Vector2, dark: bool) -> void:
+	var status: Dictionary = _airframe_condition_status()
+	var status_color: Color = status.color
+	var text_color: Color = status_color.lightened(0.2) if dark else status_color
+	canvas.draw_string(ThemeDB.fallback_font, position + Vector2(0, 11), "ПЛАНЕР: %s  %s" % [status.label, _airframe_bar()], HORIZONTAL_ALIGNMENT_LEFT, 260, 11, text_color)
+
+func _airframe_bar() -> String:
+	var filled := ceili(clampf(flight.airframe_condition, 0.0, 100.0) / 100.0 * 6.0)
+	return "■".repeat(filled) + "□".repeat(6 - filled)
 
 func _need_bar(value: int) -> String:
 	return "■".repeat(clampi(value, 0, 6)) + "□".repeat(6 - clampi(value, 0, 6))
@@ -1744,6 +1979,7 @@ func _draw_map_on(canvas: Control) -> void:
 		if flight.engine_running:
 			weather_radar_cache.update_cache(world, flight, status_timer, RADAR_RANGES_KM[radar_range_index])
 		WeatherRadarArt.draw_large(canvas,map_rect(),world,flight,weather_radar_cache.get_texture(),RADAR_RANGES_KM[radar_range_index])
+		WeatherRadarArt.draw_storm_motion(canvas, map_rect(), world, flight, get_local_mouse_position(), RADAR_RANGES_KM[radar_range_index])
 		if flight.engine_running:
 			_draw_radar_measurements(canvas)
 		_draw_economy_hud(canvas, false)
@@ -1875,7 +2111,12 @@ func _draw_map() -> void:
 	_draw_economy_hud(map_canvas, false)
 	_draw_hovered_airport_services(rect)
 	map_canvas.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, 20), "НАВИГАЦИОННАЯ КАРТА", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("35372e"))
-	map_canvas.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, 38), "Положение самолёта не отображается", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("55574a"))
+	var position_hint := "Положение самолёта не отображается"
+	if trajectory_finished:
+		position_hint = "Итоговая траектория и положение самолёта"
+	elif _trajectory_overlay_visible():
+		position_hint = "Стартовая позиция самолёта показана"
+	map_canvas.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, 38), position_hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("55574a"))
 	var wind_altitude_label: String
 	if wind_overlay_index == WIND_OVERLAY_ALTITUDES.size():
 		wind_altitude_label = "текущая %.0f м" % flight.altitude_m
@@ -1907,9 +2148,13 @@ func _draw_hovered_airport_services(rect: Rect2) -> void:
 	if not rect.has_point(mouse):
 		return
 	var index := _airport_hover_index(mouse)
-	if index >= 0:
+	var text := ""
+	if _wind_arrow_hovered(mouse):
+		text = "Ветер: " + _wind_arrow_description()
+	elif index >= 0:
 		var airport: Dictionary = world.airports[index]
-		var text := "%s: %s" % [airport.name, ", ".join(economy.services_at(index))]
+		text = "%s: %s" % [airport.name, ", ".join(economy.services_at(index))]
+	if not text.is_empty():
 		map_canvas.draw_rect(Rect2(rect.position.x + 8, rect.end.y - 47, minf(520.0, rect.size.x - 16), 25), Color("d7d0ad"), true)
 		map_canvas.draw_string(ThemeDB.fallback_font, Vector2(rect.position.x + 14, rect.end.y - 29), text, HORIZONTAL_ALIGNMENT_LEFT, minf(508.0, rect.size.x - 28), 12, Color("35372e"))
 
@@ -1928,50 +2173,98 @@ func _airport_hover_index(mouse: Vector2) -> int:
 			return index
 	return -1
 
+func _wind_overlay_altitude() -> float:
+	return flight.altitude_m if wind_overlay_index == WIND_OVERLAY_ALTITUDES.size() else WIND_OVERLAY_ALTITUDES[wind_overlay_index]
+
+func _wind_arrow_description() -> String:
+	var altitude_m := _wind_overlay_altitude()
+	var wind: Vector2 = world.wind_at(altitude_m)
+	var from_degrees := roundi(world.vector_heading(-wind)) % 360
+	return "от %03d° • %.0f км/ч • %.0f м" % [from_degrees, wind.length(), altitude_m]
+
+func _wind_arrow_hovered(mouse: Vector2) -> bool:
+	if large_weather_radar or not map_rect().has_point(mouse):
+		return false
+	var wind: Vector2 = world.wind_at(_wind_overlay_altitude())
+	if wind.length_squared() < 0.001:
+		return false
+	var length_px := remap(clampf(wind.length(), 0.0, 40.0), 0.0, 40.0, 12.0, 27.0)
+	var half_vector := wind.normalized() * length_px * 0.5
+	for center in _wind_arrow_centers(map_rect()):
+		if mouse.distance_to(Geometry2D.get_closest_point_to_segment(mouse, center - half_vector, center + half_vector)) <= 8.0:
+			return true
+	return false
+
+func _wind_arrow_centers(rect: Rect2) -> PackedVector2Array:
+	var centers := PackedVector2Array()
+	var safe_rect := rect.grow(-20.0)
+	if not safe_rect.has_area():
+		return centers
+	var visible_min := screen_to_world(safe_rect.position).max(Vector2.ZERO)
+	var visible_max := screen_to_world(safe_rect.end).min(Vector2.ONE * FlightWorldScript.SIZE_KM)
+	if visible_min.x > visible_max.x or visible_min.y > visible_max.y:
+		return centers
+	# Keep the sparse, world-anchored grid for each zoom band.
+	var target_px := maxf(180.0, minf(rect.size.x, rect.size.y) * 0.55)
+	var target_km := screen_to_world(rect.position + Vector2(target_px, 0.0)).x - screen_to_world(rect.position).x
+	var spacing_km := pow(2.0, ceilf(log(maxf(0.001, target_km)) / log(2.0)))
+	var x := ceilf(visible_min.x / spacing_km) * spacing_km
+	while x <= visible_max.x:
+		var y := ceilf(visible_min.y / spacing_km) * spacing_km
+		while y <= visible_max.y:
+			centers.append(world_to_screen(Vector2(x, y)))
+			y += spacing_km
+		x += spacing_km
+	if centers.is_empty():
+		centers.append(world_to_screen((visible_min + visible_max) * 0.5))
+	# Hide central arrows without relocating the remaining ones.
+	var exclusion_radius := minf(rect.size.x, rect.size.y) * 0.25
+	var visible_centers := PackedVector2Array()
+	for center in centers:
+		if center.distance_to(rect.get_center()) > exclusion_radius:
+			visible_centers.append(center)
+	return visible_centers
+
 func _draw_wind_overlay(rect: Rect2) -> void:
 	var altitude_m: float = flight.altitude_m if wind_overlay_index == WIND_OVERLAY_ALTITUDES.size() else WIND_OVERLAY_ALTITUDES[wind_overlay_index]
 	var wind: Vector2 = world.wind_at(altitude_m)
 	if wind.length_squared() < 0.001:
 		return
-	var visible_min := screen_to_world(rect.position).clamp(Vector2.ZERO, Vector2.ONE * FlightWorldScript.SIZE_KM)
-	var visible_max := screen_to_world(rect.end).clamp(Vector2.ZERO, Vector2.ONE * FlightWorldScript.SIZE_KM)
-	var spacing_km := 16.0
-	var start_x := ceilf(visible_min.x / spacing_km) * spacing_km
-	var start_y := ceilf(visible_min.y / spacing_km) * spacing_km
 	var arrow_length := remap(clampf(wind.length(), 0.0, 40.0), 0.0, 40.0, 12.0, 27.0)
 	var direction := wind.normalized()
 	var color := Color(0.10, 0.42, 0.48, 0.50)
-	var arrow_altitude_label := "%d м" % roundi(altitude_m)
-	var x := start_x
-	while x <= visible_max.x:
-		var y := start_y
-		while y <= visible_max.y:
-			var center := world_to_screen(Vector2(x, y))
-			var half_vector := direction * arrow_length * 0.5
-			var tip := center + half_vector
-			var tail := center - half_vector
-			_draw_clipped_map_line(tail, tip, color, 1.5)
-			var backward := -direction
-			_draw_clipped_map_line(tip, tip + backward.rotated(0.55) * 6.0, color, 1.5)
-			_draw_clipped_map_line(tip, tip + backward.rotated(-0.55) * 6.0, color, 1.5)
-			var label_position := center + Vector2(arrow_length * 0.5 + 7.0, 4.0)
-			var label_width := rect.end.x - label_position.x - 4.0
-			if label_width >= 30.0 and label_position.y >= rect.position.y + 10.0 and label_position.y <= rect.end.y - 3.0:
-				map_canvas.draw_string(ThemeDB.fallback_font, label_position, arrow_altitude_label, HORIZONTAL_ALIGNMENT_LEFT, label_width, 9, Color(0.10, 0.36, 0.41, 0.62))
-			y += spacing_km
-		x += spacing_km
+	var arrow_label := _wind_arrow_description()
+	var label_size := ThemeDB.fallback_font.get_string_size(arrow_label, HORIZONTAL_ALIGNMENT_LEFT, -1, 9)
+	for center in _wind_arrow_centers(rect):
+		var half_vector := direction * arrow_length * 0.5
+		var tip := center + half_vector
+		var tail := center - half_vector
+		_draw_clipped_map_line(tail, tip, color, 1.5)
+		var backward := -direction
+		_draw_clipped_map_line(tip, tip + backward.rotated(0.55) * 6.0, color, 1.5)
+		_draw_clipped_map_line(tip, tip + backward.rotated(-0.55) * 6.0, color, 1.5)
+		var label_position := center + Vector2(arrow_length * 0.5 + 7.0, 4.0)
+		if map_zoom >= APPROACH_DETAIL_MIN_ZOOM and label_position.y >= rect.position.y + 10.0 and label_position.y <= rect.end.y - 3.0:
+			label_position.x = clampf(label_position.x, rect.position.x + 4.0, rect.end.x - label_size.x - 4.0)
+			map_canvas.draw_string(ThemeDB.fallback_font, label_position, arrow_label, HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(0.10, 0.36, 0.41, 0.62))
 
 func _draw_completed_flight_trajectory() -> void:
-	if not trajectory_finished or flight_trajectory.is_empty():
+	if not _trajectory_overlay_visible():
 		return
 	var path_color := Color("a83f38") if flight.state == FlightModelScript.State.CRASHED else Color("176f75")
-	for point_index in range(1, flight_trajectory.size()):
-		_draw_clipped_map_line(world_to_screen(flight_trajectory[point_index - 1].position), world_to_screen(flight_trajectory[point_index].position), path_color, 2.0)
+	if trajectory_finished:
+		for point_index in range(1, flight_trajectory.size()):
+			_draw_clipped_map_line(world_to_screen(flight_trajectory[point_index - 1].position), world_to_screen(flight_trajectory[point_index].position), path_color, 2.0)
 	var aircraft_position := world_to_screen(flight.position_km)
 	var safe_rect := map_rect().grow(-10.0)
 	aircraft_position.x = clampf(aircraft_position.x, safe_rect.position.x, safe_rect.end.x)
 	aircraft_position.y = clampf(aircraft_position.y, safe_rect.position.y, safe_rect.end.y)
 	_draw_map_aircraft(aircraft_position, flight.heading_deg, path_color)
+
+func _trajectory_overlay_visible() -> bool:
+	if flight_trajectory.is_empty():
+		return false
+	return trajectory_finished or (not trajectory_recording_started and flight.state == FlightModelScript.State.PARKED)
 
 func _draw_map_aircraft(position: Vector2, heading_deg: float, color: Color) -> void:
 	map_canvas.draw_set_transform(position, deg_to_rad(heading_deg), Vector2.ONE)
@@ -2221,7 +2514,7 @@ func _draw_panel() -> void:
 	if flight.engine_running:
 		_draw_speedometer(speed_center, INSTRUMENT_RADIUS)
 		if flight.wheel_brakes_applied:
-			draw_string(ThemeDB.fallback_font, speed_center + Vector2(-INSTRUMENT_RADIUS, INSTRUMENT_RADIUS + 34), "ТОРМОЗ", HORIZONTAL_ALIGNMENT_CENTER, INSTRUMENT_RADIUS * 2.0, 11, Color("ef645e"))
+			draw_string(ThemeDB.fallback_font, speed_center + Vector2(-INSTRUMENT_RADIUS, INSTRUMENT_RADIUS + 47), "ТОРМОЗ", HORIZONTAL_ALIGNMENT_CENTER, INSTRUMENT_RADIUS * 2.0, 11, Color("ef645e"))
 		_draw_round_gauge(_instrument_center(1, gauge_y), INSTRUMENT_RADIUS, "ВЫСОТА", "%.0f" % flight.altitude_m, "м", flight.altitude_m / 5000.0)
 		_draw_radio_altimeter(_instrument_center(1, gauge_y))
 		_draw_variometer(_instrument_center(2, gauge_y), INSTRUMENT_RADIUS)
@@ -2236,8 +2529,9 @@ func _draw_panel() -> void:
 	else:
 		_draw_unpowered_instruments(gauge_y)
 	_draw_controls(rect)
+	_draw_airframe_condition_indicator(self, rect.position + Vector2(10, 10), true)
 	var status_text: String = "ПАУЗА" if simulation_paused else flight.message
-	var state_color: Color = Color("e8d274") if simulation_paused else (Color("65d48c") if flight.state == FlightModelScript.State.LANDED else (Color("ef645e") if flight.state == FlightModelScript.State.CRASHED else Color("e8d274")))
+	var state_color: Color = Color("e8d274") if simulation_paused else _flight_message_color()
 	if not simulation_paused and flight.state == FlightModelScript.State.FLYING and flight.stalled:
 		status_text = "СВАЛИВАНИЕ — ОТДАТЬ ШТУРВАЛ ОТ СЕБЯ"
 		state_color = Color("ef645e")
@@ -2252,6 +2546,13 @@ func _draw_panel() -> void:
 		state_color = Color("e8d274")
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, rect.size.y - 10), status_text, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 330, 15, state_color)
 	draw_string(ThemeDB.fallback_font, Vector2(rect.end.x - 470, rect.end.y - 10), "W/S: газ  •  стрелки: штурвал  •  Esc: меню", HORIZONTAL_ALIGNMENT_RIGHT, 446, 12, Color("aebbc1"))
+
+func _flight_message_color() -> Color:
+	if flight.state == FlightModelScript.State.CRASHED or flight.message_is_error:
+		return Color("ef645e")
+	if flight.state == FlightModelScript.State.LANDED and flight.message.begins_with("Успешная посадка"):
+		return Color("65d48c")
+	return Color("e8d274")
 
 func _draw_radio_altimeter(center: Vector2) -> void:
 	var height_m: float = flight.radio_height_m()
@@ -2325,6 +2626,11 @@ func _draw_speedometer(center: Vector2, radius: float) -> void:
 	# below it is not a normal operating range.
 	draw_arc(center, radius - 5, speed_to_angle.call(FlightModelScript.NOMINAL_STALL_SPEED_KMH), speed_to_angle.call(FlightModelScript.VNO_KMH), 28, Color("65d48c"), 3.0)
 	draw_arc(center, radius - 5, speed_to_angle.call(FlightModelScript.VNO_KMH), speed_to_angle.call(FlightModelScript.VNE_KMH), 10, Color("e8d274"), 3.0)
+	# Best-range cruise is about 174 km/h at 75% power in still air. The blue
+	# band shows the practical near-optimal interval rather than a false single
+	# exact speed; wind is already reflected by ground speed and range readouts.
+	var economy_color := Color("63b9d1")
+	draw_arc(center, radius - 5, speed_to_angle.call(FlightModelScript.ECONOMY_CRUISE_MIN_KMH), speed_to_angle.call(FlightModelScript.ECONOMY_CRUISE_MAX_KMH), 10, economy_color, 4.5)
 	var red_angle: float = speed_to_angle.call(FlightModelScript.VNE_KMH)
 	var red_outer := center + Vector2(cos(red_angle), sin(red_angle)) * (radius - 4)
 	var red_inner := center + Vector2(cos(red_angle), sin(red_angle)) * (radius - 14)
@@ -2353,10 +2659,16 @@ func _draw_speedometer(center: Vector2, radius: float) -> void:
 	draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "СКОРОСТЬ", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
 	var value_color := Color("ef645e") if flight.speed_kmh > FlightModelScript.VNE_KMH else (Color("e8d274") if flight.speed_kmh > FlightModelScript.VNO_KMH else Color.WHITE)
 	draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "%.0f км/ч" % flight.speed_kmh, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 14, value_color)
+	draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 7, radius + 32), "По земле %.0f км/ч" % flight.ground_speed_kmh(), HORIZONTAL_ALIGNMENT_CENTER, radius * 2 + 14, 10, Color("73d6d0"))
 
 func _draw_round_gauge(center: Vector2, radius: float, title: String, value: String, unit: String, ratio: float) -> void:
 	draw_circle(center, radius, Color("0a0e10"))
 	draw_arc(center, radius - 2, 0, TAU, 48, Color("7d8b91"), 2)
+	if title == "ВЫСОТА":
+		var economy_color := Color("63b9d1")
+		var economy_start := lerpf(-PI * 0.75, PI * 0.75, FlightModelScript.ECONOMY_ALTITUDE_MIN_M / 5000.0)
+		var economy_end := lerpf(-PI * 0.75, PI * 0.75, FlightModelScript.ECONOMY_ALTITUDE_MAX_M / 5000.0)
+		draw_arc(center, radius - 5, economy_start, economy_end, 12, economy_color, 4.5)
 	for i in 11:
 		var angle: float = lerpf(-PI * 0.75, PI * 0.75, i / 10.0)
 		var outer := center + Vector2(cos(angle), sin(angle)) * (radius - 6)
@@ -2451,8 +2763,8 @@ func _draw_time_controls(beige: bool = false) -> void:
 	for button_rect in [speed_rect, reset_rect]:
 		draw_rect(button_rect, fill, true)
 		draw_rect(button_rect, border, false, 1.0)
-	draw_string(ThemeDB.fallback_font, speed_rect.position + Vector2(0.0, 14.0), "ВРЕМЯ %d× [Z]" % roundi(TIME_SCALES[time_scale_index]), HORIZONTAL_ALIGNMENT_CENTER, speed_rect.size.x, 9, ink)
-	draw_string(ThemeDB.fallback_font, reset_rect.position + Vector2(0.0, 14.0), "1× [⇧Z]", HORIZONTAL_ALIGNMENT_CENTER, reset_rect.size.x, 9, ink)
+	draw_string(ThemeDB.fallback_font, speed_rect.position + Vector2(0.0, 14.0), "ВРЕМЯ %d× [⇧Z]" % roundi(TIME_SCALES[time_scale_index]), HORIZONTAL_ALIGNMENT_CENTER, speed_rect.size.x, 9, ink)
+	draw_string(ThemeDB.fallback_font, reset_rect.position + Vector2(0.0, 14.0), "1× [Z]", HORIZONTAL_ALIGNMENT_CENTER, reset_rect.size.x, 9, ink)
 
 func _draw_fuel_instrument(center: Vector2, radius: float) -> void:
 	var flow: float = flight.fuel_flow_lpm()
@@ -2479,7 +2791,8 @@ func _draw_fuel_instrument(center: Vector2, radius: float) -> void:
 	draw_string(ThemeDB.fallback_font, center + Vector2(0, 5), "РАСХ", HORIZONTAL_ALIGNMENT_CENTER, radius, 8, Color("6fc78c"))
 	draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ТОПЛИВО", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
 	draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 5.0, radius + 14), "Расход %.2f л/мин" % flow, HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 10.0, 10, Color("6fc78c"))
-	draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 7.0, radius + 29), "%.1f/%.0f л • запас %.0f км" % [flight.fuel_l, flight.fuel_capacity_l, estimated_range], HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 14.0, 10, Color.WHITE)
+	# Keep the wide caption box centered on the gauge without clipping units.
+	draw_string(ThemeDB.fallback_font, center + Vector2(-90.0, radius + 29), "%.1f/%.0f л • запас %.0f км" % [flight.fuel_l, flight.fuel_capacity_l, estimated_range], HORIZONTAL_ALIGNMENT_CENTER, 180.0, 10, Color.WHITE)
 
 func _draw_ils() -> void:
 	var rect := get_ils_rect()
@@ -2843,7 +3156,7 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 				_pay_and_prepare(true)
 			queue_redraw()
 		return
-	if view_mode in [ViewMode.MAIL, ViewMode.SHOP, ViewMode.HOTEL, ViewMode.FUEL]:
+	if view_mode in [ViewMode.MAIL, ViewMode.SHOP, ViewMode.HOTEL, ViewMode.FUEL, ViewMode.REPAIR]:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			_handle_economy_click(event.position)
 			queue_redraw()
@@ -2890,7 +3203,7 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 				flight.toggle_engine()
 				_queue_map_redraw()
 			elif get_cabin_button_rect().has_point(event.position):
-				_enter_cabin()
+				_enter_cabin(true)
 			elif _beacon_receiver_hit(event.position, 0):
 				active_receiver = 0
 				receiver_frequency_entry = ""
@@ -2941,8 +3254,10 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 		queue_redraw()
 		return
 	var next_hovered_airport := _airport_hover_index(event.position) if not large_weather_radar else -1
-	if next_hovered_airport != hovered_airport_index:
+	var next_hovered_wind := _wind_arrow_hovered(event.position)
+	if next_hovered_airport != hovered_airport_index or next_hovered_wind != hovered_wind_arrow:
 		hovered_airport_index = next_hovered_airport
+		hovered_wind_arrow = next_hovered_wind
 		_queue_map_redraw()
 	if point_drag_candidate and not dragging_measure_point and event.position.distance_to(map_press_position) >= 4.0:
 		dragging_measure_point = true
@@ -3089,6 +3404,22 @@ func _erase_nearest_measurement(mouse: Vector2) -> void:
 		active_measurement_lines.remove_at(closest)
 
 func _handle_map_click(screen_position: Vector2) -> void:
+	# Endpoint clicks still start connected segments; dragging still edits the
+	# map/vertices. A plain click on a finished segment copies it for planning.
+	if not large_weather_radar and pending_measure == null and _find_measure_connections(screen_position).is_empty():
+		var nearest := -1
+		var distance := 8.0
+		for index in measurement_lines.size():
+			var a := world_to_screen(measurement_lines[index].a)
+			var b := world_to_screen(measurement_lines[index].b)
+			var closest := Geometry2D.get_closest_point_to_segment(screen_position, a, b)
+			var candidate := closest.distance_to(screen_position)
+			if candidate < distance:
+				distance = candidate
+				nearest = index
+		if nearest >= 0:
+			flight_calculator.use_line(measurement_lines[nearest].a, measurement_lines[nearest].b)
+			return
 	var point := _snap_map_point(screen_position)
 	if active_pending_measure == null:
 		active_pending_measure = point

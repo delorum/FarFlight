@@ -35,6 +35,13 @@ func _run() -> void:
 	root.add_child(scene)
 	await process_frame
 	scene.set_process(false)
+	check(scene._trajectory_overlay_visible(), "A new game must show the known aircraft position at the departure airfield")
+	scene.flight.state = scene.FlightModelScript.State.FLYING
+	check(not scene._trajectory_overlay_visible(), "Live aircraft position must remain hidden after departure")
+	scene.trajectory_finished = true
+	check(scene._trajectory_overlay_visible(), "A finished flight must show its trajectory and final aircraft position")
+	scene.trajectory_finished = false
+	scene.flight.state = scene.FlightModelScript.State.PARKED
 	scene.flight.engine_running = true
 	scene.flight.position_km = Vector2(50,50)
 	scene.flight.heading_deg = 0.0

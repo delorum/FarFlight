@@ -11,9 +11,9 @@ config_version=5
 [application]
 
 config/name="Far Flight — Почтовая авиация"
+run/main_scene="res://scenes/game_shell.tscn"
 config/use_custom_user_dir=true
 config/custom_user_dir_name="FarFlight"
-run/main_scene="res://scenes/game_shell.tscn"
 config/features=PackedStringArray("4.7")
 run/max_fps=60
 
@@ -21,13 +21,12 @@ run/max_fps=60
 
 window/size/viewport_width=1280
 window/size/viewport_height=800
+window/size/mode=3
 window/size/window_width_override=1280
 window/size/window_height_override=800
-window/size/mode=3
-window/size/mode.web=0
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
-window/vsync/vsync_mode=1
+window/size/mode.web=0
 
 [rendering]
 

@@ -187,6 +187,12 @@ static func draw_small_aircraft(c: CanvasItem, origin: Vector2, scale_value: flo
 	c.draw_circle(transform * Vector2(327,393), maxf(1.2, scale_value * 33.0), INK)
 	c.draw_circle(transform * Vector2(905,412), maxf(0.8, scale_value * 14.0), INK)
 
+static func draw_lower_wing(c: CanvasItem, origin: Vector2, scale_value: float, mirrored: bool, pitch_deg: float = 0.0) -> void:
+	var transform := Transform2D(0.0, Vector2(-scale_value if mirrored else scale_value, scale_value), 0.0, origin + Vector2(1000.0 * scale_value if mirrored else 0.0, 0))
+	c.draw_set_transform_matrix(pitch_transform(origin, scale_value, mirrored, pitch_deg) * transform)
+	box(c, Rect2(319,320,203,16), PAPER, LIGHT, 7)
+	c.draw_set_transform_matrix(Transform2D.IDENTITY)
+
 static func draw_aircraft(c: CanvasItem, origin: Vector2, scale_value: float, mirrored: bool, cutaway: bool, powered: bool = false, propeller_phase: float = 0.0, pitch_deg: float = 0.0) -> void:
 	var airframe_transform := Transform2D(0.0, Vector2(-scale_value if mirrored else scale_value, scale_value), 0.0, origin + Vector2(1000.0 * scale_value if mirrored else 0.0, 0))
 	airframe_transform = pitch_transform(origin, scale_value, mirrored, pitch_deg) * airframe_transform

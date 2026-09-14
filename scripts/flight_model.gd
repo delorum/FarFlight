@@ -18,6 +18,14 @@ const VNO_KMH := 220.0
 const VNE_KMH := 250.0
 const BREAKUP_SPEED_KMH := 280.0
 const MAX_AIRFRAME_STRESS := 100.0
+const MAX_AIRFRAME_CONDITION := 100.0
+const NORMAL_WEAR_PER_HOUR := 0.75
+const OVERSPEED_WEAR_PER_HOUR := 18.0
+const STORM_WEAR_PER_HOUR := 30.0
+const ECONOMY_CRUISE_MIN_KMH := 165.0
+const ECONOMY_CRUISE_MAX_KMH := 185.0
+const ECONOMY_ALTITUDE_MIN_M := 2250.0
+const ECONOMY_ALTITUDE_MAX_M := 2750.0
 const ROTATION_AUTHORITY_START_KMH := 60.0
 const ROTATION_AUTHORITY_FULL_KMH := 100.0
 const NOMINAL_STALL_SPEED_KMH := 75.0
@@ -25,6 +33,7 @@ const RECOMMENDED_ROTATION_SPEED_KMH := 75.0
 const VX_KMH := 130.0
 const VY_KMH := 130.0
 const TAKEOFF_CONTACT_GRACE_SECONDS := 0.45
+const DEPARTURE_BLOCKED_MESSAGE := "Запуск и взлёт запрещены: оплатите подготовку и выберите полосу в лётной службе"
 
 enum State { PARKED, FLYING, ROLLING, LANDED, CRASHED }
 
@@ -46,15 +55,18 @@ var angle_of_attack_deg := 0.0
 var stalled := false
 var stall_recovery_time := 0.0
 var airframe_stress := 0.0
+var airframe_condition := MAX_AIRFRAME_CONDITION
 var wheel_brakes_applied := false
 var fuel_l := 40.0
 var fuel_capacity_l := 40.0
 var engine_running := false
+var departure_authorized := true
 var state := State.PARKED
 var airport_index := 0
 var message := "Самолёт подготовлен к вылету"
 var message_time_remaining := -1.0
 var message_after_timeout := ""
+var message_is_error := false
 var takeoff_grace_remaining := 0.0
 var current_wind_kmh := Vector2.ZERO
 var storm_intensity := 0.0
@@ -81,6 +93,11 @@ func radio_height_m() -> float:
 		return -1.0
 	var height_m := maxf(0.0, altitude_m - world.height_at(position_km))
 	return height_m if height_m <= RADIO_ALTIMETER_MAX_HEIGHT_M else -1.0
+
+func ground_speed_kmh() -> float:
+	if state != State.FLYING:
+		return speed_kmh
+	return (world.heading_vector(heading_deg) * speed_kmh + current_wind_kmh).length()
 
 func prepare_at_airport(index: int, reverse_direction: bool = false) -> void:
 	airport_index = index
@@ -114,6 +131,7 @@ func prepare_at_airport(index: int, reverse_direction: bool = false) -> void:
 	storm_wind_target_kmh = Vector2.ZERO
 	state = State.PARKED
 	_show_message("", -1.0)
+	departure_authorized = true
 
 func _update_storm_disturbance(delta: float) -> void:
 	if storm_intensity > 0.01:
@@ -150,8 +168,22 @@ func refuel() -> void:
 func toggle_engine() -> void:
 	if state == State.CRASHED:
 		return
+	if not engine_running and not departure_authorized:
+		_show_message(DEPARTURE_BLOCKED_MESSAGE, 5.0, "", true)
+		return
 	engine_running = not engine_running
+	if not engine_running and state in [State.PARKED, State.LANDED]:
+		departure_authorized = false
 	_show_message("Двигатель запущен" if engine_running else "Двигатель остановлен", 3.0, "")
+
+func leave_cockpit_on_ground() -> void:
+	if state not in [State.PARKED, State.LANDED, State.ROLLING]:
+		return
+	engine_running = false
+	throttle = 0.0
+	if state != State.ROLLING or speed_kmh <= 0.05:
+		departure_authorized = false
+	_show_message("Двигатель остановлен • требуется подготовка к следующему вылету", 4.0, "")
 
 func update(delta: float) -> void:
 	_update_message(delta)
@@ -253,6 +285,9 @@ func update(delta: float) -> void:
 	_update_airframe_stress(delta)
 	if state == State.CRASHED:
 		return
+	_update_airframe_condition(delta)
+	if state == State.CRASHED:
+		return
 	if (state == State.PARKED or state == State.LANDED) and wheel_brakes_applied:
 		speed_kmh = maxf(0.0, speed_kmh - 10.0 * delta)
 
@@ -285,7 +320,7 @@ func update(delta: float) -> void:
 	if state == State.PARKED or state == State.LANDED:
 		var current_airport: Dictionary = world.airports[airport_index]
 		var coords: Vector2 = world.runway_coordinates(position_km, current_airport)
-		if speed_kmh > 68.0 and target_vs > 0.4:
+		if speed_kmh > 68.0 and target_vs > 0.4 and departure_authorized:
 			state = State.FLYING
 			wheel_brakes_applied = false
 			# Collision grace only protects against numerical re-contact with the
@@ -293,6 +328,8 @@ func update(delta: float) -> void:
 			takeoff_grace_remaining = TAKEOFF_CONTACT_GRACE_SECONDS
 			_show_message("Взлёт выполнен", 3.0, "")
 		else:
+			if speed_kmh > 68.0 and target_vs > 0.4 and not departure_authorized and message != DEPARTURE_BLOCKED_MESSAGE:
+				_show_message(DEPARTURE_BLOCKED_MESSAGE, 5.0, "", true)
 			next_altitude = 0.0
 			vertical_speed_mps = 0.0
 			if abs(coords.y) > FlightWorldScript.RUNWAY_WIDTH_KM * 0.5 or abs(coords.x) > FlightWorldScript.RUNWAY_LENGTH_KM * 0.5:
@@ -378,9 +415,27 @@ func _update_ground_roll(delta: float) -> void:
 	if absf(coords.x) > half_length or absf(coords.y) > half_width:
 		_crash("Выкатились за пределы ВПП «%s»: скорость %.1f км/ч" % [airport.name, speed_kmh])
 		return
+	# A runway touch does not complete the flight. While there is still forward
+	# speed, the pilot may add power and rotate for a touch-and-go/go-around.
+	var pitch_command := clampf(yoke.y * 18.0, -10.0, 10.0)
+	pitch_deg = move_toward(pitch_deg, pitch_command, delta * 30.0 * elevator_authority())
+	var lift_factor := clampf((speed_kmh - 55.0) / 75.0, 0.0, 1.0)
+	var takeoff_vertical_speed := minf(
+		maxf(0.0, pitch_deg * 0.55 * lift_factor * altitude_power_factor()),
+		max_available_climb_mps()
+	)
+	if departure_authorized and engine_running and speed_kmh > 68.0 and takeoff_vertical_speed > 0.4:
+		state = State.FLYING
+		vertical_speed_mps = takeoff_vertical_speed
+		wheel_brakes_applied = false
+		takeoff_grace_remaining = TAKEOFF_CONTACT_GRACE_SECONDS
+		_update_angle_of_attack()
+		_show_message("Уход на второй круг", 3.0, "")
+		return
 	if speed_kmh <= 0.05:
 		speed_kmh = 0.0
 		state = State.LANDED
+		departure_authorized = false
 		_show_message("Успешная посадка в аэропорту «%s»" % airport.name, -1.0)
 
 func _move_position(displacement_km: Vector2) -> void:
@@ -420,16 +475,17 @@ func _landing_failure_reason() -> String:
 
 func _crash(reason: String) -> void:
 	state = State.CRASHED
-	_show_message(reason, -1.0)
+	_show_message(reason, -1.0, "", true)
 
 func _ready_message() -> String:
 	var airport: Dictionary = world.airports[airport_index]
 	return "Готов к взлёту с аэродрома «%s»" % airport.name
 
-func _show_message(text: String, duration: float = -1.0, after_timeout: String = "") -> void:
+func _show_message(text: String, duration: float = -1.0, after_timeout: String = "", is_error: bool = false) -> void:
 	message = text
 	message_time_remaining = duration
 	message_after_timeout = after_timeout
+	message_is_error = is_error
 
 func _update_message(delta: float) -> void:
 	if message_time_remaining < 0.0:
@@ -439,6 +495,7 @@ func _update_message(delta: float) -> void:
 		message = message_after_timeout
 		message_after_timeout = ""
 		message_time_remaining = -1.0
+		message_is_error = false
 
 func angle_difference_deg(a: float, b: float) -> float:
 	return abs(fposmod(a - b + 180.0, 360.0) - 180.0)
@@ -497,6 +554,23 @@ func _update_airframe_stress(delta: float) -> void:
 	if airframe_stress >= MAX_AIRFRAME_STRESS:
 		_crash("Разрушение планера из-за превышения допустимой скорости (%.1f км/ч)" % speed_kmh)
 
+func airframe_wear_per_hour() -> float:
+	if state != State.FLYING:
+		return 0.0
+	var speed_ratio := maxf(0.0, (speed_kmh - VNO_KMH) / (VNE_KMH - VNO_KMH))
+	var speed_wear := OVERSPEED_WEAR_PER_HOUR * speed_ratio * speed_ratio
+	# World storm intensity is strongest at a rendered cell's core, so the
+	# quadratic term makes the permanent damage rise naturally towards it.
+	var storm_wear := STORM_WEAR_PER_HOUR * storm_intensity * storm_intensity
+	return NORMAL_WEAR_PER_HOUR + speed_wear + storm_wear
+
+func _update_airframe_condition(delta: float) -> void:
+	if state != State.FLYING:
+		return
+	airframe_condition = maxf(0.0, airframe_condition - airframe_wear_per_hour() * delta / 3600.0)
+	if airframe_condition <= 0.0:
+		_crash("Самолёт разрушился в воздухе: конструкция полностью изношена")
+
 func fuel_flow_lpm() -> float:
 	if not engine_running or fuel_l <= 0.0 or state == State.CRASHED:
 		return 0.0
@@ -525,10 +599,11 @@ func fuel_flow_lpm() -> float:
 
 func estimated_range_km() -> float:
 	var flow_lpm := fuel_flow_lpm()
-	if flow_lpm <= 0.0001 or speed_kmh <= 0.0:
+	var ground_speed := ground_speed_kmh()
+	if flow_lpm <= 0.0001 or ground_speed <= 0.0:
 		return 0.0
 	var flight_minutes := fuel_l / flow_lpm
-	return flight_minutes * speed_kmh / 60.0
+	return flight_minutes * ground_speed / 60.0
 
 func altitude_fuel_factor() -> float:
 	var altitude := clampf(altitude_m, 0.0, 5000.0)

@@ -84,5 +84,33 @@ func _run() -> void:
 	cache.invalidate()
 	cache.update_cache(scene.world, scene.flight, 11.0)
 	check(cache.refresh_count == count_before + 3, "Reopening scope must allow an immediate refresh")
-	print("Radar switching, pause, map preservation and 1 Hz echo cache: ","FAIL" if failed else "OK")
+	scene.map_center = Vector2(96, 96)
+	for layer in scene.world.wind_layers:
+		layer.from_deg = 270.0
+		layer.speed_kmh = 20.0
+	scene.wind_overlay_index = 1
+	check(scene._wind_arrow_description() == "от 270° • 20 км/ч • 1500 м", "Wind description must show FROM direction, speed and selected altitude")
+	for zoom in [1.0, 2.0, 4.0, 8.0, 12.0, 16.0, 20.0, 24.0]:
+		scene.map_zoom = zoom
+		var centers: PackedVector2Array = scene._wind_arrow_centers(scene.map_rect())
+		check(centers.size() <= 30, "Every zoom must keep the wind grid sparse")
+		if not centers.is_empty():
+			var arrow_center: Vector2 = centers[0]
+			check(scene._wind_arrow_hovered(arrow_center), "Visible wind arrows must be hoverable at every map scale")
+			check(not scene._wind_arrow_hovered(arrow_center + Vector2(0, 24)), "Empty space must not trigger wind details")
+		check(not scene._wind_arrow_hovered(scene.map_rect().get_center()), "The central exclusion area must not expose hidden arrow tooltips")
+		for map_position in [Vector2.ZERO, Vector2(200, 200), Vector2(83.7, 121.3)]:
+			scene.map_center = map_position
+			var moved_centers: PackedVector2Array = scene._wind_arrow_centers(scene.map_rect())
+			check(moved_centers.size() <= 30, "Panning must keep arrows sparse; central arrows may all be hidden")
+			for center in moved_centers:
+				check(scene.map_rect().grow(-19.0).has_point(center), "Wind arrows must stay inside the map")
+				check(center.distance_to(scene.map_rect().get_center()) > minf(scene.map_rect().size.x, scene.map_rect().size.y) * 0.25, "Wind arrows inside the central circle must be hidden")
+		scene.map_center = Vector2(96, 96)
+	scene.wind_overlay_index = scene.WIND_OVERLAY_ALTITUDES.size()
+	scene.flight.altitude_m = 937.0
+	check(scene._wind_arrow_description().ends_with("937 м"), "Current-altitude layer must show actual aircraft altitude")
+	scene.large_weather_radar = true
+	check(not scene._wind_arrow_hovered(scene.map_rect().get_center()), "Hidden map arrows must not be interactive on radar")
+	print("Radar switching, wind hover, map preservation and 1 Hz echo cache: ","FAIL" if failed else "OK")
 	quit(1 if failed else 0)

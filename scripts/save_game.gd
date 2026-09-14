@@ -132,12 +132,16 @@ static func valid(data: Variant) -> bool:
 				return false
 	if not data.economy.has_all(["money", "hunger", "fatigue", "inventory", "carried_item", "offers_by_airport", "fuel_airports", "food_airports", "hotel_airports"]):
 		return false
+	if data.economy.has("repair_airports") and (not data.economy.repair_airports is Array or data.economy.repair_airports.size() != 3):
+		return false
 	if not data.economy.inventory is Array or data.economy.inventory.size() != 6:
 		return false
 	var time_state_valid := true
 	if data.version == VERSION:
 		time_state_valid = data.ui.time_scale_index is int and data.ui.time_scale_index in range(5) and data.ui.cabin_sleeping is bool and data.ui.cabin_sleep_progress_seconds is float and data.ui.cabin_sleep_progress_seconds >= 0.0 and data.ui.cabin_sleep_progress_seconds < 1200.0
-	return data.flight.get("position_km") is Vector2 and data.flight.get("state") in range(5) and data.ui.view_mode in range(9) and data.ui.radar_range_index in range(4) and data.ui.cabin_terrain_zoom in range(4) and time_state_valid
+	var condition: Variant = data.flight.get("airframe_condition", 100.0)
+	var condition_valid: bool = condition is float and condition >= 0.0 and condition <= 100.0
+	return data.flight.get("position_km") is Vector2 and data.flight.get("state") in range(5) and data.ui.view_mode in range(10) and data.ui.radar_range_index in range(4) and data.ui.cabin_terrain_zoom in range(4) and time_state_valid and condition_valid
 
 static func read_slot(path: String = PATH) -> Dictionary:
 	if OS.has_feature("web") and path == PATH:
@@ -188,13 +192,21 @@ static func restore(game, data: Dictionary) -> bool:
 	new_world.weather_time_seconds = data.world.time
 	var new_flight = game.FlightModelScript.new(new_world)
 	var new_economy = game.EconomyScript.new()
-	if not new_economy.restore(data.economy):
+	if not new_economy.restore(data.economy, new_world):
 		return false
 	# Reject incomplete/incompatible flight data before changing the live game.
+	var had_departure_authorization: bool = data.flight.has("departure_authorized")
 	for field in flight_fields(new_flight):
-		if not data.flight.has(field) or typeof(data.flight[field]) != typeof(new_flight.get(field)):
+		if not data.flight.has(field):
+			# Additive migration for saves written before permanent wear existed.
+			if field in ["airframe_condition", "departure_authorized", "message_is_error"]:
+				continue
+			return false
+		if typeof(data.flight[field]) != typeof(new_flight.get(field)):
 			return false
 		new_flight.set(field, data.flight[field])
+	if not had_departure_authorization and new_flight.state == game.FlightModelScript.State.LANDED:
+		new_flight.departure_authorized = false
 	new_flight.turbulence_rng.state = data.rng_state
 	for field in UI_FIELDS:
 		if not data.ui.has(field):

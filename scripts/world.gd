@@ -47,9 +47,7 @@ func _init(requested_seed: int = 0) -> void:
 func _generate_weather() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value + 44771
-	wind_layers.clear()
-	for altitude_m in [0.0, 1500.0, 3000.0, 5000.0]:
-		wind_layers.append({"altitude_m": altitude_m, "from_deg": rng.randf_range(0.0, 360.0), "speed_kmh": rng.randf_range(8.0, 32.0)})
+	_generate_wind(rng)
 	storms.clear()
 	for region_y in REGIONS_PER_AXIS:
 		for region_x in REGIONS_PER_AXIS:
@@ -74,6 +72,16 @@ func _generate_weather() -> void:
 					"drift_kmh": heading_vector(drift_heading) * rng.randf_range(8.0, 18.0),
 					"radar_lobes": radar_lobes,
 				})
+
+func refresh_wind() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	_generate_wind(rng)
+
+func _generate_wind(rng: RandomNumberGenerator) -> void:
+	wind_layers.clear()
+	for altitude_m in [0.0, 1500.0, 3000.0, 5000.0]:
+		wind_layers.append({"altitude_m": altitude_m, "from_deg": rng.randf_range(0.0, 360.0), "speed_kmh": rng.randf_range(8.0, 32.0)})
 
 func update_weather(delta: float) -> void:
 	weather_time_seconds += delta

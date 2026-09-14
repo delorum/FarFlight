@@ -43,6 +43,7 @@ func _run() -> void:
 	game.flight.throttle = 0.87
 	game.flight.engine_running = true
 	game.flight.fuel_l = 23.75
+	game.flight.airframe_condition = 73.5
 	game.receiver_frequencies = [333,377]
 	game.world.weather_time_seconds = 123.45
 	game.clock_seconds = 43777.0
@@ -86,6 +87,7 @@ func _run() -> void:
 	loaded.set_process(false)
 	check(Save.restore(loaded,data), "Full snapshot must restore")
 	check(loaded.flight.fuel_l == 23.75 and loaded.flight.engine_running, "Fuel and engine must survive loading")
+	check(loaded.flight.airframe_condition == 73.5 and loaded.economy.repair_airports == game.economy.repair_airports, "Airframe condition and repair price locations must survive loading")
 	check(loaded.flight.position_km == Vector2(50,50) and loaded.flight.altitude_m == 2500.0, "Mid-flight position and altitude must survive loading")
 	check(loaded.world.beacons == game.world.beacons and loaded.world.storms == game.world.storms, "Generated frequencies and storm state must survive loading")
 	check(loaded.measurement_lines == game.measurement_lines and loaded.radar_measurement_lines == game.radar_measurement_lines, "Both independent annotation sets must survive loading")
@@ -95,6 +97,16 @@ func _run() -> void:
 	check(loaded.clock_seconds == clock_before and loaded.receiver_frequencies == [333,377], "Time and radio tuning must survive loading")
 	check(loaded.time_scale_index == 3 and loaded.cabin_sleeping and loaded.cabin_sleep_progress_seconds == 777.0, "Time scale and continuous bed rest must survive loading")
 	check(loaded.economy.money == 347 and loaded.economy.hunger == 4 and loaded.economy.inventory[2].type == "food", "Money, needs and cargo must survive loading")
+	var pre_wear_save := data.duplicate(true)
+	pre_wear_save.flight.erase("airframe_condition")
+	pre_wear_save.flight.erase("departure_authorized")
+	pre_wear_save.flight.erase("message_is_error")
+	pre_wear_save.economy.erase("repair_airports")
+	var migrated: Control = load("res://scenes/main.tscn").instantiate()
+	root.add_child(migrated)
+	migrated.set_process(false)
+	check(Save.valid(pre_wear_save) and Save.restore(migrated, pre_wear_save), "Saves from before airframe wear must migrate")
+	check(migrated.flight.airframe_condition == 100.0 and migrated.economy.repair_airports.size() == 3, "Migrated saves must start undamaged and deterministically add repair shops")
 	for frame in 60:
 		game.flight.update(1.0/60.0)
 		loaded.flight.update(1.0/60.0)

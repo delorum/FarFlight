@@ -97,6 +97,46 @@ static func draw_large(canvas: CanvasItem, rect: Rect2, world, flight, echoes: T
 		canvas.draw_string(font,legend+Vector2(18,index*27),["Слабые осадки","Сильные осадки","Грозовое ядро"][index],HORIZONTAL_ALIGNMENT_LEFT,169,12,text_color)
 	canvas.draw_string(font,Vector2(rect.position.x+20,rect.end.y-16),"ЛКМ: точка / линия • тянуть точку: изменить • ПКМ: отменить / стереть • [B]: карта",HORIZONTAL_ALIGNMENT_LEFT,rect.size.x-40,12,text_color)
 
+static func draw_storm_motion(canvas: CanvasItem, rect: Rect2, world, flight, mouse: Vector2, range_km: float) -> void:
+	if not flight.engine_running:
+		return
+	var center := scope_center(rect)
+	var radius := scope_radius(rect)
+	if not rect.has_point(mouse) or mouse.distance_to(center) > radius:
+		return
+	var point: Vector2 = flight.position_km + ((mouse - center) * range_km / radius).rotated(deg_to_rad(flight.heading_deg))
+	var selected: Dictionary = {}
+	var strongest := 0.0
+	for storm in world.storms:
+		var storm_center: Vector2 = world.storm_position(storm)
+		for lobe in world.storm_lobes(storm):
+			var lobe_radius := float(storm.radius_km) * float(lobe.radius_scale)
+			if lobe_radius <= 0.0:
+				continue
+			var ratio := point.distance_to(storm_center + Vector2(lobe.offset_km)) / lobe_radius
+			var strength := float(storm.intensity) * float(lobe.strength) * (1.0 - ratio * ratio)
+			if ratio < 1.0 and strength > strongest:
+				strongest = strength
+				selected = storm
+	if selected.is_empty():
+		return
+	var velocity := Vector2(selected.drift_kmh)
+	var direction := velocity.normalized().rotated(-deg_to_rad(flight.heading_deg))
+	var origin := center + (mouse - center).limit_length(maxf(0.0, radius - 48.0))
+	var tip := origin + direction * 34.0
+	var color := Color("b8e3e7")
+	if velocity.length_squared() > 0.000001:
+		canvas.draw_line(origin, tip, color, 2.0, true)
+		for angle in [-0.55, 0.55]:
+			canvas.draw_line(tip, tip - direction.rotated(angle) * 8.0, color, 2.0, true)
+	var label := "%03d° • %.0f км/ч" % [roundi(world.vector_heading(velocity)) % 360, velocity.length()]
+	var label_size := ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12)
+	var label_position := origin + Vector2(12, -17)
+	label_position.x = clampf(label_position.x, rect.position.x + 8, rect.end.x - label_size.x - 8)
+	label_position.y = clampf(label_position.y, rect.position.y + 48, rect.end.y - 32)
+	canvas.draw_rect(Rect2(label_position + Vector2(-4, -13), Vector2(label_size.x + 8, 19)), Color("071012"))
+	canvas.draw_string(ThemeDB.fallback_font, label_position, label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, color)
+
 static func draw_map_button(canvas: CanvasItem, rect: Rect2) -> void:
 	# A paper-map icon, deliberately without aircraft position or live navigation.
 	canvas.draw_rect(rect,Color("d7d0ad"))

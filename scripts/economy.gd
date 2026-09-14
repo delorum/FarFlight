@@ -10,11 +10,12 @@ const FOOD_PRICE := 12
 const HOTEL_PRICE := 18
 const HOTEL_REST_SECONDS := 20.0 * 60.0
 const HOTEL_REST_PRICE := HOTEL_PRICE / 3
+const SERVICE_PRICE_MULTIPLIERS := [0.7, 1.0, 1.3]
+const REPAIR_PRICE_PER_POINT := 2.0
 const PARKING_PRICE := 5
 const BASE_REWARD_50_KM := 60
 const URGENT_MULTIPLIER := 2
 const DEADLINE_SPEED_KMH := 130.0
-const GOAL_COINS := 900
 
 var money := 100
 var hunger := 6
@@ -27,6 +28,7 @@ var offers_by_airport: Dictionary = {}
 var fuel_airports: Array[int] = []
 var food_airports: Array[int] = []
 var hotel_airports: Array[int] = []
+var repair_airports: Array[int] = []
 var last_landed_airport := -1
 var next_parcel_id := 1
 var game_over_reason := ""
@@ -43,7 +45,15 @@ func configure_world(world) -> void:
 	fuel_airports = _pick_three(rng, world.airports.size())
 	food_airports = _pick_three(rng, world.airports.size())
 	hotel_airports = _pick_three(rng, world.airports.size())
+	repair_airports = _generate_repair_airports(world)
 	arrive_at_airport(0, world)
+
+func _generate_repair_airports(world) -> Array[int]:
+	# A separate seed keeps the established fuel/food/hotel distribution stable
+	# when repair shops are added to an existing world or save.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(world.seed_value) ^ 0x7A11F
+	return _pick_three(rng, world.airports.size())
 
 func _pick_three(rng: RandomNumberGenerator, count: int) -> Array[int]:
 	var pool: Array[int] = []
@@ -67,11 +77,51 @@ func services_at(airport_index: int) -> Array[String]:
 		result.append("еда")
 	if airport_index in hotel_airports:
 		result.append("гостиница")
+	if airport_index in repair_airports:
+		result.append("ремонт")
 	return result
+
+func _service_price_multiplier(service_airports: Array[int], airport_index: int) -> float:
+	# The shuffled array order is part of the saved world: cheap, regular, expensive.
+	var tier := service_airports.find(airport_index)
+	if tier < 0 or tier >= SERVICE_PRICE_MULTIPLIERS.size():
+		return 1.0
+	return float(SERVICE_PRICE_MULTIPLIERS[tier])
+
+func fuel_price_per_l(airport_index: int) -> float:
+	return float(FUEL_PRICE_PER_L) * _service_price_multiplier(fuel_airports, airport_index)
+
+func fuel_purchase_cost(litres: float, airport_index: int) -> int:
+	return ceili(maxf(0.0, litres) * fuel_price_per_l(airport_index))
+
+func food_price(airport_index: int) -> int:
+	return roundi(float(FOOD_PRICE) * _service_price_multiplier(food_airports, airport_index))
+
+func hotel_rest_price(airport_index: int) -> int:
+	return roundi(float(HOTEL_REST_PRICE) * _service_price_multiplier(hotel_airports, airport_index))
+
+func repair_price_per_point(airport_index: int) -> float:
+	return REPAIR_PRICE_PER_POINT * _service_price_multiplier(repair_airports, airport_index)
+
+func repair_cost(condition_points: float, airport_index: int) -> int:
+	return ceili(maxf(0.0, condition_points) * repair_price_per_point(airport_index))
+
+func buy_repair(requested_points: float, airport_index: int) -> float:
+	var price_per_point := repair_price_per_point(airport_index)
+	var affordable := floorf(float(money) / price_per_point * 10.0 + 0.0001) / 10.0
+	var repaired := minf(maxf(0.0, requested_points), affordable)
+	if repaired <= 0.0:
+		return 0.0
+	money -= repair_cost(repaired, airport_index)
+	return repaired
 
 func arrive_at_airport(airport_index: int, world) -> void:
 	if airport_index == last_landed_airport:
 		return
+	# Initial setup keeps the seeded weather; subsequent visits use the same
+	# different-airport rule as mail offers, including a return after another stop.
+	if last_landed_airport >= 0:
+		world.refresh_wind()
 	last_landed_airport = airport_index
 	offers_by_airport[airport_index] = _generate_offers(airport_index, world)
 
@@ -157,10 +207,11 @@ func deliver_carried(airport_index: int) -> Dictionary:
 	carried_item = {}
 	return result
 
-func buy_food() -> bool:
-	if money < FOOD_PRICE or not carried_item.is_empty():
+func buy_food(airport_index: int = -1) -> bool:
+	var price := food_price(airport_index)
+	if money < price or not carried_item.is_empty():
 		return false
-	money -= FOOD_PRICE
+	money -= price
 	carried_item = {"type": "food"}
 	return true
 
@@ -171,17 +222,20 @@ func buy_canister() -> bool:
 	carried_item = {"type": "canister", "fuel_l": 0}
 	return true
 
-func fill_carried_canister(litres: float) -> float:
+func fill_carried_canister(litres: float, airport_index: int = -1) -> float:
 	if carried_item.get("type", "") != "canister":
 		return 0.0
+	var price_per_l := fuel_price_per_l(airport_index)
 	var current: float = float(carried_item.get("fuel_l", 0.0))
 	var room: float = CANISTER_CAPACITY_L - current
-	var affordable: float = float(money) / FUEL_PRICE_PER_L
+	# Purchases are offered in tenths of a litre, so do not return a fraction
+	# which the canister display would then round upward for free.
+	var affordable: float = floorf(float(money) / price_per_l * 10.0 + 0.0001) / 10.0
 	var limit: float = minf(room, affordable)
 	var requested: float = clampf(litres, 0.0, limit)
 	var bought: float = limit if limit <= litres + 0.05001 else floorf(requested * 10.0 + 0.0001) / 10.0
 	carried_item.fuel_l = snappedf(current + bought, 0.1)
-	money -= ceili(bought * FUEL_PRICE_PER_L)
+	money -= fuel_purchase_cost(bought, airport_index)
 	return bought
 
 func sell_carried_canister() -> int:
@@ -217,10 +271,11 @@ func pay_parking() -> bool:
 	money -= PARKING_PRICE
 	return true
 
-func buy_hotel_rest() -> bool:
-	if money < HOTEL_REST_PRICE or fatigue >= NEED_SEGMENTS:
+func buy_hotel_rest(airport_index: int = -1) -> bool:
+	var price := hotel_rest_price(airport_index)
+	if money < price or fatigue >= NEED_SEGMENTS:
 		return false
-	money -= HOTEL_REST_PRICE
+	money -= price
 	advance_time(HOTEL_REST_SECONDS, true)
 	if game_over_reason.is_empty():
 		fatigue = mini(NEED_SEGMENTS, fatigue + 1)
@@ -257,11 +312,12 @@ func snapshot() -> Dictionary:
 		"elapsed_seconds": elapsed_seconds, "need_accumulator_seconds": need_accumulator_seconds,
 		"inventory": inventory, "carried_item": carried_item, "offers_by_airport": offers_by_airport,
 		"fuel_airports": fuel_airports, "food_airports": food_airports, "hotel_airports": hotel_airports,
+		"repair_airports": repair_airports,
 		"last_landed_airport": last_landed_airport, "next_parcel_id": next_parcel_id,
 		"game_over_reason": game_over_reason,
 	}.duplicate(true)
 
-func restore(data: Dictionary) -> bool:
+func restore(data: Dictionary, world = null) -> bool:
 	if not data.has_all(["money", "hunger", "fatigue", "elapsed_seconds", "need_accumulator_seconds", "inventory", "carried_item", "offers_by_airport", "fuel_airports", "food_airports", "hotel_airports", "last_landed_airport", "next_parcel_id", "game_over_reason"]):
 		return false
 	if not data.inventory is Array or data.inventory.size() != INVENTORY_CAPACITY:
@@ -271,7 +327,12 @@ func restore(data: Dictionary) -> bool:
 	for item in data.inventory:
 		if not item is Dictionary:
 			return false
-	for service_key in ["fuel_airports", "food_airports", "hotel_airports"]:
+	var service_keys := ["fuel_airports", "food_airports", "hotel_airports"]
+	if data.has("repair_airports"):
+		service_keys.append("repair_airports")
+	elif world == null:
+		return false
+	for service_key in service_keys:
 		if not data[service_key] is Array or data[service_key].size() != 3:
 			return false
 		var seen := {}
@@ -294,6 +355,10 @@ func restore(data: Dictionary) -> bool:
 	fuel_airports.assign(data.fuel_airports)
 	food_airports.assign(data.food_airports)
 	hotel_airports.assign(data.hotel_airports)
+	if data.has("repair_airports"):
+		repair_airports.assign(data.repair_airports)
+	else:
+		repair_airports = _generate_repair_airports(world)
 	last_landed_airport = int(data.last_landed_airport)
 	next_parcel_id = int(data.next_parcel_id)
 	game_over_reason = String(data.game_over_reason)

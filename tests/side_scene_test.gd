@@ -62,7 +62,8 @@ func _run() -> void:
 			check(scene._cabin_player_position().is_equal_approx(expected), "Pilot must follow raised deck and ramp in both orientations")
 		check(scene.AircraftArt.cabin_floor_y(scene.AircraftArt.SEAT_X) == scene.AircraftArt.COCKPIT_FLOOR_Y, "Seat must be on raised deck")
 		check(scene.AircraftArt.cabin_floor_y(scene.AircraftArt.DOOR_X) == scene.AircraftArt.FLOOR_Y, "Cargo door must stay at original floor height")
-		var aft_point: Vector2 = scene._aircraft_point(Vector2(705,scene.AircraftArt.FLOOR_Y))
+		# Click just behind the cargo door without hitting the adjacent bed.
+		var aft_point: Vector2 = scene._aircraft_point(Vector2(675,scene.AircraftArt.FLOOR_Y))
 		scene._click_side_scene(aft_point)
 		check(scene.view_mode == scene.ViewMode.CABIN and is_equal_approx(scene.scene_player_x,aft_point.x), "Must walk behind cargo door without exiting")
 		scene._click_side_scene(scene._aircraft_point(Vector2(850,scene.AircraftArt.FLOOR_Y)))
