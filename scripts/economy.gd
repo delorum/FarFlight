@@ -271,11 +271,17 @@ func pay_parking() -> bool:
 	money -= PARKING_PRICE
 	return true
 
-func buy_hotel_rest(airport_index: int = -1) -> bool:
+func pay_hotel_rest(airport_index: int = -1) -> bool:
 	var price := hotel_rest_price(airport_index)
 	if money < price or fatigue >= NEED_SEGMENTS:
 		return false
 	money -= price
+	return true
+
+# Standalone economy API; the game session coordinates clocks and weather.
+func buy_hotel_rest(airport_index: int = -1) -> bool:
+	if not pay_hotel_rest(airport_index):
+		return false
 	advance_time(HOTEL_REST_SECONDS, true)
 	if game_over_reason.is_empty():
 		fatigue = mini(NEED_SEGMENTS, fatigue + 1)

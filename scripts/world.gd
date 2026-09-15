@@ -33,6 +33,20 @@ var wind_layers: Array[Dictionary] = []
 var storms: Array[Dictionary] = []
 var weather_time_seconds := 0.0
 
+# Explicit model snapshot. Runtime noise/cache objects never enter the save.
+func snapshot() -> Dictionary:
+	return {"seed": seed_value, "airports": airports, "beacons": beacons,
+		"wind_layers": wind_layers, "storms": storms, "time": weather_time_seconds}.duplicate(true)
+
+func restore_snapshot(data: Dictionary) -> void:
+	# SaveGame validates the schema and constructs this world using data.seed.
+	# Detach collections so simulation cannot mutate the source snapshot.
+	airports.assign(data.airports.duplicate(true))
+	beacons.assign(data.beacons.duplicate(true))
+	wind_layers.assign(data.wind_layers.duplicate(true))
+	storms.assign(data.storms.duplicate(true))
+	weather_time_seconds = data.time
+
 func _init(requested_seed: int = 0) -> void:
 	seed_value = requested_seed if requested_seed != 0 else randi_range(10000, 99999999)
 	noise.seed = seed_value

@@ -44,13 +44,7 @@ const UI_FIELDS := [
 ]
 
 static func flight_fields(flight) -> Dictionary:
-	var result := {}
-	for property in flight.get_property_list():
-		if int(property.usage) & PROPERTY_USAGE_SCRIPT_VARIABLE:
-			var value: Variant = flight.get(property.name)
-			if typeof(value) in [TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_VECTOR2]:
-				result[property.name] = value
-	return result
+	return flight.snapshot()
 
 static func capture(game) -> Dictionary:
 	var ui := {}
@@ -61,9 +55,7 @@ static func capture(game) -> Dictionary:
 	ui["player_aircraft_x"] = (game.scene_player_x - game._aircraft_origin().x) / game._aircraft_scale()
 	return {
 		"version": VERSION,
-		"world": {"seed": game.world.seed_value, "airports": game.world.airports,
-			"beacons": game.world.beacons, "wind_layers": game.world.wind_layers,
-			"storms": game.world.storms, "time": game.world.weather_time_seconds},
+		"world": game.world.snapshot(),
 		"flight": flight_fields(game.flight), "rng_state": game.flight.turbulence_rng.state,
 		"economy": game.economy.snapshot(),
 		"ui": ui,
@@ -188,34 +180,13 @@ static func restore(game, data: Dictionary) -> bool:
 	if not valid(data):
 		return false
 	var new_world = game.FlightWorldScript.new(data.world.seed)
-	new_world.airports.assign(data.world.airports)
-	new_world.beacons.assign(data.world.beacons)
-	new_world.wind_layers.assign(data.world.wind_layers)
-	new_world.storms.assign(data.world.storms)
-	new_world.weather_time_seconds = data.world.time
+	new_world.restore_snapshot(data.world)
 	var new_flight = game.FlightModelScript.new(new_world)
 	var new_economy = game.EconomyScript.new()
 	if not new_economy.restore(data.economy, new_world):
 		return false
-	# Reject incomplete/incompatible flight data before changing the live game.
-	var had_departure_authorization: bool = data.flight.has("departure_authorized")
-	var had_electrical_power: bool = data.flight.has("electrical_power")
-	for field in flight_fields(new_flight):
-		if not data.flight.has(field):
-			# Additive migration for saves written before permanent wear existed.
-			if field in ["airframe_condition", "departure_authorized", "message_is_error", "electrical_power"]:
-				continue
-			return false
-		if typeof(data.flight[field]) != typeof(new_flight.get(field)):
-			return false
-		new_flight.set(field, data.flight[field])
-	if not had_departure_authorization and new_flight.state == game.FlightModelScript.State.LANDED:
-		new_flight.departure_authorized = false
-	if not had_electrical_power:
-		# A running engine in an older save implies that its former combined
-		# engine/instrument switch was on.
-		new_flight.electrical_power = new_flight.engine_running
-	new_flight.turbulence_rng.state = data.rng_state
+	if not new_flight.restore_snapshot(data.flight, data.rng_state):
+		return false
 	for field in UI_FIELDS:
 		if not data.ui.has(field):
 			continue

@@ -63,6 +63,8 @@ var fuel_capacity_l := 40.0
 var electrical_power := false
 var engine_running := false
 var departure_authorized := true
+var prepared_airport_index := 0
+var prepared_reverse_direction := false
 var state := State.PARKED
 var airport_index := 0
 var message := "Самолёт подготовлен к вылету"
@@ -82,6 +84,91 @@ var storm_roll_target_deg := 0.0
 var storm_pitch_target_deg := 0.0
 var storm_wind_target_kmh := Vector2.ZERO
 var turbulence_rng := RandomNumberGenerator.new()
+
+# Explicit persisted contract: adding a runtime/cache field does not change saves.
+const SAVE_FIELDS := [
+	"position_km",
+	"position_integration_error_km",
+	"altitude_m",
+	"speed_kmh",
+	"heading_deg",
+	"throttle",
+	"yoke",
+	"pitch_deg",
+	"bank_deg",
+	"vertical_speed_mps",
+	"angle_of_attack_deg",
+	"stalled",
+	"stall_recovery_time",
+	"airframe_stress",
+	"airframe_condition",
+	"wheel_brakes_applied",
+	"fuel_l",
+	"fuel_capacity_l",
+	"electrical_power",
+	"engine_running",
+	"departure_authorized",
+	"state",
+	"airport_index",
+	"message",
+	"message_time_remaining",
+	"message_after_timeout",
+	"message_is_error",
+	"takeoff_grace_remaining",
+	"current_wind_kmh",
+	"storm_intensity",
+	"storm_vertical_flow_mps",
+	"storm_roll_bias_deg",
+	"storm_pitch_bias_deg",
+	"storm_wind_gust_kmh",
+	"storm_disturbance_timer",
+	"storm_vertical_target_mps",
+	"storm_roll_target_deg",
+	"storm_pitch_target_deg",
+	"storm_wind_target_kmh",
+	"prepared_airport_index",
+	"prepared_reverse_direction",
+]
+const OPTIONAL_SAVE_FIELDS := ["airframe_condition", "departure_authorized",
+	"message_is_error", "electrical_power", "prepared_airport_index", "prepared_reverse_direction"]
+
+func snapshot() -> Dictionary:
+	var result := {}
+	for field in SAVE_FIELDS:
+		result[field] = get(field)
+	return result
+
+func restore_snapshot(data: Dictionary, rng_state: int) -> bool:
+	# Validate the complete snapshot before assigning anything.
+	for field in SAVE_FIELDS:
+		if not data.has(field):
+			if field in OPTIONAL_SAVE_FIELDS:
+				continue
+			return false
+		if typeof(data[field]) != typeof(get(field)):
+			return false
+	if data.get("prepared_airport_index", 0) not in range(world.airports.size()):
+		return false
+	for field in SAVE_FIELDS:
+		if data.has(field):
+			set(field, data[field])
+	if not data.has("departure_authorized") and state == State.LANDED:
+		departure_authorized = false
+	if not data.has("electrical_power"):
+		electrical_power = engine_running
+	if not data.has("prepared_airport_index"):
+		prepared_airport_index = airport_index
+	if not data.has("prepared_reverse_direction"):
+		var runway_heading := float(world.airports[prepared_airport_index].heading)
+		prepared_reverse_direction = absf(wrapf(heading_deg - runway_heading, -180.0, 180.0)) > 90.0
+	turbulence_rng.state = rng_state
+	return true
+
+func is_prepared_for(index: int, reverse_direction: bool) -> bool:
+	return departure_authorized and prepared_airport_index == index and prepared_reverse_direction == reverse_direction
+
+func prepared_heading_deg() -> float:
+	return fposmod(float(world.airports[prepared_airport_index].heading) + (180.0 if prepared_reverse_direction else 0.0), 360.0)
 
 func _init(flight_world) -> void:
 	world = flight_world
@@ -103,6 +190,8 @@ func ground_speed_kmh() -> float:
 
 func prepare_at_airport(index: int, reverse_direction: bool = false) -> void:
 	airport_index = index
+	prepared_airport_index = index
+	prepared_reverse_direction = reverse_direction
 	var airport: Dictionary = world.airports[index]
 	var departure_heading: float = fposmod(float(airport.heading) + (180.0 if reverse_direction else 0.0), 360.0)
 	position_km = Vector2(airport.position) - world.heading_vector(departure_heading) * 0.78
