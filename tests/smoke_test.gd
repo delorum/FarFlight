@@ -32,6 +32,7 @@ func _init() -> void:
 	flight.refuel()
 	assert(flight.message.begins_with("Самолёт заправлен"))
 	assert(not flight.engine_running)
+	flight.toggle_electrical_power()
 	flight.toggle_engine()
 	assert(flight.engine_running)
 	assert(is_equal_approx(flight.fuel_flow_lpm(), 0.10))
@@ -221,6 +222,7 @@ func _init() -> void:
 	assert(not flight.engine_running)
 	assert(flight.message == FlightModelScript.DEPARTURE_BLOCKED_MESSAGE)
 	flight.prepare_at_airport(flight.airport_index)
+	flight.toggle_electrical_power()
 	flight.toggle_engine()
 	flight.throttle = 1.0
 	flight.yoke.y = 0.55

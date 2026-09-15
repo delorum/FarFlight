@@ -108,6 +108,14 @@ func _run() -> void:
 				check(center.distance_to(scene.map_rect().get_center()) > minf(scene.map_rect().size.x, scene.map_rect().size.y) * 0.25, "Wind arrows inside the central circle must be hidden")
 		scene.map_center = Vector2(96, 96)
 	scene.wind_overlay_index = scene.WIND_OVERLAY_ALTITUDES.size()
+	var radar_rect: Rect2 = scene.map_rect()
+	var label_size := Vector2(94, 14)
+	for direction in [Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN]:
+		var origin := radar_rect.get_center()
+		var tip: Vector2 = origin + Vector2(direction) * 34.0
+		var motion_label: Rect2 = scene.WeatherRadarArt.storm_motion_label_rect(radar_rect, origin, tip, label_size)
+		check(motion_label.has_area() and radar_rect.encloses(motion_label), "Storm-motion label must stay inside the radar")
+		check(not motion_label.intersects(Rect2(origin.min(tip), (tip-origin).abs()).grow(6.0)), "Storm-motion label must never cover its arrow")
 	scene.flight.altitude_m = 937.0
 	check(scene._wind_arrow_description().ends_with("937 м"), "Current-altitude layer must show actual aircraft altitude")
 	scene.large_weather_radar = true

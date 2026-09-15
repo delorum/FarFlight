@@ -25,6 +25,22 @@ func _run() -> void:
 	check(not parked_airport_view.is_empty() and float(parked_airport_view.start_m) <= 0.0 and float(parked_airport_view.end_m) >= 0.0, "Parked side view must contain the runway beneath the aircraft")
 	var runway_start_before: float = float(parked_airport_view.runway_start_m)
 	var airport_centre_before: float = float(parked_airport_view.centre_m)
+	# A stopped crosswind landing may retain a crabbed nose heading. The ground
+	# side view must nevertheless follow the runway axis instead of slicing its
+	# 50 m width diagonally and rendering a detached short strip.
+	var parked_airport: Dictionary = scene.world.airports[scene.flight.airport_index]
+	var parked_runway_direction: Vector2 = scene.world.heading_vector(float(parked_airport.heading))
+	scene.flight.position_km = Vector2(parked_airport.position)
+	scene.flight.heading_deg = float(parked_airport.heading) + 12.0
+	scene.flight.state = scene.FlightModelScript.State.LANDED
+	var crabbed_ground_direction: Vector2 = scene._cabin_ground_direction()
+	check(absf(crabbed_ground_direction.cross(parked_runway_direction)) < 0.0001, "A landed cabin view must align with the runway despite a residual crab angle")
+	var crabbed_airport_view: Dictionary = scene._cabin_visible_airport()
+	check(float(crabbed_airport_view.start_m) <= -249.0 and float(crabbed_airport_view.end_m) >= 249.0, "The runway beneath a stopped aircraft must fill the visible 500 m span")
+	scene.flight.prepare_at_airport(0)
+	parked_airport_view = scene._cabin_visible_airport()
+	runway_start_before = float(parked_airport_view.runway_start_m)
+	airport_centre_before = float(parked_airport_view.centre_m)
 	scene.flight.position_km += scene._cabin_ground_direction() * 0.05
 	var moving_airport_view: Dictionary = scene._cabin_visible_airport()
 	check(absf(float(moving_airport_view.runway_start_m) - (runway_start_before - 50.0)) < 0.1, "Runway markings must move backwards with the aircraft")

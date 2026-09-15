@@ -34,6 +34,7 @@ const VX_KMH := 130.0
 const VY_KMH := 130.0
 const TAKEOFF_CONTACT_GRACE_SECONDS := 0.45
 const DEPARTURE_BLOCKED_MESSAGE := "Запуск и взлёт запрещены: оплатите подготовку и выберите полосу в лётной службе"
+const POWER_REQUIRED_MESSAGE := "Запуск двигателя невозможен: включите питание"
 
 enum State { PARKED, FLYING, ROLLING, LANDED, CRASHED }
 
@@ -59,6 +60,7 @@ var airframe_condition := MAX_AIRFRAME_CONDITION
 var wheel_brakes_applied := false
 var fuel_l := 40.0
 var fuel_capacity_l := 40.0
+var electrical_power := false
 var engine_running := false
 var departure_authorized := true
 var state := State.PARKED
@@ -89,7 +91,7 @@ func _init(flight_world) -> void:
 func radio_height_m() -> float:
 	# Simplified downward-looking instrument, not a forward terrain warning.
 	# Negative means no reading (unpowered or above its measuring range).
-	if not engine_running:
+	if not electrical_power:
 		return -1.0
 	var height_m := maxf(0.0, altitude_m - world.height_at(position_km))
 	return height_m if height_m <= RADIO_ALTIMETER_MAX_HEIGHT_M else -1.0
@@ -119,6 +121,7 @@ func prepare_at_airport(index: int, reverse_direction: bool = false) -> void:
 	stall_recovery_time = 0.0
 	airframe_stress = 0.0
 	wheel_brakes_applied = false
+	electrical_power = false
 	engine_running = false
 	storm_vertical_flow_mps = 0.0
 	storm_roll_bias_deg = 0.0
@@ -168,6 +171,9 @@ func refuel() -> void:
 func toggle_engine() -> void:
 	if state == State.CRASHED:
 		return
+	if not engine_running and not electrical_power:
+		_show_message(POWER_REQUIRED_MESSAGE, 5.0, "", true)
+		return
 	if not engine_running and not departure_authorized:
 		_show_message(DEPARTURE_BLOCKED_MESSAGE, 5.0, "", true)
 		return
@@ -175,6 +181,12 @@ func toggle_engine() -> void:
 	if not engine_running and state in [State.PARKED, State.LANDED]:
 		departure_authorized = false
 	_show_message("Двигатель запущен" if engine_running else "Двигатель остановлен", 3.0, "")
+
+func toggle_electrical_power() -> void:
+	if state == State.CRASHED:
+		return
+	electrical_power = not electrical_power
+	_show_message("Питание включено" if electrical_power else "Питание выключено", 3.0, "")
 
 func leave_cockpit_on_ground() -> void:
 	if state not in [State.PARKED, State.LANDED, State.ROLLING]:

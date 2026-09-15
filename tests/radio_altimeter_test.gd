@@ -15,8 +15,8 @@ func _initialize() -> void:
 func _run() -> void:
 	var world = WorldScript.new(424242)
 	var flight = FlightScript.new(world)
-	check(flight.radio_height_m() < 0.0, "Radio altimeter must be off with engine stopped")
-	flight.engine_running = true
+	check(flight.radio_height_m() < 0.0, "Radio altimeter must be off without electrical power")
+	flight.electrical_power = true
 	check(is_zero_approx(flight.radio_height_m()), "Runway reading must be zero")
 	flight.position_km = Vector2(50, 50)
 	var terrain: float = world.height_at(flight.position_km)
@@ -34,8 +34,8 @@ func _run() -> void:
 		var expected := maxf(0.0, 700.0 - world.height_at(point))
 		check(is_equal_approx(flight.radio_height_m(), expected), "Moving must immediately update clearance without changing absolute altitude")
 	flight.engine_running = false
-	check(flight.radio_height_m() < 0.0, "Stopping engine must remove the reading")
-	flight.engine_running = true
-	check(flight.radio_height_m() >= 0.0, "Restarting engine must restore the reading")
+	check(flight.radio_height_m() >= 0.0, "Stopping the engine must not extinguish a powered radio altimeter")
+	flight.electrical_power = false
+	check(flight.radio_height_m() < 0.0, "Switching electrical power off must remove the reading")
 	print("Radio altimeter range, terrain tracking and power: ", "FAIL" if failed else "OK")
 	quit(1 if failed else 0)

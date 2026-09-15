@@ -41,6 +41,7 @@ func _run() -> void:
 	game.flight.altitude_m = 2500.0
 	game.flight.speed_kmh = 170.0
 	game.flight.throttle = 0.87
+	game.flight.electrical_power = true
 	game.flight.engine_running = true
 	game.flight.fuel_l = 23.75
 	game.flight.airframe_condition = 73.5
@@ -55,6 +56,7 @@ func _run() -> void:
 	game.pending_measure = Vector2(23,31)
 	game.radar_pending_measure = Vector2(49,51)
 	game.radar_range_index = 2
+	game.final_trajectory_visible = false
 	game._enter_cabin()
 	game.scene_player_x = game._aircraft_point(Vector2(650,0)).x
 	game.cabin_terrain_zoom = 2
@@ -86,11 +88,12 @@ func _run() -> void:
 	root.add_child(loaded)
 	loaded.set_process(false)
 	check(Save.restore(loaded,data), "Full snapshot must restore")
-	check(loaded.flight.fuel_l == 23.75 and loaded.flight.engine_running, "Fuel and engine must survive loading")
+	check(loaded.flight.fuel_l == 23.75 and loaded.flight.engine_running and loaded.flight.electrical_power, "Fuel, engine and electrical power must survive loading")
 	check(loaded.flight.airframe_condition == 73.5 and loaded.economy.repair_airports == game.economy.repair_airports, "Airframe condition and repair price locations must survive loading")
 	check(loaded.flight.position_km == Vector2(50,50) and loaded.flight.altitude_m == 2500.0, "Mid-flight position and altitude must survive loading")
 	check(loaded.world.beacons == game.world.beacons and loaded.world.storms == game.world.storms, "Generated frequencies and storm state must survive loading")
 	check(loaded.measurement_lines == game.measurement_lines and loaded.radar_measurement_lines == game.radar_measurement_lines, "Both independent annotation sets must survive loading")
+	check(not loaded.final_trajectory_visible, "The final-trajectory visibility choice must survive loading")
 	check(loaded.pending_measure == game.pending_measure and loaded.radar_pending_measure == game.radar_pending_measure, "Unfinished annotations must survive loading")
 	check(loaded.view_mode == game.ViewMode.CABIN and loaded.cabin_terrain_zoom == 2, "Side scene and zoom must survive loading")
 	check(is_equal_approx(loaded.scene_player_x,game.scene_player_x), "Cabin character position must survive loading")
@@ -101,12 +104,13 @@ func _run() -> void:
 	pre_wear_save.flight.erase("airframe_condition")
 	pre_wear_save.flight.erase("departure_authorized")
 	pre_wear_save.flight.erase("message_is_error")
+	pre_wear_save.flight.erase("electrical_power")
 	pre_wear_save.economy.erase("repair_airports")
 	var migrated: Control = load("res://scenes/main.tscn").instantiate()
 	root.add_child(migrated)
 	migrated.set_process(false)
 	check(Save.valid(pre_wear_save) and Save.restore(migrated, pre_wear_save), "Saves from before airframe wear must migrate")
-	check(migrated.flight.airframe_condition == 100.0 and migrated.economy.repair_airports.size() == 3, "Migrated saves must start undamaged and deterministically add repair shops")
+	check(migrated.flight.airframe_condition == 100.0 and migrated.economy.repair_airports.size() == 3 and migrated.flight.electrical_power, "Migrated saves must start undamaged, retain powered instruments for a running engine and deterministically add repair shops")
 	for frame in 60:
 		game.flight.update(1.0/60.0)
 		loaded.flight.update(1.0/60.0)

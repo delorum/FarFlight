@@ -39,9 +39,16 @@ func _run() -> void:
 	scene.flight.state = scene.FlightModelScript.State.FLYING
 	check(not scene._trajectory_overlay_visible(), "Live aircraft position must remain hidden after departure")
 	scene.trajectory_finished = true
-	check(scene._trajectory_overlay_visible(), "A finished flight must show its trajectory and final aircraft position")
+	check(not scene._trajectory_overlay_visible(), "A final trajectory must remain hidden while the aircraft is in flight")
+	scene.flight.state = scene.FlightModelScript.State.LANDED
+	check(scene._trajectory_overlay_visible(), "A finished flight must show its trajectory and final aircraft position on the ground")
+	button(scene.get_trajectory_button_rect().get_center(), true)
+	check(not scene._trajectory_overlay_visible(), "The final trajectory button must hide the completed route")
+	button(scene.get_trajectory_button_rect().get_center(), true)
+	check(scene._trajectory_overlay_visible(), "The final trajectory button must show the completed route again")
 	scene.trajectory_finished = false
 	scene.flight.state = scene.FlightModelScript.State.PARKED
+	scene.flight.electrical_power = true
 	scene.flight.engine_running = true
 	scene.flight.position_km = Vector2(50,50)
 	scene.flight.heading_deg = 0.0

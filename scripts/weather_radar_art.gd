@@ -68,7 +68,7 @@ static func draw_large(canvas: CanvasItem, rect: Rect2, world, flight, echoes: T
 	canvas.draw_rect(rect,Color("071012"))
 	canvas.draw_rect(rect,Color("6f7f85"),false,2)
 	canvas.draw_string(font,rect.position+Vector2(20,29),"МЕТЕОРАДАР [B]",HORIZONTAL_ALIGNMENT_LEFT,rect.size.x-40,19,text_color)
-	if not flight.engine_running:
+	if not flight.electrical_power:
 		return
 	var radius := scope_radius(rect)
 	var center := scope_center(rect)
@@ -98,7 +98,7 @@ static func draw_large(canvas: CanvasItem, rect: Rect2, world, flight, echoes: T
 	canvas.draw_string(font,Vector2(rect.position.x+20,rect.end.y-16),"ЛКМ: точка / линия • тянуть точку: изменить • ПКМ: отменить / стереть • [B]: карта",HORIZONTAL_ALIGNMENT_LEFT,rect.size.x-40,12,text_color)
 
 static func draw_storm_motion(canvas: CanvasItem, rect: Rect2, world, flight, mouse: Vector2, range_km: float) -> void:
-	if not flight.engine_running:
+	if not flight.electrical_power:
 		return
 	var center := scope_center(rect)
 	var radius := scope_radius(rect)
@@ -131,11 +131,28 @@ static func draw_storm_motion(canvas: CanvasItem, rect: Rect2, world, flight, mo
 			canvas.draw_line(tip, tip - direction.rotated(angle) * 8.0, color, 2.0, true)
 	var label := "%03d° • %.0f км/ч" % [roundi(world.vector_heading(velocity)) % 360, velocity.length()]
 	var label_size := ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12)
-	var label_position := origin + Vector2(12, -17)
-	label_position.x = clampf(label_position.x, rect.position.x + 8, rect.end.x - label_size.x - 8)
-	label_position.y = clampf(label_position.y, rect.position.y + 48, rect.end.y - 32)
-	canvas.draw_rect(Rect2(label_position + Vector2(-4, -13), Vector2(label_size.x + 8, 19)), Color("071012"))
-	canvas.draw_string(ThemeDB.fallback_font, label_position, label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, color)
+	var label_rect := storm_motion_label_rect(rect, origin, tip, label_size)
+	if label_rect.has_area():
+		canvas.draw_rect(label_rect, Color("091a1b"))
+		canvas.draw_string(ThemeDB.fallback_font, label_rect.position + Vector2(4, 13), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, color)
+
+static func storm_motion_label_rect(rect: Rect2, origin: Vector2, tip: Vector2, label_size: Vector2) -> Rect2:
+	var box_size := Vector2(label_size.x + 8.0, 19.0)
+	var segment := Rect2(origin.min(tip), (tip - origin).abs()).grow(6.0)
+	var safe := Rect2(rect.position + Vector2(8, 40), rect.size - Vector2(16, 72))
+	var center_y := clampf((origin.y + tip.y - box_size.y) * 0.5, safe.position.y, safe.end.y - box_size.y)
+	var center_x := clampf((origin.x + tip.x - box_size.x) * 0.5, safe.position.x, safe.end.x - box_size.x)
+	var left := Rect2(Vector2(segment.position.x - box_size.x - 4.0, center_y), box_size)
+	var right := Rect2(Vector2(segment.end.x + 4.0, center_y), box_size)
+	var above := Rect2(Vector2(center_x, segment.position.y - box_size.y - 4.0), box_size)
+	var below := Rect2(Vector2(center_x, segment.end.y + 4.0), box_size)
+	# Prefer the side behind the arrow. Every candidate is separated from the
+	# complete arrow bounding box, so its background can never cover the shaft.
+	var candidates := [left, right, above, below] if tip.x >= origin.x else [right, left, above, below]
+	for candidate in candidates:
+		if safe.encloses(candidate):
+			return candidate
+	return Rect2()
 
 static func draw_map_button(canvas: CanvasItem, rect: Rect2) -> void:
 	# A paper-map icon, deliberately without aircraft position or live navigation.

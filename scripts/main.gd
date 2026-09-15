@@ -71,6 +71,7 @@ var trip_elapsed_seconds := 0.0
 var flight_trajectory: Array[Dictionary] = []
 var trajectory_finished := false
 var trajectory_recording_started := false
+var final_trajectory_visible := true
 var trajectory_elapsed_seconds := 0.0
 var trajectory_distance_km := 0.0
 var trajectory_last_position := Vector2.ZERO
@@ -379,7 +380,7 @@ func _process(delta: float) -> void:
 	last_economy_flight_state = flight.state
 	# Match the small scope: heading and motion must be rendered every frame,
 	# independently of the once-per-second radio/ILS signal checks.
-	if large_weather_radar and view_mode == ViewMode.COCKPIT and flight.engine_running:
+	if large_weather_radar and view_mode == ViewMode.COCKPIT and flight.electrical_power:
 		_queue_map_redraw()
 	if cabin_terrain_zoom > 0:
 		if not _can_view_cabin_terrain():
@@ -535,11 +536,37 @@ func _prepare_from_operations(reverse_direction: bool) -> void:
 	scene_notice = "Самолёт подготовлен к вылету курсом %03d°" % roundi(flight.heading_deg)
 
 func _pay_and_prepare(reverse_direction: bool) -> void:
+	if _operations_runway_is_selected(reverse_direction):
+		scene_notice = "Самолёт уже подготовлен к вылету с ВПП %03d° • оплата не требуется" % _operations_runway_heading(reverse_direction)
+		return
 	if not economy.pay_parking():
-		scene_notice = "Не хватает денег на стоянку и подготовку"
+		scene_notice = "Не хватает денег на стоянку и подготовку • выбранная ВПП не изменена" if flight.departure_authorized else "Не хватает денег на стоянку и подготовку"
 		return
 	_prepare_from_operations(reverse_direction)
 	scene_notice += " • оплачено %d монет" % EconomyScript.PARKING_PRICE
+
+func _operations_runway_heading(reverse_direction: bool) -> int:
+	var airport: Dictionary = world.airports[flight.airport_index]
+	return (roundi(float(airport.heading)) + (180 if reverse_direction else 0)) % 360
+
+func _operations_runway_is_selected(reverse_direction: bool) -> bool:
+	if not flight.departure_authorized:
+		return false
+	var selected_heading := float(_operations_runway_heading(reverse_direction))
+	return absf(wrapf(flight.heading_deg - selected_heading, -180.0, 180.0)) < 0.5
+
+func _operations_status_text() -> String:
+	if not flight.departure_authorized:
+		return "СТАТУС: САМОЛЁТ НЕ ПОДГОТОВЛЕН К ВЫЛЕТУ"
+	return "СТАТУС: ПОДГОТОВЛЕН К ВЫЛЕТУ С ВПП %03d°" % roundi(flight.heading_deg)
+
+func _operations_runway_button_text(reverse_direction: bool) -> String:
+	var heading := _operations_runway_heading(reverse_direction)
+	if _operations_runway_is_selected(reverse_direction):
+		return "ПОДГОТОВЛЕНО • ВПП %03d° • БЕСПЛАТНО" % heading
+	if flight.departure_authorized:
+		return "СМЕНИТЬ ВПП НА %03d° • %d МОНЕТ" % [heading, EconomyScript.PARKING_PRICE]
+	return "ПОДГОТОВИТЬ К ВЫЛЕТУ • ВПП %03d° • %d МОНЕТ" % [heading, EconomyScript.PARKING_PRICE]
 
 func _near_cabin_ramp() -> bool:
 	var ramp_x := _aircraft_point(Vector2((AircraftArt.COCKPIT_RAMP_TOP_X + AircraftArt.COCKPIT_RAMP_BOTTOM_X) * 0.5, 0)).x
@@ -636,6 +663,7 @@ func _reset_flight_trajectory() -> void:
 	flight_trajectory.clear()
 	trajectory_finished = false
 	trajectory_recording_started = false
+	final_trajectory_visible = true
 	trajectory_elapsed_seconds = 0.0
 	trajectory_distance_km = 0.0
 	if flight != null:
@@ -681,6 +709,7 @@ func _update_flight_trajectory(previous_state: int, previous_speed: float, delta
 		if not Vector2(flight_trajectory[-1].position).is_equal_approx(flight.position_km):
 			flight_trajectory.append(_make_trajectory_point(flight.position_km))
 		trajectory_finished = true
+		final_trajectory_visible = true
 		flight._show_message("%s • путь %.1f км • время %s" % [flight.message, trajectory_distance_km, _format_trajectory_time(trajectory_elapsed_seconds)], -1.0, "")
 		_queue_map_redraw()
 
@@ -1220,12 +1249,31 @@ func _draw_carried_item(pilot_position: Vector2) -> void:
 	var item_rect := Rect2(pilot_position + Vector2(item_offset_x, -44), Vector2(24, 24))
 	if _at_cabin_table():
 		item_rect = Rect2(_aircraft_point(Vector2(CABIN_TABLE_X, AircraftArt.FLOOR_Y)) + Vector2(34, -64) * _aircraft_scale(), Vector2(24,24) * _aircraft_scale())
-	_draw_item_icon(item_rect, economy.carried_item, false, false)
+	if _at_cabin_table() and economy.carried_item.get("type", "") == "food":
+		_draw_table_food()
+		draw_set_transform_matrix(_cabin_pose())
+	else:
+		_draw_item_icon(item_rect, economy.carried_item, false, false)
 	var caption := _carried_item_caption(economy.carried_item)
 	var text_width := clampf(ThemeDB.fallback_font.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 9).x + 16.0, 64.0, 280.0)
 	var text_x := clampf(item_rect.get_center().x - text_width * 0.5, 12.0, size.x - text_width - 12.0)
 	# Keep the caption clear of both the carried object and the pilot's head.
 	draw_string(ThemeDB.fallback_font, Vector2(text_x, pilot_position.y - 82.0), caption, HORIZONTAL_ALIGNMENT_CENTER, text_width, 9, AircraftArt.INK)
+	draw_set_transform_matrix(Transform2D.IDENTITY)
+
+func _draw_table_food() -> void:
+	draw_set_transform_matrix(_table_transform())
+	# Side-on plate resting on the tabletop, with a flattened fried egg.
+	for layer in [
+		[Vector2(47,-43), Vector2(17,3), AircraftArt.PAPER, AircraftArt.INK],
+		[Vector2(47,-44), Vector2(12,2.8), Color("e1d6b8"), AircraftArt.LIGHT],
+		[Vector2(49,-45), Vector2(4,2), Color("cbb892"), AircraftArt.INK],
+	]:
+		var points := PackedVector2Array()
+		for step in 32:
+			var angle := TAU * float(step) / 32.0
+			points.append(layer[0] + Vector2(cos(angle), sin(angle)) * layer[1])
+		AircraftArt.poly(self, points, layer[2], layer[3], 1.0)
 	draw_set_transform_matrix(Transform2D.IDENTITY)
 
 func _carried_item_caption(item: Dictionary) -> String:
@@ -1435,6 +1483,17 @@ func _cabin_terrain_span_m() -> float:
 	return 500.0 * pow(1.5, maxi(0, cabin_terrain_zoom - 1))
 
 func _cabin_ground_direction() -> Vector2:
+	if flight.state != FlightModelScript.State.FLYING:
+		# After a crosswind landing the nose can retain a small crab angle. A
+		# longitudinal side view through the very narrow runway at that angle
+		# produces a short, detached-looking strip. On the ground the camera is
+		# aligned with the current runway axis, while the nose still chooses which
+		# of its two directions faces forward.
+		var airport: Dictionary = world.airports[flight.airport_index]
+		var runway_direction: Vector2 = world.heading_vector(float(airport.heading))
+		if runway_direction.dot(world.heading_vector(flight.heading_deg)) < 0.0:
+			runway_direction = -runway_direction
+		return runway_direction
 	var velocity: Vector2 = world.heading_vector(flight.heading_deg) * flight.speed_kmh + flight.current_wind_kmh
 	return velocity.normalized() if velocity.length_squared() > 0.01 else world.heading_vector(flight.heading_deg)
 
@@ -1832,13 +1891,12 @@ func _draw_operations_scene() -> void:
 	var floor_y := _draw_scene_background("ЛЁТНАЯ СЛУЖБА")
 	_draw_building(size.x*0.25,floor_y,Vector2(size.x*0.35,minf(350,floor_y-200)),"ЛЁТНАЯ СЛУЖБА",AircraftArt.PAPER)
 	draw_string(ThemeDB.fallback_font, Vector2(size.x * 0.52, 120), "ОБСЛУЖИВАНИЕ САМОЛЁТА", HORIZONTAL_ALIGNMENT_LEFT, size.x * 0.44, 18, Color("34372f"))
+	var status_color := Color("567044") if flight.departure_authorized else Color("a3483f")
+	draw_string(ThemeDB.fallback_font, Vector2(size.x * 0.54, size.y * 0.22), _operations_status_text(), HORIZONTAL_ALIGNMENT_LEFT, size.x * 0.40, 15, status_color)
 	draw_string(ThemeDB.fallback_font, Vector2(size.x * 0.54, size.y * 0.27), "Топливо: %.1f / %.0f л" % [flight.fuel_l, flight.fuel_capacity_l], HORIZONTAL_ALIGNMENT_LEFT, size.x * 0.40, 16, Color("34372f"))
-	draw_string(ThemeDB.fallback_font, get_operations_refuel_rect().position + Vector2(0, 30), "Стоянка и подготовка: %d монет" % EconomyScript.PARKING_PRICE, HORIZONTAL_ALIGNMENT_CENTER, get_operations_refuel_rect().size.x, 15, AircraftArt.INK)
-	var airport: Dictionary = world.airports[flight.airport_index]
-	var direct_heading := roundi(float(airport.heading)) % 360
-	var reverse_heading := (direct_heading + 180) % 360
-	_draw_menu_button(get_operations_runway_rect(false), "ПОДГОТОВИТЬ К ВЫЛЕТУ  %03d°" % direct_heading)
-	_draw_menu_button(get_operations_runway_rect(true), "ПОДГОТОВИТЬ К ВЫЛЕТУ  %03d°" % reverse_heading)
+	draw_string(ThemeDB.fallback_font, get_operations_refuel_rect().position + Vector2(0, 30), "Подготовка или смена ВПП: %d монет" % EconomyScript.PARKING_PRICE, HORIZONTAL_ALIGNMENT_CENTER, get_operations_refuel_rect().size.x, 15, AircraftArt.INK)
+	_draw_menu_button(get_operations_runway_rect(false), _operations_runway_button_text(false))
+	_draw_menu_button(get_operations_runway_rect(true), _operations_runway_button_text(true))
 	_draw_menu_button(get_building_exit_rect(), "ВЫЙТИ В АЭРОПОРТ [ESC]")
 	_scene_prompt(scene_notice if not scene_notice.is_empty() else "ENTER / ESC: выйти из здания")
 
@@ -1960,7 +2018,11 @@ func _draw_airframe_condition_indicator(canvas: CanvasItem, position: Vector2, d
 	var status: Dictionary = _airframe_condition_status()
 	var status_color: Color = status.color
 	var text_color: Color = status_color.lightened(0.2) if dark else status_color
-	canvas.draw_string(ThemeDB.fallback_font, position + Vector2(0, 11), "ПЛАНЕР: %s  %s" % [status.label, _airframe_bar()], HORIZONTAL_ALIGNMENT_LEFT, 260, 11, text_color)
+	canvas.draw_string(ThemeDB.fallback_font, position + Vector2(0, 11), _airframe_indicator_text(), HORIZONTAL_ALIGNMENT_LEFT, 410, 11, text_color)
+
+func _airframe_indicator_text() -> String:
+	var wear_per_minute: float = flight.airframe_wear_per_hour() / 60.0
+	return "ПЛАНЕР: %s  %s  %.1f%% • износ %.3f%%/мин" % [_airframe_condition_status().label, _airframe_bar(), flight.airframe_condition, wear_per_minute]
 
 func _airframe_bar() -> String:
 	var filled := ceili(clampf(flight.airframe_condition, 0.0, 100.0) / 100.0 * 6.0)
@@ -1976,11 +2038,11 @@ func _format_short_time(seconds_value: float) -> String:
 func _draw_map_on(canvas: Control) -> void:
 	map_canvas = canvas
 	if large_weather_radar:
-		if flight.engine_running:
+		if flight.electrical_power:
 			weather_radar_cache.update_cache(world, flight, status_timer, RADAR_RANGES_KM[radar_range_index])
 		WeatherRadarArt.draw_large(canvas,map_rect(),world,flight,weather_radar_cache.get_texture(),RADAR_RANGES_KM[radar_range_index])
 		WeatherRadarArt.draw_storm_motion(canvas, map_rect(), world, flight, get_local_mouse_position(), RADAR_RANGES_KM[radar_range_index])
-		if flight.engine_running:
+		if flight.electrical_power:
 			_draw_radar_measurements(canvas)
 		_draw_economy_hud(canvas, false)
 	else:
@@ -2041,7 +2103,7 @@ func _draw_radar_measurement(canvas: CanvasItem, a_world: Vector2, b_world: Vect
 			canvas.draw_circle(point, 3.5 if radius > 50.0 else 1.3, color)
 
 func _handle_radar_mouse_button(event: InputEventMouseButton) -> void:
-	var inside: bool = _radar_contains(event.position) and flight.engine_running
+	var inside: bool = _radar_contains(event.position) and flight.electrical_power
 	if inside and event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
 		radar_range_index = clampi(radar_range_index + (1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1), 0, RADAR_RANGES_KM.size() - 1)
 		_queue_map_redraw()
@@ -2112,8 +2174,10 @@ func _draw_map() -> void:
 	_draw_hovered_airport_services(rect)
 	map_canvas.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, 20), "НАВИГАЦИОННАЯ КАРТА", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("35372e"))
 	var position_hint := "Положение самолёта не отображается"
-	if trajectory_finished:
+	if trajectory_finished and final_trajectory_visible and flight.state != FlightModelScript.State.FLYING:
 		position_hint = "Итоговая траектория и положение самолёта"
+	elif trajectory_finished:
+		position_hint = "Итоговая траектория скрыта"
 	elif _trajectory_overlay_visible():
 		position_hint = "Стартовая позиция самолёта показана"
 	map_canvas.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, 38), position_hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("55574a"))
@@ -2264,7 +2328,19 @@ func _draw_completed_flight_trajectory() -> void:
 func _trajectory_overlay_visible() -> bool:
 	if flight_trajectory.is_empty():
 		return false
-	return trajectory_finished or (not trajectory_recording_started and flight.state == FlightModelScript.State.PARKED)
+	if trajectory_finished:
+		return final_trajectory_visible and flight.state != FlightModelScript.State.FLYING
+	return not trajectory_recording_started and flight.state == FlightModelScript.State.PARKED
+
+func _can_toggle_final_trajectory() -> bool:
+	return trajectory_finished and flight.state != FlightModelScript.State.FLYING
+
+func _toggle_final_trajectory() -> void:
+	if not _can_toggle_final_trajectory():
+		return
+	final_trajectory_visible = not final_trajectory_visible
+	_queue_map_redraw()
+	queue_redraw()
 
 func _draw_map_aircraft(position: Vector2, heading_deg: float, color: Color) -> void:
 	map_canvas.draw_set_transform(position, deg_to_rad(heading_deg), Vector2.ONE)
@@ -2511,7 +2587,7 @@ func _draw_panel() -> void:
 	var y := rect.position.y + 12.0
 	var gauge_y := y + 96.0
 	var speed_center := _instrument_center(0, gauge_y)
-	if flight.engine_running:
+	if flight.electrical_power:
 		_draw_speedometer(speed_center, INSTRUMENT_RADIUS)
 		if flight.wheel_brakes_applied:
 			draw_string(ThemeDB.fallback_font, speed_center + Vector2(-INSTRUMENT_RADIUS, INSTRUMENT_RADIUS + 47), "ТОРМОЗ", HORIZONTAL_ALIGNMENT_CENTER, INSTRUMENT_RADIUS * 2.0, 11, Color("ef645e"))
@@ -3008,17 +3084,41 @@ func _draw_controls(rect: Rect2) -> void:
 	draw_rect(center_button, Color("334b55"), true)
 	draw_rect(center_button, Color("82979f"), false, 1)
 	draw_string(ThemeDB.fallback_font, center_button.position + Vector2(0, 17), "ЦЕНТР [C]", HORIZONTAL_ALIGNMENT_CENTER, center_button.size.x, 10, Color.WHITE)
-	var engine_button := get_engine_button_rect()
-	draw_rect(engine_button, Color("334b55"), true)
-	draw_rect(engine_button, Color("82979f"), false, 1)
-	var engine_color := Color("65d48c") if flight.engine_running else Color("c95d55")
-	draw_circle(engine_button.position + Vector2(13, engine_button.size.y * 0.5), 4.5, engine_color)
-	draw_string(ThemeDB.fallback_font, engine_button.position + Vector2(22, 19), ("ОСТАНОВИТЬ ДВИГАТЕЛЬ [M]" if flight.engine_running else "ЗАПУСТИТЬ ДВИГАТЕЛЬ [M]"), HORIZONTAL_ALIGNMENT_CENTER, engine_button.size.x - 27, 10, Color.WHITE)
 	var cabin_button := get_cabin_button_rect()
-	draw_rect(cabin_button, Color("334b55"), true)
-	draw_rect(cabin_button, Color("82979f"), false, 1)
-	draw_string(ThemeDB.fallback_font, cabin_button.position + Vector2(0, 19), "ВЫЙТИ В САЛОН [X]", HORIZONTAL_ALIGNMENT_CENTER, cabin_button.size.x, 10, Color.WHITE)
+	_draw_cockpit_action_button(cabin_button, "ВЫЙТИ В САЛОН [X]")
+	var power_button := get_power_button_rect()
+	_draw_cockpit_action_button(power_button, "ВЫКЛЮЧИТЬ ПИТАНИЕ" if flight.electrical_power else "ВКЛЮЧИТЬ ПИТАНИЕ", Color("65d48c") if flight.electrical_power else Color("c95d55"))
+	var engine_button := get_engine_button_rect()
+	_draw_cockpit_action_button(engine_button, "ОСТАНОВИТЬ ДВИГАТЕЛЬ [M]" if flight.engine_running else "ЗАПУСТИТЬ ДВИГАТЕЛЬ [M]", Color("65d48c") if flight.engine_running else Color("c95d55"))
+	var trajectory_button := get_trajectory_button_rect()
+	var trajectory_enabled := _can_toggle_final_trajectory()
+	var roomy_trajectory_button := trajectory_button.size.x >= 150.0
+	var trajectory_text: String
+	if not trajectory_enabled:
+		trajectory_text = "ИТОГОВОЙ ТРАЕКТОРИИ НЕТ" if roomy_trajectory_button else "ТРАЕКТ.: НЕТ"
+	elif final_trajectory_visible:
+		trajectory_text = "СКРЫТЬ ИТОГОВУЮ ТРАЕКТОРИЮ" if roomy_trajectory_button else "СКРЫТЬ ТРАЕКТ."
+	else:
+		trajectory_text = "ПОКАЗАТЬ ИТОГОВУЮ ТРАЕКТОРИЮ" if roomy_trajectory_button else "ПОКАЗАТЬ ТРАЕКТ."
+	_draw_cockpit_action_button(trajectory_button, trajectory_text, Color.TRANSPARENT, trajectory_enabled)
 	_draw_time_controls(false)
+
+func _draw_cockpit_action_button(rect: Rect2, label: String, indicator: Color = Color.TRANSPARENT, enabled: bool = true) -> void:
+	var fill := Color("334b55") if enabled else Color("29383e")
+	var border := Color("82979f") if enabled else Color("53646b")
+	var text_color := Color.WHITE if enabled else Color("89979c")
+	draw_rect(rect, fill, true)
+	draw_rect(rect, border, false, 1)
+	var text_left := 4.0
+	if indicator.a > 0.0:
+		draw_circle(rect.position + Vector2(9, rect.size.y * 0.5), 4.0, indicator)
+		text_left = 16.0
+	var available_width := maxf(1.0, rect.size.x - text_left - 3.0)
+	var font_size := 10
+	while font_size > 7 and ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size).x > available_width:
+		font_size -= 1
+	var baseline := rect.position.y + (rect.size.y + font_size) * 0.5 - 2.0
+	draw_string(ThemeDB.fallback_font, Vector2(rect.position.x + text_left, baseline), label, HORIZONTAL_ALIGNMENT_CENTER, available_width, font_size, text_color)
 
 func _draw_legacy_yoke(yoke_rect: Rect2) -> void:
 	draw_circle(yoke_rect.get_center(), yoke_rect.size.x * 0.5, Color("0a0e10"))
@@ -3061,18 +3161,34 @@ func get_yoke_rect() -> Rect2:
 	var rect := panel_rect()
 	return Rect2(rect.end.x - 136, rect.position.y + 62, 112, 112)
 
-func get_action_button_rect() -> Rect2:
-	var rect := panel_rect()
-	return Rect2(rect.end.x - 234, rect.position.y + 211, 210, 28)
+func _split_cockpit_action_rect(area: Rect2, index: int) -> Rect2:
+	var gap := 8.0
+	var button_width := maxf(0.0, (area.size.x - gap) * 0.5)
+	return Rect2(area.position + Vector2(index * (button_width + gap), 0.0), Vector2(button_width, area.size.y))
+
+func _left_cockpit_action_area() -> Rect2:
+	var panel := panel_rect()
+	var left := panel.position.x + 14.0
+	var right := get_weather_radar_rect().position.x - 8.0
+	return Rect2(left, panel.position.y + 211.0, maxf(0.0, right - left), 28.0)
+
+func _right_cockpit_action_area() -> Rect2:
+	var panel := panel_rect()
+	var left := get_ils_rect().end.x + 8.0
+	var right := panel.end.x - 24.0
+	return Rect2(left, panel.position.y + 211.0, maxf(0.0, right - left), 28.0)
 
 func get_engine_button_rect() -> Rect2:
-	return get_action_button_rect()
+	return _split_cockpit_action_rect(_right_cockpit_action_area(), 1)
 
 func get_cabin_button_rect() -> Rect2:
-	var ils_rect := get_ils_rect()
-	var engine_rect := get_engine_button_rect()
-	var left := ils_rect.end.x + 8.0
-	return Rect2(left, engine_rect.position.y, maxf(110.0, engine_rect.position.x - left - 8.0), engine_rect.size.y)
+	return _split_cockpit_action_rect(_left_cockpit_action_area(), 0)
+
+func get_power_button_rect() -> Rect2:
+	return _split_cockpit_action_rect(_right_cockpit_action_area(), 0)
+
+func get_trajectory_button_rect() -> Rect2:
+	return _split_cockpit_action_rect(_left_cockpit_action_area(), 1)
 
 func get_center_yoke_button_rect() -> Rect2:
 	var yoke_rect := get_yoke_rect()
@@ -3113,7 +3229,7 @@ func _gui_input(event: InputEvent) -> void:
 		_handle_mouse_motion(event)
 
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
-	if flight.state == FlightModelScript.State.CRASHED and (view_mode != ViewMode.COCKPIT or not map_rect().has_point(event.position)):
+	if flight.state == FlightModelScript.State.CRASHED and (view_mode != ViewMode.COCKPIT or not (map_rect().has_point(event.position) or get_trajectory_button_rect().has_point(event.position))):
 		return
 	if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		if get_time_scale_button_rect(view_mode != ViewMode.COCKPIT).has_point(event.position):
@@ -3199,11 +3315,17 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 				_update_yoke(event.position)
 			elif get_center_yoke_button_rect().has_point(event.position):
 				flight.yoke = Vector2.ZERO
+			elif get_power_button_rect().has_point(event.position):
+				flight.toggle_electrical_power()
+				weather_radar_cache.invalidate()
+				_queue_map_redraw()
 			elif get_engine_button_rect().has_point(event.position):
 				flight.toggle_engine()
 				_queue_map_redraw()
 			elif get_cabin_button_rect().has_point(event.position):
 				_enter_cabin(true)
+			elif get_trajectory_button_rect().has_point(event.position):
+				_toggle_final_trajectory()
 			elif _beacon_receiver_hit(event.position, 0):
 				active_receiver = 0
 				receiver_frequency_entry = ""

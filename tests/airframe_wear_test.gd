@@ -59,6 +59,10 @@ func _run() -> void:
 	scene.flight.airport_index = repair_airport
 	check(scene._airport_buildings().any(func(building): return building.kind == scene.ViewMode.REPAIR), "Repair airport must draw a dedicated hangar")
 	scene.flight.airframe_condition = 80.0
+	scene.flight.state = Flight.State.FLYING
+	scene.flight.speed_kmh = 220.0
+	scene.flight.storm_intensity = 0.0
+	check(scene._airframe_indicator_text().contains("80.0% • износ 0.013%/мин"), "Panel must show exact condition and ordinary wear per minute")
 	scene.economy.money = 100
 	scene._set_view_mode(scene.ViewMode.REPAIR)
 	scene._handle_economy_click(scene._economy_button_rect(0).get_center())

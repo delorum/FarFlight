@@ -56,6 +56,7 @@ static func capture(game) -> Dictionary:
 	var ui := {}
 	for field in UI_FIELDS:
 		ui[field] = game.get(field)
+	ui["final_trajectory_visible"] = game.final_trajectory_visible
 	ui["player_screen_fraction"] = game.scene_player_x / maxf(game.size.x, 1.0)
 	ui["player_aircraft_x"] = (game.scene_player_x - game._aircraft_origin().x) / game._aircraft_scale()
 	return {
@@ -109,6 +110,8 @@ static func valid(data: Variant) -> bool:
 	if not data.ui.has_all(["player_screen_fraction", "player_aircraft_x"]):
 		return false
 	if not data.ui.receiver_frequencies is Array or data.ui.receiver_frequencies.size() != 2:
+		return false
+	if data.ui.has("final_trajectory_visible") and not data.ui.final_trajectory_visible is bool:
 		return false
 	for frequency in data.ui.receiver_frequencies:
 		if not frequency is int or frequency < 190 or frequency > 535:
@@ -196,10 +199,11 @@ static func restore(game, data: Dictionary) -> bool:
 		return false
 	# Reject incomplete/incompatible flight data before changing the live game.
 	var had_departure_authorization: bool = data.flight.has("departure_authorized")
+	var had_electrical_power: bool = data.flight.has("electrical_power")
 	for field in flight_fields(new_flight):
 		if not data.flight.has(field):
 			# Additive migration for saves written before permanent wear existed.
-			if field in ["airframe_condition", "departure_authorized", "message_is_error"]:
+			if field in ["airframe_condition", "departure_authorized", "message_is_error", "electrical_power"]:
 				continue
 			return false
 		if typeof(data.flight[field]) != typeof(new_flight.get(field)):
@@ -207,6 +211,10 @@ static func restore(game, data: Dictionary) -> bool:
 		new_flight.set(field, data.flight[field])
 	if not had_departure_authorization and new_flight.state == game.FlightModelScript.State.LANDED:
 		new_flight.departure_authorized = false
+	if not had_electrical_power:
+		# A running engine in an older save implies that its former combined
+		# engine/instrument switch was on.
+		new_flight.electrical_power = new_flight.engine_running
 	new_flight.turbulence_rng.state = data.rng_state
 	for field in UI_FIELDS:
 		if not data.ui.has(field):
@@ -228,6 +236,8 @@ static func restore(game, data: Dictionary) -> bool:
 			game.set(field, float(data.ui[field]))
 		else:
 			game.set(field, data.ui[field])
+	if data.ui.has("final_trajectory_visible"):
+		game.final_trajectory_visible = data.ui.final_trajectory_visible
 	if game.view_mode in [game.ViewMode.CABIN, game.ViewMode.APRON]:
 		game.scene_player_x = game._aircraft_origin().x + float(data.ui.player_aircraft_x) * game._aircraft_scale()
 	else:
