@@ -24,7 +24,7 @@ func _init() -> void:
 			assert(world.height_at(approach_point + approach_right * 0.8) < 250.0)
 			assert(world.height_at(approach_point - approach_right * 0.8) < 250.0)
 	var test_world = FlightWorldScript.new(424242)
-	var out_of_range := test_world.beacon_signal(test_world.beacons[0], test_world.beacons[0].position + Vector2(16.0, 0.0), 5000.0)
+	var out_of_range := test_world.beacon_signal(test_world.beacons[0], test_world.beacons[0].position + Vector2(16.0, 0.0), FlightModelScript.ABSOLUTE_CEILING_M)
 	assert(not out_of_range.available)
 	assert(out_of_range.reason == "НЕТ СИГНАЛА")
 	var flight = FlightModelScript.new(test_world)
@@ -40,15 +40,15 @@ func _init() -> void:
 	assert(is_equal_approx(flight.fuel_flow_lpm(), 0.84))
 	flight.speed_kmh = 200.0
 	assert(absf(flight.estimated_range_km() - 158.730) < 0.01)
-	flight.altitude_m = 2500.0
+	flight.altitude_m = 425.0
 	assert(is_equal_approx(flight.altitude_fuel_factor(), 0.82))
 	assert(is_equal_approx(flight.fuel_flow_lpm(), 0.6888))
 	assert(absf(flight.estimated_range_km() - 193.573) < 0.01)
 	assert(is_equal_approx(flight.altitude_power_factor(), 1.0))
-	flight.altitude_m = 5000.0
+	flight.altitude_m = FlightModelScript.ABSOLUTE_CEILING_M
 	assert(is_equal_approx(flight.altitude_fuel_factor(), 1.08))
 	assert(is_equal_approx(flight.fuel_flow_lpm(), 0.9072))
-	assert(is_equal_approx(flight.altitude_power_factor(), 0.82))
+	assert(is_equal_approx(flight.altitude_power_factor(), 0.70))
 	assert(is_equal_approx(flight.max_available_climb_mps(), 0.0))
 	flight.altitude_m = 0.0
 	flight.throttle = 0.0
@@ -120,8 +120,8 @@ func _init() -> void:
 	var stall_test = FlightModelScript.new(test_world)
 	stall_test.engine_running = true
 	stall_test.state = FlightModelScript.State.FLYING
-	stall_test.position_km = Vector2(50, 50)
-	stall_test.altitude_m = 3000.0
+	stall_test.position_km = Vector2(test_world.airports[0].position)
+	stall_test.altitude_m = FlightModelScript.PRACTICAL_CEILING_M - 50.0
 	stall_test.speed_kmh = 110.0
 	stall_test.yoke.y = 1.0
 	for frame in 120:
@@ -150,8 +150,8 @@ func _init() -> void:
 	var ceiling_test = FlightModelScript.new(test_world)
 	ceiling_test.engine_running = true
 	ceiling_test.state = FlightModelScript.State.FLYING
-	ceiling_test.position_km = Vector2(50, 50)
-	ceiling_test.altitude_m = 4950.0
+	ceiling_test.position_km = Vector2(test_world.airports[0].position)
+	ceiling_test.altitude_m = FlightModelScript.ABSOLUTE_CEILING_M - 10.0
 	ceiling_test.speed_kmh = 190.0
 	ceiling_test.throttle = 1.0
 	ceiling_test.yoke.y = 1.0
@@ -168,22 +168,22 @@ func _init() -> void:
 	# drop can begin accelerating the aircraft just before that exact threshold.
 	var ceiling_speed_loss_tolerance_kmh := 0.1
 	assert(ceiling_start_speed - ceiling_min_speed >= 10.0 - ceiling_speed_loss_tolerance_kmh)
-	assert(ceiling_test.altitude_m < 5000.0)
+	assert(ceiling_test.altitude_m < FlightModelScript.ABSOLUTE_CEILING_M)
 
 	# At equal power a descending aircraft gains speed from gravity, unlike an
 	# otherwise identical aircraft in level flight.
 	var level_test = FlightModelScript.new(test_world)
 	level_test.engine_running = true
 	level_test.state = FlightModelScript.State.FLYING
-	level_test.position_km = Vector2(45, 45)
-	level_test.altitude_m = 2500.0
+	level_test.position_km = Vector2(test_world.airports[0].position)
+	level_test.altitude_m = 400.0
 	level_test.speed_kmh = 120.0
 	level_test.throttle = 0.45
 	var dive_test = FlightModelScript.new(test_world)
 	dive_test.engine_running = true
 	dive_test.state = FlightModelScript.State.FLYING
-	dive_test.position_km = Vector2(45, 45)
-	dive_test.altitude_m = 2500.0
+	dive_test.position_km = Vector2(test_world.airports[0].position)
+	dive_test.altitude_m = 400.0
 	dive_test.speed_kmh = 120.0
 	dive_test.throttle = 0.45
 	dive_test.yoke.y = -0.75

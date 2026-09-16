@@ -22,7 +22,7 @@ func _run() -> void:
 	var expected_minutes: float = flight.fuel_l / flight.fuel_flow_lpm()
 	assert(is_equal_approx(flight.estimated_range_km(), expected_minutes * flight.ground_speed_kmh() / 60.0), "Range must use ground speed, including wind")
 	assert(Flight.ECONOMY_CRUISE_MIN_KMH < 174.0 and Flight.ECONOMY_CRUISE_MAX_KMH > 174.0)
-	assert(Flight.ECONOMY_ALTITUDE_MIN_M < 2500.0 and Flight.ECONOMY_ALTITUDE_MAX_M > 2500.0)
+	assert(Flight.ECONOMY_ALTITUDE_MIN_M < 425.0 and Flight.ECONOMY_ALTITUDE_MAX_M > 425.0)
 	assert(ThemeDB.fallback_font.get_string_size("40.0/40 л • запас 999 км", HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x <= 180.0, "Combined fuel and range caption must fit its extended text box")
 	var parameters := {"distance": 50.0, "time": 10.0, "speed": 150.0, "vertical": -2.0, "altitude": 500.0}
 	var path := Calculator.calculate(parameters, "distance", 3000)
@@ -61,6 +61,35 @@ func _run() -> void:
 	widget.toggle.pressed.emit()
 	await process_frame
 	assert(widget.expanded and widget.body.visible)
+	assert(widget.profile_buttons.size() == 4 and widget.active_profile == 0, "Calculator must expose four planning profiles")
+	for profile_button in widget.profile_buttons:
+		assert(widget.get_global_rect().encloses(profile_button.get_global_rect()), "Profile buttons must remain inside the calculator panel")
+	widget._set_value("distance", 111.0)
+	widget._select_profile(1)
+	assert(widget.active_profile == 1 and is_equal_approx(widget.values.distance, 0.0), "A new profile must start from the initialized independent calculation")
+	widget._set_value("distance", 22.0)
+	widget._set_value("wind_speed", 17.0)
+	widget._select_profile(0)
+	assert(is_equal_approx(widget.values.distance, 111.0) and not is_equal_approx(widget.values.wind_speed, 17.0), "Switching back must restore the first profile")
+	widget._select_profile(1)
+	assert(is_equal_approx(widget.values.distance, 22.0) and is_equal_approx(widget.values.wind_speed, 17.0), "Each profile must preserve its complete settings")
+	widget._select_profile(0)
+	var original_wind_layers: Array = scene.world.wind_layers.duplicate(true)
+	scene.flight.state = Flight.State.FLYING
+	scene.flight.speed_kmh = 175.0
+	scene.flight.current_wind_kmh = Vector2.ZERO
+	scene.flight.heading_deg = 0.0
+	scene.world.wind_layers.assign([
+		{"altitude_m":0.0,"from_deg":0.0,"speed_kmh":40.0},
+		{"altitude_m":250.0,"from_deg":0.0,"speed_kmh":40.0},
+		{"altitude_m":500.0,"from_deg":180.0,"speed_kmh":40.0},
+		{"altitude_m":700.0,"from_deg":180.0,"speed_kmh":40.0},
+	])
+	var northbound_optimum: Vector2 = scene.instrument_panel.optimal_altitude_range()
+	scene.flight.heading_deg = 180.0
+	var southbound_optimum: Vector2 = scene.instrument_panel.optimal_altitude_range()
+	assert((northbound_optimum.x + northbound_optimum.y) * 0.5 > (southbound_optimum.x + southbound_optimum.y) * 0.5 + 100.0, "Optimal-altitude band must move towards the layer with the favourable along-track wind")
+	scene.world.wind_layers.assign(original_wind_layers)
 	scene.flight.altitude_m = 3000
 	for layer in scene.world.wind_layers:
 		layer.speed_kmh = 0.0
@@ -84,6 +113,7 @@ func _run() -> void:
 	widget.current_buttons.speed.pressed.emit()
 	widget.current_buttons.vertical.pressed.emit()
 	assert(widget.values.speed == 180.0 and widget.values.vertical == -2.0)
+	assert(scene.navigation_map.measurement_time_text(36.0) == "12.0 мин", "Map-line duration must use the current 180 km/h ground speed")
 	widget._set_value("altitude", 1800.0)
 	assert(widget.valid and is_equal_approx(widget.values.time, 10.0) and is_equal_approx(widget.values.distance, 30.0))
 	widget.fields.vertical.text_changed.emit("0")

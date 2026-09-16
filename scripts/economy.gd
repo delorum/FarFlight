@@ -4,20 +4,23 @@ extends RefCounted
 const INVENTORY_CAPACITY := 6
 const NEED_SEGMENTS := 6
 const CANISTER_CAPACITY_L := 20
-const FUEL_PRICE_PER_L := 1
-const CANISTER_PRICE := 6
-const FOOD_PRICE := 12
-const HOTEL_PRICE := 18
+const FUEL_PRICE_PER_L := 2
+const CANISTER_PRICE := 15
+const FOOD_PRICE := 20
+const HOTEL_PRICE := 30
 const HOTEL_REST_SECONDS := 20.0 * 60.0
 const HOTEL_REST_PRICE := HOTEL_PRICE / 3
 const SERVICE_PRICE_MULTIPLIERS := [0.7, 1.0, 1.3]
-const REPAIR_PRICE_PER_POINT := 2.0
-const PARKING_PRICE := 5
+const REPAIR_PRICE_PER_POINT := 3.0
+const PARKING_PRICE := 12
 const BASE_REWARD_50_KM := 60
 const URGENT_MULTIPLIER := 2
 const DEADLINE_SPEED_KMH := 130.0
+const DEADLINE_RESERVE_SECONDS := 10.0 * 60.0
+const POVERTY_REWARD_MULTIPLIERS := [1.35, 1.20, 1.10, 1.0, 1.0]
+const MAX_AIRPORTS_WITHOUT_OPTIONAL_SERVICES := 2
 
-var money := 100
+var money := 160
 var hunger := 6
 var fatigue := 6
 var elapsed_seconds := 0.0
@@ -46,6 +49,7 @@ func configure_world(world) -> void:
 	food_airports = _pick_three(rng, world.airports.size())
 	hotel_airports = _pick_three(rng, world.airports.size())
 	repair_airports = _generate_repair_airports(world)
+	_balance_service_coverage(world.airports.size())
 	arrive_at_airport(0, world)
 
 func _generate_repair_airports(world) -> Array[int]:
@@ -80,6 +84,45 @@ func services_at(airport_index: int) -> Array[String]:
 	if airport_index in repair_airports:
 		result.append("ремонт")
 	return result
+
+func optional_service_count(airport_index: int) -> int:
+	var count := 0
+	for service_airports in [fuel_airports, food_airports, hotel_airports, repair_airports]:
+		if airport_index in service_airports:
+			count += 1
+	return count
+
+func poverty_reward_multiplier(airport_index: int) -> float:
+	var count := clampi(optional_service_count(airport_index), 0, POVERTY_REWARD_MULTIPLIERS.size() - 1)
+	return float(POVERTY_REWARD_MULTIPLIERS[count])
+
+func poverty_bonus_percent(airport_index: int) -> int:
+	return roundi((poverty_reward_multiplier(airport_index) - 1.0) * 100.0)
+
+func _balance_service_coverage(airport_count: int) -> void:
+	# Preserve three locations and their cheap/normal/expensive array positions,
+	# but prevent a random world from filling a few hubs and leaving most of the
+	# map devoid of useful stops.
+	while true:
+		var empty_airports: Array[int] = []
+		for airport_index in airport_count:
+			if optional_service_count(airport_index) == 0:
+				empty_airports.append(airport_index)
+		if empty_airports.size() <= MAX_AIRPORTS_WITHOUT_OPTIONAL_SERVICES:
+			return
+		var target := empty_airports[0]
+		var moved := false
+		for service_airports in [fuel_airports, food_airports, hotel_airports, repair_airports]:
+			for tier in range(service_airports.size() - 1, -1, -1):
+				var donor := int(service_airports[tier])
+				if optional_service_count(donor) > 1:
+					service_airports[tier] = target
+					moved = true
+					break
+			if moved:
+				break
+		if not moved:
+			return
 
 func _service_price_multiplier(service_airports: Array[int], airport_index: int) -> float:
 	# The shuffled array order is part of the saved world: cheap, regular, expensive.
@@ -140,11 +183,20 @@ func _generate_offers(origin: int, world) -> Array[Dictionary]:
 	var offers: Array[Dictionary] = []
 	for candidate_index in mini(3, candidates.size()):
 		var destination := candidates[candidate_index]
-		var distance: float = Vector2(world.airports[origin].position).distance_to(Vector2(world.airports[destination].position))
-		var normal_reward := maxi(1, roundi(BASE_REWARD_50_KM * pow(distance / 50.0, 1.12)))
+		var direct_distance: float = Vector2(world.airports[origin].position).distance_to(Vector2(world.airports[destination].position))
+		var route_distance: float = world.planned_route_distance_km(origin, destination)
+		if not is_finite(route_distance):
+			# Explicitly seeded legacy worlds can predate the route rules. Avoid an
+			# impossible deadline while still allowing their old saves to continue.
+			route_distance = direct_distance
+		var poverty_multiplier := poverty_reward_multiplier(destination)
+		var normal_reward := maxi(1, roundi(BASE_REWARD_50_KM * pow(route_distance / 50.0, 1.12) * poverty_multiplier))
 		offers.append({
 			"type": "parcel", "id": next_parcel_id, "origin": origin,
-			"destination": destination, "distance_km": distance,
+			"destination": destination, "distance_km": route_distance,
+			"direct_distance_km": direct_distance, "route_distance_km": route_distance,
+			"destination_service_count": optional_service_count(destination),
+			"poverty_bonus_percent": poverty_bonus_percent(destination),
 			"normal_reward": normal_reward,
 			"urgent_reward": normal_reward * URGENT_MULTIPLIER,
 			"accepted_at": -1.0, "urgent_deadline": -1.0,
@@ -163,7 +215,8 @@ func accept_offer(airport_index: int, offer_index: int) -> Dictionary:
 		return {}
 	var parcel: Dictionary = offers.pop_at(offer_index).duplicate(true)
 	parcel.accepted_at = elapsed_seconds
-	parcel.urgent_deadline = elapsed_seconds + float(parcel.distance_km) / DEADLINE_SPEED_KMH * 3600.0
+	var route_distance := float(parcel.get("route_distance_km", parcel.distance_km))
+	parcel.urgent_deadline = elapsed_seconds + route_distance / DEADLINE_SPEED_KMH * 3600.0 + DEADLINE_RESERVE_SECONDS
 	carried_item = parcel
 	offers_by_airport[airport_index] = offers
 	return parcel
@@ -365,6 +418,7 @@ func restore(data: Dictionary, world = null) -> bool:
 		repair_airports.assign(data.repair_airports)
 	else:
 		repair_airports = _generate_repair_airports(world)
+	_balance_service_coverage(world.airports.size() if world != null else 8)
 	last_landed_airport = int(data.last_landed_airport)
 	next_parcel_id = int(data.next_parcel_id)
 	game_over_reason = String(data.game_over_reason)

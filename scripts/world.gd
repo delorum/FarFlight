@@ -24,6 +24,10 @@ const MIN_RADIO_BLOCKING_TERRAIN_M := 250.0
 const STORMS_PER_REGION := 9
 const WEATHER_STORM_COUNT := REGIONS_PER_AXIS * REGIONS_PER_AXIS * STORMS_PER_REGION
 const AIRPORT_NAMES := ["Северный", "Озёрный", "Речной", "Степной", "Туманный", "Каменный", "Западный", "Дальний"]
+const WIND_ALTITUDES_M := [0.0, 250.0, 500.0, 700.0]
+const ROUTE_GRID_STEP_KM := 1.0
+const ROUTE_CEILING_M := 700.0
+const ROUTE_CLEARANCE_M := 150.0
 
 var seed_value: int
 var noise := FastNoiseLite.new()
@@ -32,6 +36,8 @@ var beacons: Array[Dictionary] = []
 var wind_layers: Array[Dictionary] = []
 var storms: Array[Dictionary] = []
 var weather_time_seconds := 0.0
+var _route_grid: AStarGrid2D
+var _route_distance_cache: Dictionary = {}
 
 # Explicit model snapshot. Runtime noise/cache objects never enter the save.
 func snapshot() -> Dictionary:
@@ -46,15 +52,22 @@ func restore_snapshot(data: Dictionary) -> void:
 	wind_layers.assign(data.wind_layers.duplicate(true))
 	storms.assign(data.storms.duplicate(true))
 	weather_time_seconds = data.time
+	_invalidate_route_cache()
 
 func _init(requested_seed: int = 0) -> void:
-	seed_value = requested_seed if requested_seed != 0 else randi_range(10000, 99999999)
-	noise.seed = seed_value
-	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	noise.frequency = 0.018
-	noise.fractal_octaves = 5
-	noise.fractal_gain = 0.52
-	_generate_airports()
+	var random_world := requested_seed == 0
+	seed_value = requested_seed if not random_world else randi_range(10000, 99999999)
+	for attempt in 32:
+		noise.seed = seed_value
+		noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+		noise.frequency = 0.018
+		noise.fractal_octaves = 5
+		noise.fractal_gain = 0.52
+		_generate_airports()
+		_invalidate_route_cache()
+		if not random_world or all_airports_route_connected():
+			break
+		seed_value = randi_range(10000, 99999999)
 	_generate_beacons()
 	_generate_weather()
 
@@ -94,7 +107,7 @@ func refresh_wind() -> void:
 
 func _generate_wind(rng: RandomNumberGenerator) -> void:
 	wind_layers.clear()
-	for altitude_m in [0.0, 1500.0, 3000.0, 5000.0]:
+	for altitude_m in WIND_ALTITUDES_M:
 		wind_layers.append({"altitude_m": altitude_m, "from_deg": rng.randf_range(0.0, 360.0), "speed_kmh": rng.randf_range(8.0, 32.0)})
 
 func update_weather(delta: float) -> void:
@@ -176,6 +189,70 @@ func height_at(point_km: Vector2) -> float:
 			var end_blend := smoothstep(8.5, 6.5, abs(along))
 			height = lerp(height, 0.0, cross_blend * end_blend)
 	return height
+
+func planned_route_distance_km(origin_index: int, destination_index: int) -> float:
+	if origin_index == destination_index:
+		return 0.0
+	if origin_index < 0 or destination_index < 0 or origin_index >= airports.size() or destination_index >= airports.size():
+		return INF
+	var lower := mini(origin_index, destination_index)
+	var upper := maxi(origin_index, destination_index)
+	var cache_key := lower * AIRPORT_COUNT + upper
+	if _route_distance_cache.has(cache_key):
+		return float(_route_distance_cache[cache_key])
+	_ensure_route_grid()
+	var start := _route_grid_point(Vector2(airports[origin_index].position))
+	var finish := _route_grid_point(Vector2(airports[destination_index].position))
+	var path := _route_grid.get_point_path(start, finish)
+	if path.is_empty():
+		_route_distance_cache[cache_key] = INF
+		return INF
+	var distance := Vector2(airports[origin_index].position).distance_to(path[0])
+	for index in range(1, path.size()):
+		distance += path[index - 1].distance_to(path[index])
+	distance += path[-1].distance_to(Vector2(airports[destination_index].position))
+	_route_distance_cache[cache_key] = distance
+	return distance
+
+func all_airports_route_connected() -> bool:
+	for origin in airports.size():
+		for destination in range(origin + 1, airports.size()):
+			if not is_finite(planned_route_distance_km(origin, destination)):
+				return false
+	return true
+
+func _route_grid_point(position: Vector2) -> Vector2i:
+	var maximum_cell := roundi(SIZE_KM / ROUTE_GRID_STEP_KM)
+	return Vector2i(
+		clampi(roundi(position.x / ROUTE_GRID_STEP_KM), 0, maximum_cell),
+		clampi(roundi(position.y / ROUTE_GRID_STEP_KM), 0, maximum_cell)
+	)
+
+func _ensure_route_grid() -> void:
+	if _route_grid != null:
+		return
+	var cells := roundi(SIZE_KM / ROUTE_GRID_STEP_KM) + 1
+	_route_grid = AStarGrid2D.new()
+	_route_grid.region = Rect2i(0, 0, cells, cells)
+	_route_grid.cell_size = Vector2.ONE * ROUTE_GRID_STEP_KM
+	_route_grid.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES
+	_route_grid.default_compute_heuristic = AStarGrid2D.HEURISTIC_EUCLIDEAN
+	_route_grid.default_estimate_heuristic = AStarGrid2D.HEURISTIC_EUCLIDEAN
+	_route_grid.update()
+	var maximum_terrain := ROUTE_CEILING_M - ROUTE_CLEARANCE_M
+	for y in cells:
+		for x in cells:
+			var point := Vector2(x, y) * ROUTE_GRID_STEP_KM
+			if height_at(point) > maximum_terrain:
+				_route_grid.set_point_solid(Vector2i(x, y))
+	# Airport and approach flattening is continuous; keep the nearest sampled
+	# cell open even when its centre happens to fall just outside that corridor.
+	for airport in airports:
+		_route_grid.set_point_solid(_route_grid_point(Vector2(airport.position)), false)
+
+func _invalidate_route_cache() -> void:
+	_route_grid = null
+	_route_distance_cache.clear()
 
 func runway_coordinates(point_km: Vector2, airport: Dictionary) -> Vector2:
 	var airport_position: Vector2 = airport.position

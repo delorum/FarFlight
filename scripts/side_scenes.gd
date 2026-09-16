@@ -1168,7 +1168,9 @@ func _draw_economy_scene() -> void:
 				row += 1
 			for offer in host.economy.offers_at(host.flight.airport_index):
 				var destination: String = host.world.airports[int(offer.destination)].name
-				_draw_menu_button(_economy_button_rect(row), "%s • %.0f км • %d / срочно %d" % [destination, offer.distance_km, offer.normal_reward, offer.urgent_reward])
+				var poverty_bonus := int(offer.get("poverty_bonus_percent", 0))
+				var bonus_text := " • надбавка +%d%%" % poverty_bonus if poverty_bonus > 0 else ""
+				_draw_menu_button(_economy_button_rect(row), "%s • маршрут %.0f км • %d / срочно %d%s" % [destination, offer.distance_km, offer.normal_reward, offer.urgent_reward, bonus_text])
 				row += 1
 		ViewMode.SHOP:
 			_draw_menu_button(_economy_button_rect(0), "КУПИТЬ ЕДУ • %d монет" % host.economy.food_price(host.flight.airport_index))

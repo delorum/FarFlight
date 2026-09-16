@@ -100,7 +100,34 @@ func _run() -> void:
 	check(loaded.clock_seconds == clock_before and loaded.receiver_frequencies == [333,377], "Time and radio tuning must survive loading")
 	check(loaded.time_scale_index == 3 and loaded.cabin_sleeping and loaded.cabin_sleep_progress_seconds == 777.0, "Time scale and continuous bed rest must survive loading")
 	check(loaded.economy.money == 347 and loaded.economy.hunger == 4 and loaded.economy.inventory[2].type == "food", "Money, needs and cargo must survive loading")
+	# A paid runway preparation is gameplay state, not a transient operations-menu
+	# choice. Verify the complete disk path rather than only FlightModel.snapshot().
+	var prepared_slot := "user://test_prepared_save_%d.dat" % Time.get_ticks_usec()
+	var prepared_game: Control = load("res://scenes/main.tscn").instantiate()
+	root.add_child(prepared_game)
+	prepared_game.set_process(false)
+	prepared_game.flight.departure_authorized = false
+	prepared_game.flight.state = prepared_game.FlightModelScript.State.LANDED
+	prepared_game.flight.airport_index = 2
+	prepared_game.economy.money = 100
+	prepared_game._pay_and_prepare(true)
+	prepared_game._set_view_mode(prepared_game.ViewMode.OPERATIONS)
+	check(prepared_game.flight.is_prepared_for(2, true), "Test setup must prepare the reverse runway")
+	check(Save.write_slot(prepared_game, prepared_slot) == OK, "Paid runway preparation must be writable")
+	var prepared_data := Save.read_slot(prepared_slot)
+	check(prepared_data.flight.get("departure_authorized", false) and prepared_data.flight.get("prepared_airport_index", -1) == 2 and prepared_data.flight.get("prepared_reverse_direction", false), "Save file must contain authorization, airport and runway direction")
+	var restored_prepared: Control = load("res://scenes/main.tscn").instantiate()
+	root.add_child(restored_prepared)
+	restored_prepared.set_process(false)
+	check(Save.restore(restored_prepared, prepared_data), "Prepared departure save must restore")
+	check(restored_prepared.flight.is_prepared_for(2, true) and restored_prepared._operations_status_text().contains("ПОДГОТОВЛЕН"), "Loaded flight service must preserve the paid preparation status")
+	var restored_money: int = restored_prepared.economy.money
+	restored_prepared._pay_and_prepare(true)
+	check(restored_prepared.economy.money == restored_money, "Loaded preparation must keep the already selected runway free")
+	if FileAccess.file_exists(prepared_slot):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(prepared_slot))
 	var pre_wear_save := data.duplicate(true)
+	pre_wear_save.version = 4
 	pre_wear_save.flight.erase("airframe_condition")
 	pre_wear_save.flight.erase("departure_authorized")
 	pre_wear_save.flight.erase("message_is_error")

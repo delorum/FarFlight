@@ -41,12 +41,12 @@ func _run() -> void:
 
 	var economy = Economy.new(world)
 	check(economy.repair_airports.size() == 3, "Exactly three airports must have repair shops")
-	check(is_equal_approx(economy.repair_price_per_point(economy.repair_airports[0]), 1.4), "First repair shop must be 30% cheaper")
-	check(is_equal_approx(economy.repair_price_per_point(economy.repair_airports[1]), 2.0), "Second repair shop must use the base price")
-	check(is_equal_approx(economy.repair_price_per_point(economy.repair_airports[2]), 2.6), "Third repair shop must be 30% dearer")
+	check(is_equal_approx(economy.repair_price_per_point(economy.repair_airports[0]), 2.1), "First repair shop must be 30% cheaper")
+	check(is_equal_approx(economy.repair_price_per_point(economy.repair_airports[1]), 3.0), "Second repair shop must use the base price")
+	check(is_equal_approx(economy.repair_price_per_point(economy.repair_airports[2]), 3.9), "Third repair shop must be 30% dearer")
 	var money_before: int = economy.money
 	var repaired: float = economy.buy_repair(10.0, economy.repair_airports[0])
-	check(is_equal_approx(repaired, 10.0) and economy.money == money_before - 14, "Repair purchase must use the local price")
+	check(is_equal_approx(repaired, 10.0) and economy.money == money_before - 21, "Repair purchase must use the local price")
 
 	var scene: Control = load("res://scenes/main.tscn").instantiate()
 	root.add_child(scene)
@@ -66,7 +66,7 @@ func _run() -> void:
 	scene.economy.money = 100
 	scene._set_view_mode(scene.ViewMode.REPAIR)
 	scene._handle_economy_click(scene._economy_button_rect(0).get_center())
-	check(is_equal_approx(scene.flight.airframe_condition, 100.0) and scene.economy.money == 72, "Repair hangar must restore the aircraft and charge its local rate")
+	check(is_equal_approx(scene.flight.airframe_condition, 100.0) and scene.economy.money == 58, "Repair hangar must restore the aircraft and charge its local rate")
 
 	print("Airframe wear, destruction, repair distribution and pricing: ", "FAIL" if failed else "OK")
 	quit(1 if failed else 0)

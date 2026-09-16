@@ -89,7 +89,7 @@ func _run() -> void:
 		layer.from_deg = 270.0
 		layer.speed_kmh = 20.0
 	scene.wind_overlay_index = 1
-	check(scene._wind_arrow_description() == "от 270° • 20 км/ч • 1500 м", "Wind description must show FROM direction, speed and selected altitude")
+	check(scene._wind_arrow_description() == "от 270° • 20 км/ч • 250 м", "Wind description must show FROM direction, speed and selected altitude")
 	for zoom in [1.0, 2.0, 4.0, 8.0, 12.0, 16.0, 20.0, 24.0]:
 		scene.map_zoom = zoom
 		var centers: PackedVector2Array = scene._wind_arrow_centers(scene.map_rect())
@@ -116,8 +116,8 @@ func _run() -> void:
 		var motion_label: Rect2 = scene.WeatherRadarArt.storm_motion_label_rect(radar_rect, origin, tip, label_size)
 		check(motion_label.has_area() and radar_rect.encloses(motion_label), "Storm-motion label must stay inside the radar")
 		check(not motion_label.intersects(Rect2(origin.min(tip), (tip-origin).abs()).grow(6.0)), "Storm-motion label must never cover its arrow")
-	scene.flight.altitude_m = 937.0
-	check(scene._wind_arrow_description().ends_with("937 м"), "Current-altitude layer must show actual aircraft altitude")
+	scene.flight.altitude_m = 637.0
+	check(scene._wind_arrow_description().ends_with("637 м"), "Current-altitude layer must show actual aircraft altitude")
 	scene.large_weather_radar = true
 	check(not scene._wind_arrow_hovered(scene.map_rect().get_center()), "Hidden map arrows must not be interactive on radar")
 	print("Radar switching, wind hover, map preservation and 1 Hz echo cache: ","FAIL" if failed else "OK")

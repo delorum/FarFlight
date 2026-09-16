@@ -31,7 +31,7 @@ func _initialize() -> void:
 
 	var storm_flight := StormFlight.new(world)
 	storm_flight.state = Flight.State.FLYING
-	storm_flight.altitude_m = 5000.0
+	storm_flight.altitude_m = Flight.ABSOLUTE_CEILING_M - 50.0
 	storm_flight.speed_kmh = 180.0
 	recorder.reset(storm_flight)
 	result = session.advance(1.0, storm_flight, economy, recorder, false)

@@ -34,7 +34,7 @@ func _draw_panel() -> void:
 		_draw_speedometer(speed_center, INSTRUMENT_RADIUS)
 		if host.flight.wheel_brakes_applied:
 			host.draw_string(ThemeDB.fallback_font, speed_center + Vector2(-INSTRUMENT_RADIUS, INSTRUMENT_RADIUS + 47), "ТОРМОЗ", HORIZONTAL_ALIGNMENT_CENTER, INSTRUMENT_RADIUS * 2.0, 11, Color("ef645e"))
-		_draw_round_gauge(_instrument_center(1, gauge_y), INSTRUMENT_RADIUS, "ВЫСОТА", "%.0f" % host.flight.altitude_m, "м", host.flight.altitude_m / 5000.0)
+		_draw_altimeter(_instrument_center(1, gauge_y), INSTRUMENT_RADIUS)
 		_draw_radio_altimeter(_instrument_center(1, gauge_y))
 		_draw_variometer(_instrument_center(2, gauge_y), INSTRUMENT_RADIUS)
 		_draw_compass(_instrument_center(3, gauge_y), INSTRUMENT_RADIUS)
@@ -81,7 +81,7 @@ func _draw_radio_altimeter(center: Vector2) -> void:
 func _draw_unpowered_instruments(gauge_y: float) -> void:
 	# Pitot/static instruments and the independent clock remain available.
 	_draw_speedometer(_instrument_center(0,gauge_y),INSTRUMENT_RADIUS)
-	_draw_round_gauge(_instrument_center(1,gauge_y),INSTRUMENT_RADIUS,"ВЫСОТА","%.0f" % host.flight.altitude_m,"м",host.flight.altitude_m/5000.0)
+	_draw_altimeter(_instrument_center(1,gauge_y),INSTRUMENT_RADIUS)
 	_draw_variometer(_instrument_center(2,gauge_y),INSTRUMENT_RADIUS)
 	var titles = ["СКОРОСТЬ", "ВЫСОТА", "ВАРИОМЕТР", "КОМПАС", "АВИАГОРИЗОНТ", "ПРИЁМНИК 1", "ПРИЁМНИК 2", "ЧАСЫ", "ТОПЛИВО"]
 	for index in range(3,titles.size()):
@@ -167,11 +167,7 @@ func _draw_speedometer(center: Vector2, radius: float) -> void:
 	host.draw_line(center + climb_direction * (radius - 16), center + climb_direction * (radius - 4), Color("65d48c"), 2.5)
 	var climb_label_position = center + climb_direction * (radius - 27) - Vector2(15.0, -3.0)
 	host.draw_string(ThemeDB.fallback_font, climb_label_position, "VX/VY", HORIZONTAL_ALIGNMENT_CENTER, 30.0, 7, Color("65d48c"))
-	for i in 11:
-		var angle: float = lerpf(start_angle, end_angle, i / 10.0)
-		var outer = center + Vector2(cos(angle), sin(angle)) * (radius - 7)
-		var inner = center + Vector2(cos(angle), sin(angle)) * (radius - 12)
-		host.draw_line(inner, outer, Color("d2dde0"), 1)
+	_draw_tick_scale(center, radius, 0.0, 300.0, 25.0, 50.0)
 	var needle_angle: float = speed_to_angle.call(host.flight.speed_kmh)
 	host.draw_line(center, center + Vector2(cos(needle_angle), sin(needle_angle)) * (radius - 15), Color("ed775f"), 2)
 	host.draw_circle(center, 3, Color("d8dfe0"))
@@ -180,24 +176,78 @@ func _draw_speedometer(center: Vector2, radius: float) -> void:
 	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "%.0f км/ч" % host.flight.speed_kmh, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 14, value_color)
 	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 7, radius + 32), "По земле %.0f км/ч" % host.flight.ground_speed_kmh(), HORIZONTAL_ALIGNMENT_CENTER, radius * 2 + 14, 10, Color("73d6d0"))
 
-func _draw_round_gauge(center: Vector2, radius: float, title: String, value: String, unit: String, ratio: float) -> void:
+func _draw_altimeter(center: Vector2, radius: float) -> void:
 	host.draw_circle(center, radius, Color("0a0e10"))
 	host.draw_arc(center, radius - 2, 0, TAU, 48, Color("7d8b91"), 2)
-	if title == "ВЫСОТА":
-		var economy_color = Color("63b9d1")
-		var economy_start = lerpf(-PI * 0.75, PI * 0.75, FlightModelScript.ECONOMY_ALTITUDE_MIN_M / 5000.0)
-		var economy_end = lerpf(-PI * 0.75, PI * 0.75, FlightModelScript.ECONOMY_ALTITUDE_MAX_M / 5000.0)
-		host.draw_arc(center, radius - 5, economy_start, economy_end, 12, economy_color, 4.5)
-	for i in 11:
-		var angle: float = lerpf(-PI * 0.75, PI * 0.75, i / 10.0)
-		var outer = center + Vector2(cos(angle), sin(angle)) * (radius - 6)
-		var inner = center + Vector2(cos(angle), sin(angle)) * (radius - 12)
-		host.draw_line(inner, outer, Color("d2dde0"), 1)
-	var needle_angle: float = lerpf(-PI * 0.75, PI * 0.75, clampf(ratio, 0, 1))
+	# A wind-optimal altitude only has meaning after takeoff, when there is an
+	# actual ground track. On the apron the broad near-equal range otherwise
+	# makes almost the entire scale look recommended.
+	if host.flight.state == FlightModelScript.State.FLYING:
+		var economy_range := optimal_altitude_range()
+		var economy_start := _scale_angle(economy_range.x, 0.0, FlightModelScript.ABSOLUTE_CEILING_M)
+		var economy_end := _scale_angle(economy_range.y, 0.0, FlightModelScript.ABSOLUTE_CEILING_M)
+		host.draw_arc(center, radius - 5, economy_start, economy_end, 12, Color("63b9d1"), 4.5)
+	_draw_tick_scale(center, radius, 0.0, FlightModelScript.ABSOLUTE_CEILING_M, 50.0, 100.0)
+	var needle_angle := _scale_angle(host.flight.altitude_m, 0.0, FlightModelScript.ABSOLUTE_CEILING_M)
 	host.draw_line(center, center + Vector2(cos(needle_angle), sin(needle_angle)) * (radius - 15), Color("ed775f"), 2)
 	host.draw_circle(center, 3, Color("d8dfe0"))
-	host.draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), title, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "%s %s" % [value, unit], HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 14, Color.WHITE)
+	host.draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ВЫСОТА", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
+	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "%.0f м" % host.flight.altitude_m, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 14, Color.WHITE)
+
+func optimal_altitude_range() -> Vector2:
+	const STEP_M := 10.0
+	const NEAR_OPTIMAL_RATIO := 0.95
+	var cruise_airspeed := (FlightModelScript.ECONOMY_CRUISE_MIN_KMH + FlightModelScript.ECONOMY_CRUISE_MAX_KMH) * 0.5
+	var current_ground_vector: Vector2 = host.world.heading_vector(host.flight.heading_deg) * maxf(host.flight.speed_kmh, cruise_airspeed)
+	if host.flight.state == FlightModelScript.State.FLYING:
+		# Use the forecast layer rather than a momentary storm gust, otherwise the
+		# recommendation would flicker precisely when the pilot needs a stable cue.
+		current_ground_vector = host.world.heading_vector(host.flight.heading_deg) * host.flight.speed_kmh + host.world.wind_at(host.flight.altitude_m)
+	var track_deg: float = host.world.vector_heading(current_ground_vector) if current_ground_vector.length_squared() > 0.0001 else host.flight.heading_deg
+	var track_forward: Vector2 = host.world.heading_vector(track_deg)
+	var track_right := Vector2(track_forward.y, -track_forward.x)
+	var scores: PackedFloat32Array = []
+	var best_score := -INF
+	var best_index := 0
+	var sample_count := floori(FlightModelScript.ABSOLUTE_CEILING_M / STEP_M) + 1
+	for sample_index in sample_count:
+		var altitude := sample_index * STEP_M
+		var power_factor := FlightModelScript.altitude_power_factor_at(altitude)
+		var required_throttle := (cruise_airspeed - 35.0) / (185.0 * power_factor)
+		var score := -INF
+		if required_throttle <= 1.0:
+			var wind: Vector2 = host.world.wind_at(altitude)
+			var crosswind := wind.dot(track_right)
+			if absf(crosswind) < cruise_airspeed:
+				var along_air := sqrt(cruise_airspeed * cruise_airspeed - crosswind * crosswind)
+				var ground_speed := along_air + wind.dot(track_forward)
+				var fuel_flow := FlightModelScript.sea_level_fuel_flow_lpm(required_throttle) * FlightModelScript.altitude_fuel_factor_at(altitude)
+				if ground_speed > 0.0 and fuel_flow > 0.0:
+					score = ground_speed / fuel_flow
+		scores.append(score)
+		if score > best_score:
+			best_score = score
+			best_index = sample_index
+	var first := best_index
+	var last := best_index
+	while first > 0 and scores[first - 1] >= best_score * NEAR_OPTIMAL_RATIO:
+		first -= 1
+	while last + 1 < scores.size() and scores[last + 1] >= best_score * NEAR_OPTIMAL_RATIO:
+		last += 1
+	return Vector2(first * STEP_M, last * STEP_M)
+
+func _scale_angle(value: float, minimum: float, maximum: float) -> float:
+	return lerpf(-PI * 0.75, PI * 0.75, clampf(inverse_lerp(minimum, maximum, value), 0.0, 1.0))
+
+func _draw_tick_scale(center: Vector2, radius: float, minimum: float, maximum: float, minor_step: float, major_step: float) -> void:
+	var tick_count := roundi((maximum - minimum) / minor_step)
+	for tick_index in tick_count + 1:
+		var tick_value := minimum + tick_index * minor_step
+		var angle := _scale_angle(tick_value, minimum, maximum)
+		var major := is_equal_approx(tick_value / major_step, roundf(tick_value / major_step))
+		var outer := center + Vector2(cos(angle), sin(angle)) * (radius - 7)
+		var inner := center + Vector2(cos(angle), sin(angle)) * (radius - (15 if major else 11))
+		host.draw_line(inner, outer, Color("d2dde0"), 1.4 if major else 1.0)
 
 func _draw_compass(center: Vector2, radius: float) -> void:
 	host.draw_circle(center, radius, Color("0a0e10"))
@@ -205,9 +255,15 @@ func _draw_compass(center: Vector2, radius: float) -> void:
 	for degrees in range(0, 360, 30):
 		# The compass rose is fixed: north is always at the top.
 		var angle = deg_to_rad(degrees - 90)
-		var p = center + Vector2(cos(angle), sin(angle)) * (radius - 14)
-		var mark = "N" if degrees == 0 else ("E" if degrees == 90 else ("S" if degrees == 180 else ("W" if degrees == 270 else str(degrees))))
-		host.draw_string(ThemeDB.fallback_font, p - Vector2(11, -4), mark, HORIZONTAL_ALIGNMENT_CENTER, 22, 10, Color("d5ddde"))
+		var direction = Vector2(cos(angle), sin(angle))
+		var cardinal := degrees % 90 == 0
+		var outer = center + direction * (radius - 7)
+		var inner = center + direction * (radius - (16 if cardinal else 11))
+		host.draw_line(inner, outer, Color("d5ddde"), 1.5 if cardinal else 1.0)
+		if cardinal:
+			var p = center + direction * (radius - 25)
+			var mark = "N" if degrees == 0 else ("E" if degrees == 90 else ("S" if degrees == 180 else "W"))
+			host.draw_string(ThemeDB.fallback_font, p - Vector2(11, -4), mark, HORIZONTAL_ALIGNMENT_CENTER, 22, 10, Color("d5ddde"))
 	var heading_angle: float = deg_to_rad(host.flight.heading_deg - 90.0)
 	var heading_vector = Vector2(cos(heading_angle), sin(heading_angle))
 	var arrow_tip = center + heading_vector * (radius - 8.0)
@@ -225,13 +281,8 @@ func _draw_compass(center: Vector2, radius: float) -> void:
 func _draw_variometer(center: Vector2, radius: float) -> void:
 	host.draw_circle(center, radius, Color("0a0e10"))
 	host.draw_arc(center, radius - 2, 0, TAU, 48, Color("7d8b91"), 2)
-	# Шкала симметрична: -10 м/с слева, 0 сверху, +10 м/с справа.
-	for i in 11:
-		var value = -10.0 + i * 2.0
-		var angle = lerpf(-PI * 0.75, PI * 0.75, inverse_lerp(-10.0, 10.0, value))
-		var outer = center + Vector2(cos(angle), sin(angle)) * (radius - 6)
-		var inner = center + Vector2(cos(angle), sin(angle)) * (radius - 12)
-		host.draw_line(inner, outer, Color("d2dde0"), 1)
+	# Шкала симметрична: короткое деление 1 м/с, длинное через 5 м/с.
+	_draw_tick_scale(center, radius, -10.0, 10.0, 1.0, 5.0)
 	var shown_speed: float = clampf(host.flight.vertical_speed_mps, -10.0, 10.0)
 	var needle_angle: float = lerpf(-PI * 0.75, PI * 0.75, inverse_lerp(-10.0, 10.0, shown_speed))
 	host.draw_line(center, center + Vector2(cos(needle_angle), sin(needle_angle)) * (radius - 15), Color("79cfa4"), 2)

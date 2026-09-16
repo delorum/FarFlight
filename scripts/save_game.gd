@@ -1,10 +1,10 @@
 extends RefCounted
 ## One local slot. No object deserialization; an atomic rename keeps the old
 ## slot intact until the replacement has been written and validated.
-const VERSION := 4
+const VERSION := 5
 const PATH := "user://flight_save.dat"
-const WEB_KEY := "farflight.save.v4"
-const LEGACY_WEB_KEY := "farflight.save.v3"
+const WEB_KEY := "farflight.save.v5"
+const LEGACY_WEB_KEYS := ["farflight.save.v4", "farflight.save.v3"]
 
 # Synchronous localStorage replacement survives an immediate page close. Keep
 # Variant's binary encoding: JSON alone loses Vector2 and 64-bit RNG state.
@@ -18,7 +18,7 @@ static func decode_web(encoded: String) -> Dictionary:
 	return data if valid(data) else {}
 
 static func web_read_script() -> String:
-	return "(() => { try { return localStorage.getItem(%s) || localStorage.getItem(%s) || ''; } catch (_) { return ''; } })()" % [JSON.stringify(WEB_KEY), JSON.stringify(LEGACY_WEB_KEY)]
+	return "(() => { try { return localStorage.getItem(%s) || localStorage.getItem(%s) || localStorage.getItem(%s) || ''; } catch (_) { return ''; } })()" % [JSON.stringify(WEB_KEY), JSON.stringify(LEGACY_WEB_KEYS[0]), JSON.stringify(LEGACY_WEB_KEYS[1])]
 
 static func web_write_script(encoded: String) -> String:
 	# Numeric status plus readback avoids relying on a bridged JS boolean.
@@ -62,7 +62,7 @@ static func capture(game) -> Dictionary:
 	}.duplicate(true)
 
 static func valid(data: Variant) -> bool:
-	if not data is Dictionary or data.get("version") not in [3, VERSION]:
+	if not data is Dictionary or data.get("version") not in [3, 4, VERSION]:
 		return false
 	for key in ["world", "flight", "ui", "economy"]:
 		if not data.get(key) is Dictionary:
@@ -95,7 +95,7 @@ static func valid(data: Variant) -> bool:
 		for lobe in storm.radar_lobes:
 			if not lobe is Dictionary or not lobe.get("offset_km") is Vector2 or not lobe.has_all(["radius_scale", "strength"]):
 				return false
-	var required_ui_fields := UI_FIELDS if data.version == VERSION else UI_FIELDS.slice(0, UI_FIELDS.size() - 3)
+	var required_ui_fields := UI_FIELDS if data.version >= 4 else UI_FIELDS.slice(0, UI_FIELDS.size() - 3)
 	for field in required_ui_fields:
 		if not data.ui.has(field):
 			return false
@@ -115,6 +115,13 @@ static func valid(data: Variant) -> bool:
 		return false
 	if data.flight.get("airport_index", -1) not in range(world.airports.size()) or data.ui.ils_airport_index not in range(world.airports.size()) or data.ui.wind_overlay_index not in range(5):
 		return false
+	# Since v5 the paid departure preparation is a mandatory save contract.
+	# Older slots remain readable and are migrated by FlightModel.restore_snapshot().
+	if data.version >= 5:
+		if not data.flight.get("departure_authorized") is bool or not data.flight.get("prepared_reverse_direction") is bool:
+			return false
+		if data.flight.get("prepared_airport_index", -1) not in range(world.airports.size()):
+			return false
 	for key in ["measurement_lines", "radar_measurement_lines", "flight_trajectory"]:
 		if not data.ui[key] is Array:
 			return false
@@ -132,7 +139,7 @@ static func valid(data: Variant) -> bool:
 	if not data.economy.inventory is Array or data.economy.inventory.size() != 6:
 		return false
 	var time_state_valid := true
-	if data.version == VERSION:
+	if data.version >= 4:
 		time_state_valid = data.ui.time_scale_index is int and data.ui.time_scale_index in range(5) and data.ui.cabin_sleeping is bool and data.ui.cabin_sleep_progress_seconds is float and data.ui.cabin_sleep_progress_seconds >= 0.0 and data.ui.cabin_sleep_progress_seconds < 1200.0
 	var condition: Variant = data.flight.get("airframe_condition", 100.0)
 	var condition_valid: bool = condition is float and condition >= 0.0 and condition <= 100.0

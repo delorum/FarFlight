@@ -109,5 +109,12 @@ func _run() -> void:
 	for i in 5:
 		button(scope_center, true, MOUSE_BUTTON_WHEEL_DOWN)
 	check(scene.radar_range_index == 0, "Zoom out must stop at default 30 km")
+	var retained_line := {"a":scene.flight.position_km + Vector2(5,0), "b":scene.flight.position_km + Vector2(40,0), "max_height_m":-1.0}
+	var expired_line := {"a":scene.flight.position_km + Vector2(31,0), "b":scene.flight.position_km + Vector2(40,5), "max_height_m":-1.0}
+	scene.radar_measurement_lines.append(retained_line)
+	scene.radar_measurement_lines.append(expired_line)
+	scene.navigation_map.update_dynamic_annotations(0.0)
+	check(retained_line in scene.radar_measurement_lines, "A radar line must remain while either endpoint is within 30 km")
+	check(expired_line not in scene.radar_measurement_lines, "A radar line must be removed after both endpoints leave the 30 km retention radius")
 	print("Radar annotations and zoom: ", "FAIL" if failed else "OK")
 	quit(1 if failed else 0)

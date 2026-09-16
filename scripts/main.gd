@@ -41,7 +41,7 @@ const USE_STYLIZED_YOKE := true
 const MAX_MAP_ZOOM := 24.0
 const INITIAL_MAP_RADIUS_KM := 40.0
 const APPROACH_DETAIL_MIN_ZOOM := 20.0
-const WIND_OVERLAY_ALTITUDES := [0.0, 1500.0, 3000.0, 5000.0]
+const WIND_OVERLAY_ALTITUDES = FlightWorldScript.WIND_ALTITUDES_M
 const TIME_SCALES = SimulationSession.TIME_SCALES
 # Mirrored scene: both door-to-inventory and inventory-to-chair gaps are 19 units.
 const CABIN_TABLE_X = UILayout.CABIN_TABLE_X
@@ -549,6 +549,12 @@ func regenerate_world() -> void:
 
 func _process(delta: float) -> void:
 	if flight.state == FlightModelScript.State.CRASHED:
+		# A crash may happen while the pilot is in the cabin, at an airport scene,
+		# or while the full-screen weather radar is open. Always leave those views
+		# for the navigation-map debrief instead of trapping the player behind a
+		# display whose controls are intentionally disabled after game over.
+		if view_mode != ViewMode.COCKPIT or large_weather_radar:
+			_show_crash_map()
 		return
 	if view_mode != ViewMode.COCKPIT:
 		_update_scene_walking(delta)
@@ -578,6 +584,7 @@ func _process(delta: float) -> void:
 	var engine_before_update: bool = flight.engine_running
 	var events := simulation.advance(delta, flight, economy, recorder, cabin_sleeping)
 	var game_delta: float = events.elapsed
+	navigation_map.update_dynamic_annotations(delta)
 	signal_check_timer -= game_delta
 	if signal_check_timer <= 0.0:
 		_update_receiver_signals()
@@ -610,6 +617,7 @@ func _process(delta: float) -> void:
 		scene_is_walking = false
 		dragging_yoke = false
 		dragging_throttle = false
+		_show_crash_map()
 		_update_crash_overlay()
 	if flight.state == FlightModelScript.State.FLYING:
 		# Accumulate travel rather than multiplying time by current speed: this
@@ -707,6 +715,7 @@ func _update_crash_overlay() -> void:
 
 func _show_crash_map() -> void:
 	large_weather_radar = false
+	final_trajectory_visible = true
 	_set_view_mode(ViewMode.COCKPIT)
 
 func _update_propeller_animation(delta: float) -> void:

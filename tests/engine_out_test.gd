@@ -76,6 +76,7 @@ func _run() -> void:
 	scene.flight.engine_running = false
 	scene.flight.yoke = Vector2(0,1)
 	scene._reset_flight_trajectory()
+	scene.large_weather_radar = true
 	scene._enter_cabin()
 	var cabin_stalled := false
 	for frame in 7200:
@@ -84,12 +85,9 @@ func _run() -> void:
 		if scene.flight.state == Flight.State.CRASHED:
 			break
 	check(cabin_stalled and scene.flight.state == Flight.State.CRASHED,"Unattended cabin flight must continue through stall to terrain impact")
-	check(scene.view_mode == scene.ViewMode.CABIN and scene.crash_overlay.visible,"Crash result must be visible without returning to cockpit")
-	check(scene.crash_description.text.contains(scene.flight.message),"Crash overlay must show the actual cause and flight summary")
+	check(scene.view_mode == scene.ViewMode.COCKPIT and not scene.large_weather_radar,"A crash from any view must force the navigation map")
+	check(not scene.crash_overlay.visible and scene.final_trajectory_visible,"Aircraft crash must immediately show the map debrief and final trajectory")
 	check(scene.trajectory_finished,"Crash in cabin must finish flight trajectory")
-	await process_frame
-	await process_frame
-	check(Rect2(Vector2.ZERO,scene.size).encloses(scene.crash_overlay.get_rect()),"Crash overlay must fit on screen after text wrapping")
 	var final_position: Vector2 = scene.flight.position_km
 	var final_player_x: float = scene.scene_player_x
 	var final_time: float = scene.clock_seconds
@@ -97,8 +95,7 @@ func _run() -> void:
 	scene._interact_in_scene()
 	scene._process(1.0)
 	check(scene.scene_player_x == final_player_x and scene.flight.position_km == final_position and scene.clock_seconds == final_time,"Crash must freeze walking, interactions and simulation")
-	scene._show_crash_map()
-	check(scene.view_mode == scene.ViewMode.COCKPIT and not scene.crash_overlay.visible and scene.trajectory_finished,"Debrief must show the completed trajectory")
+	check(scene.view_mode == scene.ViewMode.COCKPIT and not scene.crash_overlay.visible and scene.trajectory_finished,"Debrief must remain on the completed trajectory")
 	var restart_key := InputEventKey.new()
 	restart_key.keycode = KEY_R
 	restart_key.physical_keycode = KEY_R

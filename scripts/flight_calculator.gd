@@ -13,6 +13,10 @@ var body: VBoxContainer
 var toggle: Button
 var fields: Dictionary = {}
 var current_buttons: Dictionary = {}
+var profile_buttons: Array[Button] = []
+var profile_states: Array[Dictionary] = []
+var active_profile := 0
+var profiles_initialized := false
 # Time is stored in minutes, distance in km, vertical speed in m/s.
 var values := {"distance": 50.0, "time": 20.0, "speed": 150.0, "vertical": 0.0, "altitude": 0.0}
 var last_changed := "distance"
@@ -77,6 +81,19 @@ func _ready() -> void:
 	handle.mouse_default_cursor_shape = Control.CURSOR_MOVE
 	handle.gui_input.connect(_drag_input)
 	header.add_child(handle)
+	var profile_group := ButtonGroup.new()
+	for profile_index in 4:
+		var profile_button := Button.new()
+		profile_button.text = str(profile_index + 1)
+		profile_button.tooltip_text = "Набор расчёта %d" % (profile_index + 1)
+		profile_button.custom_minimum_size = Vector2(30, 0)
+		profile_button.focus_mode = Control.FOCUS_NONE
+		profile_button.toggle_mode = true
+		profile_button.button_group = profile_group
+		profile_button.button_pressed = profile_index == 0
+		profile_button.pressed.connect(_select_profile.bind(profile_index))
+		profile_buttons.append(profile_button)
+		header.add_child(profile_button)
 	toggle = Button.new()
 	toggle.text = "Развернуть"
 	toggle.focus_mode = Control.FOCUS_NONE
@@ -169,7 +186,40 @@ func _initialize_values() -> void:
 		values.time = 0.0
 	_recalculate()
 	_use_forecast()
+	profile_states.resize(4)
+	for profile_index in profile_states.size():
+		profile_states[profile_index] = _capture_profile_state()
+	profiles_initialized = true
 	position = controller.map_rect().position + Vector2(340, 12)
+
+func _capture_profile_state() -> Dictionary:
+	return {
+		"values": values.duplicate(true),
+		"last_changed": last_changed,
+		"initial_altitude": initial_altitude,
+		"heading_based": heading_based,
+		"edit_order": edit_order.duplicate(true),
+		"edit_sequence": edit_sequence,
+		"derive_speed": derive_speed,
+		"derive_vertical": derive_vertical,
+	}
+
+func _select_profile(profile_index: int) -> void:
+	if not profiles_initialized or profile_index == active_profile:
+		return
+	get_viewport().gui_release_focus()
+	profile_states[active_profile] = _capture_profile_state()
+	active_profile = profile_index
+	var state: Dictionary = profile_states[active_profile]
+	values = state.values.duplicate(true)
+	last_changed = state.last_changed
+	initial_altitude = state.initial_altitude
+	heading_based = state.heading_based
+	edit_order = state.edit_order.duplicate(true)
+	edit_sequence = state.edit_sequence
+	derive_speed = state.derive_speed
+	derive_vertical = state.derive_vertical
+	_recalculate()
 
 func _text_changed(text: String, key: String) -> void:
 	var normalized := text.strip_edges().replace(",", ".")

@@ -6,10 +6,11 @@ const ViewMode = preload("res://scripts/scene_modes.gd").ViewMode
 const MAP_MARGIN = UILayout.MAP_MARGIN
 const PANEL_HEIGHT = UILayout.PANEL_HEIGHT
 const RADAR_RANGES_KM := [30.0, 20.0, 10.0, 5.0]
+const RADAR_ANNOTATION_RETENTION_KM := 30.0
 const WeatherRadarArt = preload("res://scripts/weather_radar_art.gd")
 const FlightWorldScript = preload("res://scripts/world.gd")
 const FlightModelScript = preload("res://scripts/flight_model.gd")
-const WIND_OVERLAY_ALTITUDES := [0.0, 1500.0, 3000.0, 5000.0]
+const WIND_OVERLAY_ALTITUDES = FlightWorldScript.WIND_ALTITUDES_M
 const APPROACH_DETAIL_MIN_ZOOM := 20.0
 const MAX_MAP_ZOOM := 24.0
 const INITIAL_MAP_RADIUS_KM := 40.0
@@ -48,6 +49,8 @@ var large_weather_radar := false
 var radar_range_index := 0
 var hovered_airport_index := -1
 var hovered_wind_arrow := false
+var measurement_label_refresh_remaining := 0.0
+var measurement_label_ground_speed_kmh := -INF
 
 func _init(controller: Control) -> void:
 	host = controller
@@ -121,6 +124,33 @@ func _draw_radar_measurement(canvas: CanvasItem, a_world: Vector2, b_world: Vect
 	for point in [a,b]:
 		if point.distance_to(center) < radius - 4.0:
 			canvas.draw_circle(point, 3.5 if radius > 50.0 else 1.3, color)
+
+func update_dynamic_annotations(delta: float) -> void:
+	_prune_distant_radar_measurements()
+	if measurement_lines.is_empty():
+		measurement_label_ground_speed_kmh = host.flight.ground_speed_kmh()
+		return
+	measurement_label_refresh_remaining -= delta
+	if measurement_label_refresh_remaining > 0.0:
+		return
+	measurement_label_refresh_remaining = 0.5
+	var ground_speed: float = host.flight.ground_speed_kmh()
+	if not is_equal_approx(ground_speed, measurement_label_ground_speed_kmh):
+		measurement_label_ground_speed_kmh = ground_speed
+		_queue_map_redraw()
+
+func _prune_distant_radar_measurements() -> void:
+	var removed := false
+	for index in range(radar_measurement_lines.size() - 1, -1, -1):
+		var line: Dictionary = radar_measurement_lines[index]
+		if Vector2(line.a).distance_to(host.flight.position_km) > RADAR_ANNOTATION_RETENTION_KM and Vector2(line.b).distance_to(host.flight.position_km) > RADAR_ANNOTATION_RETENTION_KM:
+			radar_measurement_lines.remove_at(index)
+			removed = true
+	if removed:
+		dragged_measure_connections.clear()
+		dragging_measure_point = false
+		point_drag_candidate = false
+		_queue_map_redraw()
 
 func _handle_radar_mouse_button(event: InputEventMouseButton) -> void:
 	var inside: bool = _radar_contains(event.position) and host.flight.electrical_power
@@ -536,7 +566,8 @@ func _draw_measurement(a_world: Vector2, b_world: Vector2, color := Color("254d9
 	var direct_course = int(round(bearing)) % 360
 	var reverse_course = (direct_course + 180) % 360
 	var max_height: float = cached_max_height if cached_max_height >= 0.0 else _maximum_terrain_height_on_line(a_world, b_world)
-	var label = "%.1f км  %03d° / %03d°  %.0f м" % [distance, direct_course, reverse_course, max_height]
+	var time_text := measurement_time_text(distance)
+	var label = "%.1f км • %s  %03d° / %03d°  %.0f м" % [distance, time_text, direct_course, reverse_course, max_height]
 	var visible_segment = _clip_line_to_rect(a, b, map_rect().grow(-3.0))
 	if visible_segment.size() == 2:
 		var visible_direction: Vector2 = visible_segment[1] - visible_segment[0]
@@ -547,6 +578,10 @@ func _draw_measurement(a_world: Vector2, b_world: Vector2, color := Color("254d9
 			var midpoint: Vector2 = (visible_segment[0] + visible_segment[1]) * 0.5
 			if map_rect().grow(-24.0).has_point(midpoint):
 				_draw_rotated_map_label(midpoint, visible_direction, label, color)
+
+func measurement_time_text(distance_km: float) -> String:
+	var ground_speed: float = host.flight.ground_speed_kmh()
+	return "— мин" if ground_speed <= 0.01 else "%.1f мин" % (distance_km / ground_speed * 60.0)
 
 func _draw_clipped_map_line(a: Vector2, b: Vector2, color: Color, width: float, dashed := false) -> void:
 	var clipped = _clip_line_to_rect(a, b, map_rect().grow(-maxf(1.0, width * 0.5)))

@@ -24,8 +24,10 @@ const OVERSPEED_WEAR_PER_HOUR := 18.0
 const STORM_WEAR_PER_HOUR := 30.0
 const ECONOMY_CRUISE_MIN_KMH := 165.0
 const ECONOMY_CRUISE_MAX_KMH := 185.0
-const ECONOMY_ALTITUDE_MIN_M := 2250.0
-const ECONOMY_ALTITUDE_MAX_M := 2750.0
+const ECONOMY_ALTITUDE_MIN_M := 350.0
+const ECONOMY_ALTITUDE_MAX_M := 500.0
+const PRACTICAL_CEILING_M := 600.0
+const ABSOLUTE_CEILING_M := FlightWorldScript.ROUTE_CEILING_M
 const ROTATION_AUTHORITY_START_KMH := 60.0
 const ROTATION_AUTHORITY_FULL_KMH := 100.0
 const NOMINAL_STALL_SPEED_KMH := 75.0
@@ -437,7 +439,7 @@ func update(delta: float) -> void:
 				_crash("Выехали за пределы ВПП «%s»: боковое отклонение %.1f м" % [current_airport.name, absf(coords.y) * 1000.0] if abs(coords.y) > FlightWorldScript.RUNWAY_WIDTH_KM * 0.5 else "Выехали за торец ВПП «%s»" % current_airport.name)
 				return
 
-	altitude_m = clamp(next_altitude, 0.0, 5000.0)
+	altitude_m = clamp(next_altitude, 0.0, ABSOLUTE_CEILING_M)
 	_update_angle_of_attack()
 	if position_km.x < 0 or position_km.y < 0 or position_km.x > FlightWorldScript.SIZE_KM or position_km.y > FlightWorldScript.SIZE_KM:
 		_crash("Самолёт покинул район полётов")
@@ -675,28 +677,32 @@ func _update_airframe_condition(delta: float) -> void:
 func fuel_flow_lpm() -> float:
 	if not engine_running or fuel_l <= 0.0 or state == State.CRASHED:
 		return 0.0
+	return sea_level_fuel_flow_lpm(throttle) * altitude_fuel_factor()
+
+static func sea_level_fuel_flow_lpm(throttle_value: float) -> float:
 	# Game-scaled engine map. A simple quadratic made low power unrealistically
 	# efficient: 45% throttle could cover much more distance than cruise. These
 	# monotonic reference points put best range near 75--80%, retain normal
 	# 87--90% cruise, and make continuous full power distinctly expensive.
 	var sea_level_flow: float
-	if throttle <= 0.30:
-		sea_level_flow = lerpf(0.10, 0.28, throttle / 0.30)
-	elif throttle <= 0.45:
-		sea_level_flow = lerpf(0.28, 0.36, inverse_lerp(0.30, 0.45, throttle))
-	elif throttle <= 0.50:
-		sea_level_flow = lerpf(0.36, 0.38, inverse_lerp(0.45, 0.50, throttle))
-	elif throttle <= 0.75:
-		sea_level_flow = lerpf(0.38, 0.445, inverse_lerp(0.50, 0.75, throttle))
-	elif throttle <= 0.80:
-		sea_level_flow = lerpf(0.445, 0.47, inverse_lerp(0.75, 0.80, throttle))
-	elif throttle <= 0.87:
-		sea_level_flow = lerpf(0.47, 0.55, inverse_lerp(0.80, 0.87, throttle))
-	elif throttle <= 0.90:
-		sea_level_flow = lerpf(0.55, 0.58, inverse_lerp(0.87, 0.90, throttle))
+	var throttle_ratio := clampf(throttle_value, 0.0, 1.0)
+	if throttle_ratio <= 0.30:
+		sea_level_flow = lerpf(0.10, 0.28, throttle_ratio / 0.30)
+	elif throttle_ratio <= 0.45:
+		sea_level_flow = lerpf(0.28, 0.36, inverse_lerp(0.30, 0.45, throttle_ratio))
+	elif throttle_ratio <= 0.50:
+		sea_level_flow = lerpf(0.36, 0.38, inverse_lerp(0.45, 0.50, throttle_ratio))
+	elif throttle_ratio <= 0.75:
+		sea_level_flow = lerpf(0.38, 0.445, inverse_lerp(0.50, 0.75, throttle_ratio))
+	elif throttle_ratio <= 0.80:
+		sea_level_flow = lerpf(0.445, 0.47, inverse_lerp(0.75, 0.80, throttle_ratio))
+	elif throttle_ratio <= 0.87:
+		sea_level_flow = lerpf(0.47, 0.55, inverse_lerp(0.80, 0.87, throttle_ratio))
+	elif throttle_ratio <= 0.90:
+		sea_level_flow = lerpf(0.55, 0.58, inverse_lerp(0.87, 0.90, throttle_ratio))
 	else:
-		sea_level_flow = lerpf(0.58, 0.84, inverse_lerp(0.90, 1.0, throttle))
-	return sea_level_flow * altitude_fuel_factor()
+		sea_level_flow = lerpf(0.58, 0.84, inverse_lerp(0.90, 1.0, throttle_ratio))
+	return sea_level_flow
 
 func estimated_range_km() -> float:
 	var flow_lpm := fuel_flow_lpm()
@@ -707,22 +713,30 @@ func estimated_range_km() -> float:
 	return flight_minutes * ground_speed / 60.0
 
 func altitude_fuel_factor() -> float:
-	var altitude := clampf(altitude_m, 0.0, 5000.0)
-	if altitude <= 2500.0:
-		return lerpf(1.0, 0.82, altitude / 2500.0)
-	return lerpf(0.82, 1.08, (altitude - 2500.0) / 2500.0)
+	return altitude_fuel_factor_at(altitude_m)
+
+static func altitude_fuel_factor_at(altitude_meters: float) -> float:
+	var altitude := clampf(altitude_meters, 0.0, ABSOLUTE_CEILING_M)
+	var optimum := (ECONOMY_ALTITUDE_MIN_M + ECONOMY_ALTITUDE_MAX_M) * 0.5
+	if altitude <= optimum:
+		return lerpf(1.0, 0.82, altitude / optimum)
+	return lerpf(0.82, 1.08, (altitude - optimum) / (ABSOLUTE_CEILING_M - optimum))
 
 func altitude_power_factor() -> float:
-	if altitude_m <= 2500.0:
+	return altitude_power_factor_at(altitude_m)
+
+static func altitude_power_factor_at(altitude_meters: float) -> float:
+	if altitude_meters <= 450.0:
 		return 1.0
-	return lerpf(1.0, 0.82, clampf((altitude_m - 2500.0) / 2500.0, 0.0, 1.0))
+	return lerpf(1.0, 0.70, clampf((altitude_meters - 450.0) / (ABSOLUTE_CEILING_M - 450.0), 0.0, 1.0))
 
 func max_available_climb_mps() -> float:
 	# Excess power above roughly 45% throttle can be spent on climbing. The
-	# available excess fades smoothly above 3000 m and reaches zero at 5000 m.
+	# Available excess fades above 450 m and reaches zero at the practical
+	# ceiling. Momentum can briefly carry the aircraft towards the absolute one.
 	var powered_throttle := throttle if engine_running else 0.0
 	var throttle_excess := clampf((powered_throttle - 0.45) / 0.55, 0.0, 1.0)
-	var ceiling_factor := 1.0 - smoothstep(3000.0, 5000.0, altitude_m)
+	var ceiling_factor := 1.0 - smoothstep(450.0, PRACTICAL_CEILING_M, altitude_m)
 	return 10.0 * throttle_excess * ceiling_factor
 
 func landing_guidance(index: int, signal_available_override: Variant = null) -> Dictionary:
