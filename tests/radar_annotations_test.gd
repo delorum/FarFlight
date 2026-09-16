@@ -42,8 +42,10 @@ func _run() -> void:
 	check(not scene._trajectory_overlay_visible(), "A final trajectory must remain hidden while the aircraft is in flight")
 	scene.flight.state = scene.FlightModelScript.State.LANDED
 	check(scene._trajectory_overlay_visible(), "A finished flight must show its trajectory and final aircraft position on the ground")
+	check(scene._map_aircraft_visible(), "A finished flight must show its final aircraft position")
 	button(scene.get_trajectory_button_rect().get_center(), true)
 	check(not scene._trajectory_overlay_visible(), "The final trajectory button must hide the completed route")
+	check(scene._map_aircraft_visible(), "Hiding the completed route must keep the final aircraft position visible")
 	button(scene.get_trajectory_button_rect().get_center(), true)
 	check(scene._trajectory_overlay_visible(), "The final trajectory button must show the completed route again")
 	scene.trajectory_finished = false

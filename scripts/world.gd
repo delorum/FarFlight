@@ -17,6 +17,8 @@ const BEACON_MIN_FREQUENCY_KHZ := 300
 const BEACON_MAX_FREQUENCY_KHZ := 400
 const LOCATOR_RANGE_KM := 15.0
 const ROUTE_NDB_RANGE_KM := 30.0
+const ROUTE_NDB_SITE_ATTEMPTS := 384
+const ROUTE_NDB_CLEARANCE_RADIUS_KM := 3.0
 const ILS_RANGE_KM := 15.0
 const ILS_HALF_CONE_DEG := 30.0
 const ILS_AIM_OFFSET_KM := 0.06
@@ -366,18 +368,41 @@ func _generate_beacons() -> void:
 			for cell_y in 2:
 				for cell_x in 2:
 					var cell_origin := region_origin + Vector2(cell_x, cell_y) * (REGION_SIZE_KM * 0.5)
-					var p := cell_origin + Vector2(rng.randf_range(10.0, 40.0), rng.randf_range(10.0, 40.0))
-					for retry in 12:
-						var too_close := false
-						for airport in airports:
-							if p.distance_to(Vector2(airport.position)) < 6.0:
-								too_close = true
-								break
-						if not too_close:
-							break
-						p = cell_origin + Vector2(rng.randf_range(10.0, 40.0), rng.randf_range(10.0, 40.0))
+					var p := _find_route_ndb_site(rng, cell_origin)
 					beacons.append({"name": "NDB-%s" % char(65 + ndb_index), "frequency": frequencies[airports.size() + ndb_index], "position": p, "runway": -1, "range_km": ROUTE_NDB_RANGE_KM, "class": "MH"})
 					ndb_index += 1
+
+func _find_route_ndb_site(rng: RandomNumberGenerator, cell_origin: Vector2) -> Vector2:
+	# Like airports, en-route beacons prefer low terrain. Include the nearby
+	# relief in the score as well: the bottom of a tiny, steep-sided hollow is
+	# low at the antenna itself but would still be a poor radio-navigation site.
+	var best_position := cell_origin + Vector2(25.0, 25.0)
+	var best_score := INF
+	for attempt in ROUTE_NDB_SITE_ATTEMPTS:
+		var candidate := cell_origin + Vector2(rng.randf_range(10.0, 40.0), rng.randf_range(10.0, 40.0))
+		var too_close := false
+		for airport in airports:
+			if candidate.distance_to(Vector2(airport.position)) < 6.0:
+				too_close = true
+				break
+		if too_close:
+			continue
+		var site_height := raw_height_at(candidate)
+		var surrounding_sum := 0.0
+		var surrounding_peak := 0.0
+		for direction_index in 8:
+			var sample := candidate + heading_vector(direction_index * 45.0) * ROUTE_NDB_CLEARANCE_RADIUS_KM
+			var sample_height := raw_height_at(sample)
+			surrounding_sum += sample_height
+			surrounding_peak = maxf(surrounding_peak, sample_height)
+		var surrounding_mean := surrounding_sum / 8.0
+		# Antenna elevation dominates; openness breaks ties between similarly low
+		# candidates and avoids selecting an isolated pit ringed by mountains.
+		var score := site_height * 4.0 + surrounding_mean + surrounding_peak * 0.5
+		if score < best_score:
+			best_score = score
+			best_position = candidate
+	return best_position
 
 func beacon_signal(beacon: Dictionary, aircraft_position_km: Vector2, aircraft_altitude_m: float) -> Dictionary:
 	var beacon_position: Vector2 = beacon.position

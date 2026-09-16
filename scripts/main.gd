@@ -1179,6 +1179,9 @@ func _wind_arrow_centers(rect: Rect2) -> PackedVector2Array:
 func _trajectory_overlay_visible() -> bool:
 	return navigation_map._trajectory_overlay_visible()
 
+func _map_aircraft_visible() -> bool:
+	return navigation_map._map_aircraft_visible()
+
 func _can_toggle_final_trajectory() -> bool:
 	return navigation_map._can_toggle_final_trajectory()
 

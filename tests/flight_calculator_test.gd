@@ -21,7 +21,6 @@ func _run() -> void:
 	flight.fuel_l = 10.0
 	var expected_minutes: float = flight.fuel_l / flight.fuel_flow_lpm()
 	assert(is_equal_approx(flight.estimated_range_km(), expected_minutes * flight.ground_speed_kmh() / 60.0), "Range must use ground speed, including wind")
-	assert(Flight.ECONOMY_CRUISE_MIN_KMH < 174.0 and Flight.ECONOMY_CRUISE_MAX_KMH > 174.0)
 	assert(Flight.ECONOMY_ALTITUDE_MIN_M < 425.0 and Flight.ECONOMY_ALTITUDE_MAX_M > 425.0)
 	assert(ThemeDB.fallback_font.get_string_size("40.0/40 л • запас 999 км", HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x <= 180.0, "Combined fuel and range caption must fit its extended text box")
 	var parameters := {"distance": 50.0, "time": 10.0, "speed": 150.0, "vertical": -2.0, "altitude": 500.0}
@@ -85,10 +84,20 @@ func _run() -> void:
 		{"altitude_m":500.0,"from_deg":180.0,"speed_kmh":40.0},
 		{"altitude_m":700.0,"from_deg":180.0,"speed_kmh":40.0},
 	])
-	var northbound_optimum: Vector2 = scene.instrument_panel.optimal_altitude_range()
+	var northbound_optimum: Vector2 = scene.instrument_panel.optimal_altitude_range(true)
 	scene.flight.heading_deg = 180.0
-	var southbound_optimum: Vector2 = scene.instrument_panel.optimal_altitude_range()
+	var southbound_optimum: Vector2 = scene.instrument_panel.optimal_altitude_range(true)
 	assert((northbound_optimum.x + northbound_optimum.y) * 0.5 > (southbound_optimum.x + southbound_optimum.y) * 0.5 + 100.0, "Optimal-altitude band must move towards the layer with the favourable along-track wind")
+	scene.flight.heading_deg = 0.0
+	scene.flight.altitude_m = 250.0
+	for layer in scene.world.wind_layers:
+		layer.from_deg = 0.0
+		layer.speed_kmh = 40.0
+	var headwind_speed_range: Vector2 = scene.instrument_panel.optimal_speed_range(true)
+	for layer in scene.world.wind_layers:
+		layer.from_deg = 180.0
+	var tailwind_speed_range: Vector2 = scene.instrument_panel.optimal_speed_range(true)
+	assert((headwind_speed_range.x + headwind_speed_range.y) * 0.5 > (tailwind_speed_range.x + tailwind_speed_range.y) * 0.5 + 5.0, "Best-range speed band must move up in a headwind and down in a tailwind")
 	scene.world.wind_layers.assign(original_wind_layers)
 	scene.flight.altitude_m = 3000
 	for layer in scene.world.wind_layers:

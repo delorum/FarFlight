@@ -13,7 +13,13 @@ const TIME_SCALES = preload("res://scripts/simulation_session.gd").TIME_SCALES
 const FlightWorldScript = preload("res://scripts/world.gd")
 const USE_STYLIZED_YOKE := true
 const UIButton = preload("res://scripts/ui_button.gd")
+const ECONOMY_RANGE_REFRESH_MSEC := 1000
 var host: Control
+var _economy_cache_valid := false
+var _economy_cache_signature := 0
+var _economy_cache_next_refresh_msec := 0
+var _cached_altitude_range := Vector2.ZERO
+var _cached_speed_range := Vector2.ZERO
 
 
 func _init(controller: Control) -> void:
@@ -140,16 +146,10 @@ func _draw_speedometer(center: Vector2, radius: float) -> void:
 		return lerpf(start_angle, end_angle, clampf(value / 300.0, 0.0, 1.0))
 	host.draw_circle(center, radius, Color("0a0e10"))
 	host.draw_arc(center, radius - 2, 0, TAU, 48, Color("7d8b91"), 2)
-	# As on a conventional airspeed indicator, the lower edge of the green arc
-	# marks the nominal clean-configuration stall speed; the unmarked sector
-	# below it is not a normal operating range.
-	host.draw_arc(center, radius - 5, speed_to_angle.call(FlightModelScript.NOMINAL_STALL_SPEED_KMH), speed_to_angle.call(FlightModelScript.VNO_KMH), 28, Color("65d48c"), 3.0)
 	host.draw_arc(center, radius - 5, speed_to_angle.call(FlightModelScript.VNO_KMH), speed_to_angle.call(FlightModelScript.VNE_KMH), 10, Color("e8d274"), 3.0)
-	# Best-range cruise is about 174 km/h at 75% power in still air. The blue
-	# band shows the practical near-optimal interval rather than a false single
-	# exact speed; wind is already reflected by ground speed and range readouts.
-	var economy_color = Color("63b9d1")
-	host.draw_arc(center, radius - 5, speed_to_angle.call(FlightModelScript.ECONOMY_CRUISE_MIN_KMH), speed_to_angle.call(FlightModelScript.ECONOMY_CRUISE_MAX_KMH), 10, economy_color, 4.5)
+	if host.flight.state == FlightModelScript.State.FLYING:
+		var economy_range := optimal_speed_range()
+		host.draw_arc(center, radius - 5, speed_to_angle.call(economy_range.x), speed_to_angle.call(economy_range.y), 10, Color("63b9d1"), 4.5)
 	var red_angle: float = speed_to_angle.call(FlightModelScript.VNE_KMH)
 	var red_outer = center + Vector2(cos(red_angle), sin(red_angle)) * (radius - 4)
 	var red_inner = center + Vector2(cos(red_angle), sin(red_angle)) * (radius - 14)
@@ -194,16 +194,13 @@ func _draw_altimeter(center: Vector2, radius: float) -> void:
 	host.draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ВЫСОТА", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
 	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "%.0f м" % host.flight.altitude_m, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 14, Color.WHITE)
 
-func optimal_altitude_range() -> Vector2:
+func optimal_altitude_range(force_refresh := false) -> Vector2:
+	_refresh_economy_range_cache(force_refresh)
+	return _cached_altitude_range
+
+func _calculate_optimal_altitude_range() -> Vector2:
 	const STEP_M := 10.0
-	const NEAR_OPTIMAL_RATIO := 0.95
-	var cruise_airspeed := (FlightModelScript.ECONOMY_CRUISE_MIN_KMH + FlightModelScript.ECONOMY_CRUISE_MAX_KMH) * 0.5
-	var current_ground_vector: Vector2 = host.world.heading_vector(host.flight.heading_deg) * maxf(host.flight.speed_kmh, cruise_airspeed)
-	if host.flight.state == FlightModelScript.State.FLYING:
-		# Use the forecast layer rather than a momentary storm gust, otherwise the
-		# recommendation would flicker precisely when the pilot needs a stable cue.
-		current_ground_vector = host.world.heading_vector(host.flight.heading_deg) * host.flight.speed_kmh + host.world.wind_at(host.flight.altitude_m)
-	var track_deg: float = host.world.vector_heading(current_ground_vector) if current_ground_vector.length_squared() > 0.0001 else host.flight.heading_deg
+	var track_deg := _economy_track_deg()
 	var track_forward: Vector2 = host.world.heading_vector(track_deg)
 	var track_right := Vector2(track_forward.y, -track_forward.x)
 	var scores: PackedFloat32Array = []
@@ -212,29 +209,89 @@ func optimal_altitude_range() -> Vector2:
 	var sample_count := floori(FlightModelScript.ABSOLUTE_CEILING_M / STEP_M) + 1
 	for sample_index in sample_count:
 		var altitude := sample_index * STEP_M
-		var power_factor := FlightModelScript.altitude_power_factor_at(altitude)
-		var required_throttle := (cruise_airspeed - 35.0) / (185.0 * power_factor)
 		var score := -INF
-		if required_throttle <= 1.0:
-			var wind: Vector2 = host.world.wind_at(altitude)
-			var crosswind := wind.dot(track_right)
-			if absf(crosswind) < cruise_airspeed:
-				var along_air := sqrt(cruise_airspeed * cruise_airspeed - crosswind * crosswind)
-				var ground_speed := along_air + wind.dot(track_forward)
-				var fuel_flow := FlightModelScript.sea_level_fuel_flow_lpm(required_throttle) * FlightModelScript.altitude_fuel_factor_at(altitude)
-				if ground_speed > 0.0 and fuel_flow > 0.0:
-					score = ground_speed / fuel_flow
+		for airspeed in range(ceili(FlightModelScript.NOMINAL_STALL_SPEED_KMH + 15.0), floori(FlightModelScript.VNO_KMH) + 1):
+			score = maxf(score, _economy_range_score(airspeed, altitude, track_forward, track_right))
 		scores.append(score)
 		if score > best_score:
 			best_score = score
 			best_index = sample_index
+	return _near_optimal_range(scores, best_index, best_score, 0.0, STEP_M)
+
+func optimal_speed_range(force_refresh := false) -> Vector2:
+	_refresh_economy_range_cache(force_refresh)
+	return _cached_speed_range
+
+func _calculate_optimal_speed_range() -> Vector2:
+	const STEP_KMH := 1.0
+	var minimum_speed := ceilf(FlightModelScript.NOMINAL_STALL_SPEED_KMH + 15.0)
+	var track_deg := _economy_track_deg()
+	var track_forward: Vector2 = host.world.heading_vector(track_deg)
+	var track_right := Vector2(track_forward.y, -track_forward.x)
+	var scores: PackedFloat32Array = []
+	var best_score := -INF
+	var best_index := 0
+	var sample_count := floori((FlightModelScript.VNO_KMH - minimum_speed) / STEP_KMH) + 1
+	for sample_index in sample_count:
+		var airspeed := minimum_speed + sample_index * STEP_KMH
+		var score := _economy_range_score(airspeed, host.flight.altitude_m, track_forward, track_right)
+		scores.append(score)
+		if score > best_score:
+			best_score = score
+			best_index = sample_index
+	return _near_optimal_range(scores, best_index, best_score, minimum_speed, STEP_KMH)
+
+func _refresh_economy_range_cache(force_refresh := false) -> void:
+	# This is a cruise-planning cue, not a primary flight instrument. Updating it
+	# once per real second keeps turns, climbs and accelerated simulation from
+	# repeatedly running the two-dimensional search during rendering.
+	var now_msec := Time.get_ticks_msec()
+	if _economy_cache_valid and not force_refresh and now_msec < _economy_cache_next_refresh_msec:
+		return
+	_economy_cache_next_refresh_msec = now_msec + ECONOMY_RANGE_REFRESH_MSEC
+	var signature := hash([
+		roundi(host.flight.heading_deg / 2.0),
+		roundi(host.flight.speed_kmh / 2.0),
+		roundi(host.flight.altitude_m / 5.0),
+		host.world.wind_layers,
+	])
+	if _economy_cache_valid and not force_refresh and signature == _economy_cache_signature:
+		return
+	_economy_cache_valid = true
+	_economy_cache_signature = signature
+	_cached_speed_range = _calculate_optimal_speed_range()
+	_cached_altitude_range = _calculate_optimal_altitude_range()
+
+func _economy_track_deg() -> float:
+	# Use forecast wind rather than the momentary storm gust so both gauges give
+	# a stable recommendation during turbulence.
+	var airspeed := maxf(host.flight.speed_kmh, FlightModelScript.NOMINAL_STALL_SPEED_KMH + 15.0)
+	var ground_vector: Vector2 = host.world.heading_vector(host.flight.heading_deg) * airspeed + host.world.wind_at(host.flight.altitude_m)
+	return host.world.vector_heading(ground_vector) if ground_vector.length_squared() > 0.0001 else host.flight.heading_deg
+
+func _economy_range_score(airspeed: float, altitude: float, track_forward: Vector2, track_right: Vector2) -> float:
+	var power_factor := FlightModelScript.altitude_power_factor_at(altitude)
+	var required_throttle := (airspeed - 35.0) / (185.0 * power_factor)
+	if required_throttle < 0.0 or required_throttle > 1.0:
+		return -INF
+	var wind: Vector2 = host.world.wind_at(altitude)
+	var crosswind := wind.dot(track_right)
+	if absf(crosswind) >= airspeed:
+		return -INF
+	var along_air := sqrt(airspeed * airspeed - crosswind * crosswind)
+	var ground_speed := along_air + wind.dot(track_forward)
+	var fuel_flow := FlightModelScript.sea_level_fuel_flow_lpm(required_throttle) * FlightModelScript.altitude_fuel_factor_at(altitude)
+	return ground_speed / fuel_flow if ground_speed > 0.0 and fuel_flow > 0.0 else -INF
+
+func _near_optimal_range(scores: PackedFloat32Array, best_index: int, best_score: float, minimum: float, step: float) -> Vector2:
+	const NEAR_OPTIMAL_RATIO := 0.95
 	var first := best_index
 	var last := best_index
 	while first > 0 and scores[first - 1] >= best_score * NEAR_OPTIMAL_RATIO:
 		first -= 1
 	while last + 1 < scores.size() and scores[last + 1] >= best_score * NEAR_OPTIMAL_RATIO:
 		last += 1
-	return Vector2(first * STEP_M, last * STEP_M)
+	return Vector2(minimum + first * step, minimum + last * step)
 
 func _scale_angle(value: float, minimum: float, maximum: float) -> float:
 	return lerpf(-PI * 0.75, PI * 0.75, clampf(inverse_lerp(minimum, maximum, value), 0.0, 1.0))

@@ -226,6 +226,8 @@ func _draw_map() -> void:
 	var position_hint = "Положение самолёта не отображается"
 	if host.trajectory_finished and host.final_trajectory_visible and host.flight.state != FlightModelScript.State.FLYING:
 		position_hint = "Итоговая траектория и положение самолёта"
+	elif host.trajectory_finished and _map_aircraft_visible():
+		position_hint = "Итоговая траектория скрыта • положение самолёта показано"
 	elif host.trajectory_finished:
 		position_hint = "Итоговая траектория скрыта"
 	elif _trajectory_overlay_visible():
@@ -363,12 +365,16 @@ func _draw_wind_overlay(rect: Rect2) -> void:
 			map_canvas.draw_string(ThemeDB.fallback_font, label_position, arrow_label, HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(0.10, 0.36, 0.41, 0.62))
 
 func _draw_completed_flight_trajectory() -> void:
-	if not _trajectory_overlay_visible():
+	var trajectory_visible := _trajectory_overlay_visible()
+	var aircraft_visible := _map_aircraft_visible()
+	if not trajectory_visible and not aircraft_visible:
 		return
 	var path_color = Color("a83f38") if host.flight.state == FlightModelScript.State.CRASHED else Color("176f75")
-	if host.trajectory_finished:
+	if host.trajectory_finished and trajectory_visible:
 		for point_index in range(1, host.flight_trajectory.size()):
 			_draw_clipped_map_line(world_to_screen(host.flight_trajectory[point_index - 1].position), world_to_screen(host.flight_trajectory[point_index].position), path_color, 2.0)
+	if not aircraft_visible:
+		return
 	var aircraft_position = world_to_screen(host.flight.position_km)
 	var safe_rect = map_rect().grow(-10.0)
 	aircraft_position.x = clampf(aircraft_position.x, safe_rect.position.x, safe_rect.end.x)
@@ -380,6 +386,13 @@ func _trajectory_overlay_visible() -> bool:
 		return false
 	if host.trajectory_finished:
 		return host.final_trajectory_visible and host.flight.state != FlightModelScript.State.FLYING
+	return not host.trajectory_recording_started and host.flight.state == FlightModelScript.State.PARKED
+
+func _map_aircraft_visible() -> bool:
+	if host.flight_trajectory.is_empty():
+		return false
+	if host.trajectory_finished:
+		return host.flight.state != FlightModelScript.State.FLYING
 	return not host.trajectory_recording_started and host.flight.state == FlightModelScript.State.PARKED
 
 func _can_toggle_final_trajectory() -> bool:
