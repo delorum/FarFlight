@@ -582,7 +582,7 @@ func _draw_controls(rect: Rect2) -> void:
 	var cabin_button = get_cabin_button_rect()
 	_draw_cockpit_action_button(cabin_button, "ВЫЙТИ В САЛОН [X]")
 	var power_button = get_power_button_rect()
-	_draw_cockpit_action_button(power_button, "ВЫКЛЮЧИТЬ ПИТАНИЕ" if host.flight.electrical_power else "ВКЛЮЧИТЬ ПИТАНИЕ", Color("65d48c") if host.flight.electrical_power else Color("c95d55"))
+	_draw_cockpit_action_button(power_button, "ВЫКЛЮЧИТЬ ПИТАНИЕ [P]" if host.flight.electrical_power else "ВКЛЮЧИТЬ ПИТАНИЕ [P]", Color("65d48c") if host.flight.electrical_power else Color("c95d55"))
 	var engine_button = get_engine_button_rect()
 	_draw_cockpit_action_button(engine_button, "ОСТАНОВИТЬ ДВИГАТЕЛЬ [M]" if host.flight.engine_running else "ЗАПУСТИТЬ ДВИГАТЕЛЬ [M]", Color("65d48c") if host.flight.engine_running else Color("c95d55"))
 	var trajectory_button = get_trajectory_button_rect()

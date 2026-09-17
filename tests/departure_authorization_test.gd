@@ -16,11 +16,12 @@ func _run() -> void:
 	flight.toggle_engine()
 	assert(flight.engine_running)
 	flight.toggle_engine()
-	assert(not flight.engine_running and not flight.departure_authorized, "Stopping the engine on the ground must revoke departure preparation")
+	assert(not flight.engine_running and flight.departure_authorized, "Stopping the engine before takeoff must preserve paid departure preparation")
 	var fuel_before_power_only: float = flight.fuel_l
 	flight.throttle = 1.0
 	flight.update(60.0)
 	assert(is_equal_approx(flight.fuel_l, fuel_before_power_only), "Powered instruments without a running engine must consume no fuel")
+	flight.departure_authorized = false
 	flight.toggle_engine()
 	assert(not flight.engine_running and flight.message_is_error and flight.message == Flight.DEPARTURE_BLOCKED_MESSAGE, "A blocked start must explain the required payment and runway choice as an error")
 	flight.toggle_electrical_power()
@@ -74,7 +75,7 @@ func _run() -> void:
 	assert(scene._flight_message_color() == Color("e8d274"), "Ordinary information must remain yellow")
 	scene.flight.prepare_at_airport(0)
 	var action_buttons := [scene.get_cabin_button_rect(), scene.get_trajectory_button_rect(), scene.get_power_button_rect(), scene.get_engine_button_rect()]
-	var longest_labels := ["ВЫЙТИ В САЛОН [X]", "ПОКАЗАТЬ ТРАЕКТ.", "ВЫКЛЮЧИТЬ ПИТАНИЕ", "ОСТАНОВИТЬ ДВИГАТЕЛЬ [M]"]
+	var longest_labels := ["ВЫЙТИ В САЛОН [X]", "ПОКАЗАТЬ ТРАЕКТ.", "ВЫКЛЮЧИТЬ ПИТАНИЕ [P]", "ОСТАНОВИТЬ ДВИГАТЕЛЬ [M]"]
 	for button_index in action_buttons.size():
 		assert(scene.panel_rect().encloses(action_buttons[button_index]), "Every cockpit action button must remain inside the panel")
 		var indicator_width := 16.0 if button_index in [2, 3] else 4.0
@@ -82,6 +83,14 @@ func _run() -> void:
 		assert(text_width <= action_buttons[button_index].size.x - indicator_width - 3.0, "Even the longest action label must fit without clipping at the minimum font size")
 		for other_index in button_index:
 			assert(not action_buttons[other_index].intersects(action_buttons[button_index]), "Cockpit action button labels need separate, non-overlapping bounds")
+	var power_key := InputEventKey.new()
+	power_key.keycode = KEY_NONE
+	power_key.physical_keycode = KEY_P
+	power_key.pressed = true
+	scene._input(power_key)
+	assert(scene.flight.electrical_power, "Physical P must turn electrical power on with any keyboard layout")
+	scene._input(power_key)
+	assert(not scene.flight.electrical_power, "P must toggle electrical power off")
 	var power_click := InputEventMouseButton.new()
 	power_click.button_index = MOUSE_BUTTON_LEFT
 	power_click.pressed = true
@@ -90,13 +99,18 @@ func _run() -> void:
 	assert(scene.flight.electrical_power, "The cockpit power button must energize the instruments")
 	scene.flight.toggle_engine()
 	scene._enter_cabin(true)
-	assert(not scene.flight.engine_running and not scene.flight.departure_authorized, "Leaving the pilot seat on the ground must stop and secure the aircraft")
+	assert(not scene.flight.engine_running and scene.flight.departure_authorized, "Leaving the pilot seat before takeoff must stop the engine but preserve preparation")
+	scene.flight.departure_authorized = false # Simulate a completed landing and full stop.
 
 	var parking_money: int = scene.economy.money
 	scene._pay_and_prepare(true)
 	assert(scene.flight.departure_authorized and scene.economy.money == parking_money - scene.EconomyScript.PARKING_PRICE, "Payment and runway selection must restore departure authorization")
 	var selected_heading: float = scene.flight.heading_deg
 	var money_after_preparation: int = scene.economy.money
+	scene.flight.toggle_electrical_power()
+	scene.flight.toggle_engine()
+	scene._enter_cabin(true)
+	assert(not scene.flight.engine_running and scene.flight.departure_authorized and is_equal_approx(scene.flight.heading_deg, selected_heading), "Paid runway preparation must survive starting the engine and returning to the cabin without taking off")
 	scene._pay_and_prepare(true)
 	assert(scene.economy.money == money_after_preparation and is_equal_approx(scene.flight.heading_deg, selected_heading), "Selecting the already paid runway again must be free and preserve preparation")
 	assert(scene.scene_notice.contains("оплата не требуется") and scene._operations_status_text().contains("ВПП %03d°" % roundi(selected_heading)), "Flight service must explain the free repeated choice and show the prepared runway")

@@ -388,6 +388,13 @@ func _input(event: InputEvent) -> void:
 		get_parent()._pause_game()
 		get_viewport().set_input_as_handled()
 		return
+	# Simulation pause is global: it must remain available in the cockpit, the
+	# cabin, exterior views and every airport building.
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_SPACE:
+		simulation_paused = not simulation_paused
+		get_viewport().set_input_as_handled()
+		queue_redraw()
+		return
 	if flight_calculator != null and flight_calculator.editing() and event is InputEventKey:
 		return
 	if flight != null and flight.state == FlightModelScript.State.CRASHED:
@@ -437,6 +444,13 @@ func _input(event: InputEvent) -> void:
 			elif event.keycode == KEY_ESCAPE:
 				_leave_current_scene()
 			get_viewport().set_input_as_handled()
+		return
+	if event is InputEventKey and event.pressed and not event.echo and not event.ctrl_pressed and (event.keycode == KEY_P or event.physical_keycode == KEY_P):
+		flight.toggle_electrical_power()
+		weather_radar_cache.invalidate()
+		_queue_map_redraw()
+		get_viewport().set_input_as_handled()
+		queue_redraw()
 		return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_M:
 		flight.toggle_engine()
@@ -496,11 +510,7 @@ func _input(event: InputEvent) -> void:
 		queue_redraw()
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_SPACE:
-			simulation_paused = not simulation_paused
-			get_viewport().set_input_as_handled()
-			queue_redraw()
-		elif event.keycode == KEY_C:
+		if event.keycode == KEY_C:
 			flight.yoke = Vector2.ZERO
 			get_viewport().set_input_as_handled()
 			queue_redraw()

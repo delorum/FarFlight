@@ -267,8 +267,6 @@ func toggle_engine() -> void:
 		_show_message(DEPARTURE_BLOCKED_MESSAGE, 5.0, "", true)
 		return
 	engine_running = not engine_running
-	if not engine_running and state in [State.PARKED, State.LANDED]:
-		departure_authorized = false
 	_show_message("Двигатель запущен" if engine_running else "Двигатель остановлен", 3.0, "")
 
 func toggle_electrical_power() -> void:
@@ -282,9 +280,8 @@ func leave_cockpit_on_ground() -> void:
 		return
 	engine_running = false
 	throttle = 0.0
-	if state != State.ROLLING or speed_kmh <= 0.05:
-		departure_authorized = false
-	_show_message("Двигатель остановлен • требуется подготовка к следующему вылету", 4.0, "")
+	var status := "подготовка к вылету сохранена" if departure_authorized else "требуется подготовка к следующему вылету"
+	_show_message("Двигатель остановлен • %s" % status, 4.0, "")
 
 func update(delta: float) -> void:
 	_update_message(delta)

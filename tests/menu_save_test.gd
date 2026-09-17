@@ -57,6 +57,23 @@ func _run() -> void:
 	game.radar_pending_measure = Vector2(49,51)
 	game.radar_range_index = 2
 	game.final_trajectory_visible = false
+	var calculator = game.flight_calculator
+	calculator._set_value("distance", 111.0)
+	calculator._set_value("track", 35.0)
+	calculator._select_profile(1)
+	calculator._set_value("time", 17.0)
+	calculator._set_value("wind_speed", 22.0)
+	calculator._select_profile(2)
+	calculator._set_value("speed", 143.0)
+	calculator._set_value("vertical", -1.7)
+	calculator._select_profile(3)
+	calculator._set_value("altitude", 480.0)
+	calculator._set_value("heading", 271.0)
+	calculator._select_profile(2)
+	calculator.expanded = true
+	calculator.body.show()
+	calculator.toggle.text = "Свернуть"
+	calculator.position = Vector2(420,55)
 	game._enter_cabin()
 	game.scene_player_x = game._aircraft_point(Vector2(650,0)).x
 	game.cabin_terrain_zoom = 2
@@ -73,6 +90,7 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	check(game.clock_seconds == clock_before, "Time must not advance behind menu")
+	var calculator_before_save: Dictionary = game.flight_calculator.snapshot()
 	var snapshot := Save.capture(game)
 	check(Save.valid(snapshot), "Captured game must validate")
 	check(Save.decode_web(Save.encode_web(snapshot)) == snapshot, "Browser encoding must preserve vectors, RNG integers and full state")
@@ -100,6 +118,13 @@ func _run() -> void:
 	check(loaded.clock_seconds == clock_before and loaded.receiver_frequencies == [333,377], "Time and radio tuning must survive loading")
 	check(loaded.time_scale_index == 3 and loaded.cabin_sleeping and loaded.cabin_sleep_progress_seconds == 777.0, "Time scale and continuous bed rest must survive loading")
 	check(loaded.economy.money == 347 and loaded.economy.hunger == 4 and loaded.economy.inventory[2].type == "food", "Money, needs and cargo must survive loading")
+	check(loaded.flight_calculator.snapshot() == calculator_before_save, "All four calculator profiles, active tab and panel state must survive loading")
+	var legacy_v5_without_calculator := data.duplicate(true)
+	legacy_v5_without_calculator.ui.erase("flight_calculator")
+	check(Save.valid(legacy_v5_without_calculator), "Earlier v5 saves without calculator profiles must remain valid")
+	var malformed_calculator := data.duplicate(true)
+	malformed_calculator.ui.flight_calculator.profiles[0].values.distance = "broken"
+	check(not Save.valid(malformed_calculator), "Malformed calculator profiles must invalidate the save")
 	# A paid runway preparation is gameplay state, not a transient operations-menu
 	# choice. Verify the complete disk path rather than only FlightModel.snapshot().
 	var prepared_slot := "user://test_prepared_save_%d.dat" % Time.get_ticks_usec()

@@ -45,6 +45,16 @@ func _run() -> void:
 	scene.flight.engine_running = false
 	scene._update_propeller_animation(0.1)
 	check(is_zero_approx(scene.propeller_phase), "Stopping engine must restore vertical blade position")
+	var pause_key := InputEventKey.new()
+	pause_key.keycode = KEY_SPACE
+	pause_key.pressed = true
+	for mode in [scene.ViewMode.COCKPIT, scene.ViewMode.CABIN, scene.ViewMode.APRON, scene.ViewMode.AIRPORT, scene.ViewMode.OPERATIONS, scene.ViewMode.MAIL, scene.ViewMode.SHOP, scene.ViewMode.HOTEL, scene.ViewMode.FUEL, scene.ViewMode.REPAIR]:
+		scene._set_view_mode(mode)
+		scene.simulation_paused = false
+		scene._input(pause_key)
+		check(scene.simulation_paused, "Space must pause the simulation in view mode %d" % mode)
+		scene._input(pause_key)
+		check(not scene.simulation_paused, "Space must resume the simulation in view mode %d" % mode)
 	for reverse_direction in [false,true]:
 		scene.flight.prepare_at_airport(0,reverse_direction)
 		scene._enter_cabin()

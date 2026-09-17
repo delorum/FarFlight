@@ -5,6 +5,7 @@ const VERSION := 5
 const PATH := "user://flight_save.dat"
 const WEB_KEY := "farflight.save.v5"
 const LEGACY_WEB_KEYS := ["farflight.save.v4", "farflight.save.v3"]
+const FlightCalculatorScript = preload("res://scripts/flight_calculator.gd")
 
 # Synchronous localStorage replacement survives an immediate page close. Keep
 # Variant's binary encoding: JSON alone loses Vector2 and 64-bit RNG state.
@@ -51,6 +52,7 @@ static func capture(game) -> Dictionary:
 	for field in UI_FIELDS:
 		ui[field] = game.get(field)
 	ui["final_trajectory_visible"] = game.final_trajectory_visible
+	ui["flight_calculator"] = game.flight_calculator.snapshot()
 	ui["player_screen_fraction"] = game.scene_player_x / maxf(game.size.x, 1.0)
 	ui["player_aircraft_x"] = (game.scene_player_x - game._aircraft_origin().x) / game._aircraft_scale()
 	return {
@@ -104,6 +106,8 @@ static func valid(data: Variant) -> bool:
 	if not data.ui.receiver_frequencies is Array or data.ui.receiver_frequencies.size() != 2:
 		return false
 	if data.ui.has("final_trajectory_visible") and not data.ui.final_trajectory_visible is bool:
+		return false
+	if data.ui.has("flight_calculator") and not FlightCalculatorScript.valid_snapshot(data.ui.flight_calculator):
 		return false
 	for frequency in data.ui.receiver_frequencies:
 		if not frequency is int or frequency < 190 or frequency > 535:
@@ -216,6 +220,8 @@ static func restore(game, data: Dictionary) -> bool:
 			game.set(field, data.ui[field])
 	if data.ui.has("final_trajectory_visible"):
 		game.final_trajectory_visible = data.ui.final_trajectory_visible
+	if data.ui.has("flight_calculator") and not game.flight_calculator.restore_snapshot(data.ui.flight_calculator):
+		return false
 	if game.view_mode in [game.ViewMode.CABIN, game.ViewMode.APRON]:
 		game.scene_player_x = game._aircraft_origin().x + float(data.ui.player_aircraft_x) * game._aircraft_scale()
 	else:

@@ -29,6 +29,7 @@ var derive_speed := false
 var derive_vertical := false
 const NONNEGATIVE := ["distance", "time", "speed", "wind_speed"]
 const ANGLES := ["track", "heading", "wind_from"]
+const VALUE_KEYS := ["distance", "time", "speed", "vertical", "altitude", "track", "heading", "wind_from", "wind_speed"]
 const ROWS := [
 	["distance", "Расстояние", "км", 1.0],
 	["time", "Время", "мин", 1.0],
@@ -175,6 +176,8 @@ func _ready() -> void:
 	call_deferred("_initialize_values")
 
 func _initialize_values() -> void:
+	if profiles_initialized:
+		return
 	values.speed = controller.flight.speed_kmh
 	values.track = controller.flight.heading_deg
 	values.heading = controller.flight.heading_deg
@@ -204,13 +207,64 @@ func _capture_profile_state() -> Dictionary:
 		"derive_vertical": derive_vertical,
 	}
 
-func _select_profile(profile_index: int) -> void:
-	if not profiles_initialized or profile_index == active_profile:
-		return
-	get_viewport().gui_release_focus()
+func snapshot() -> Dictionary:
+	_initialize_values()
 	profile_states[active_profile] = _capture_profile_state()
-	active_profile = profile_index
-	var state: Dictionary = profile_states[active_profile]
+	return {
+		"profiles": profile_states.duplicate(true),
+		"active_profile": active_profile,
+		"expanded": expanded,
+		"position": position,
+	}.duplicate(true)
+
+static func valid_snapshot(data: Variant) -> bool:
+	if not data is Dictionary or not data.get("profiles") is Array or data.profiles.size() != 4:
+		return false
+	if not data.get("active_profile") is int or data.active_profile not in range(4):
+		return false
+	if not data.get("expanded") is bool or not data.get("position") is Vector2:
+		return false
+	var saved_position: Vector2 = data.position
+	if not is_finite(saved_position.x) or not is_finite(saved_position.y):
+		return false
+	for profile in data.profiles:
+		if not profile is Dictionary or not profile.get("values") is Dictionary:
+			return false
+		if not profile.values.has_all(VALUE_KEYS):
+			return false
+		for key in VALUE_KEYS:
+			if not profile.values[key] is float or not is_finite(float(profile.values[key])):
+				return false
+		if not profile.get("initial_altitude") is float or not is_finite(float(profile.initial_altitude)):
+			return false
+		if not profile.get("last_changed") is String or profile.last_changed not in ["distance", "time", "altitude"]:
+			return false
+		if not profile.get("heading_based") is bool or not profile.get("derive_speed") is bool or not profile.get("derive_vertical") is bool:
+			return false
+		if not profile.get("edit_sequence") is int or profile.edit_sequence < 0 or not profile.get("edit_order") is Dictionary:
+			return false
+		for key in profile.edit_order:
+			if not key is String or not profile.edit_order[key] is int or int(profile.edit_order[key]) < 0:
+				return false
+	return true
+
+func restore_snapshot(data: Dictionary) -> bool:
+	if not valid_snapshot(data):
+		return false
+	_initialize_values()
+	profile_states.assign(data.profiles.duplicate(true))
+	active_profile = data.active_profile
+	_apply_profile_state(profile_states[active_profile])
+	for profile_index in profile_buttons.size():
+		profile_buttons[profile_index].button_pressed = profile_index == active_profile
+	expanded = data.expanded
+	body.visible = expanded
+	toggle.text = "Свернуть" if expanded else "Развернуть"
+	position = data.position
+	size = Vector2.ZERO
+	return true
+
+func _apply_profile_state(state: Dictionary) -> void:
 	values = state.values.duplicate(true)
 	last_changed = state.last_changed
 	initial_altitude = state.initial_altitude
@@ -220,6 +274,14 @@ func _select_profile(profile_index: int) -> void:
 	derive_speed = state.derive_speed
 	derive_vertical = state.derive_vertical
 	_recalculate()
+
+func _select_profile(profile_index: int) -> void:
+	if not profiles_initialized or profile_index == active_profile:
+		return
+	get_viewport().gui_release_focus()
+	profile_states[active_profile] = _capture_profile_state()
+	active_profile = profile_index
+	_apply_profile_state(profile_states[active_profile])
 
 func _text_changed(text: String, key: String) -> void:
 	var normalized := text.strip_edges().replace(",", ".")
