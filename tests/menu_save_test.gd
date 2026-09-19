@@ -57,6 +57,9 @@ func _run() -> void:
 	game.radar_pending_measure = Vector2(49,51)
 	game.radar_range_index = 2
 	game.final_trajectory_visible = false
+	game.navigation_map.weather_briefing_visible = false
+	game.navigation_map.weather_briefing_time_seconds = 321.0
+	var briefing_before_save: Dictionary = game.navigation_map.weather_briefing_snapshot()
 	var calculator = game.flight_calculator
 	calculator._set_value("distance", 111.0)
 	calculator._set_value("track", 35.0)
@@ -112,6 +115,7 @@ func _run() -> void:
 	check(loaded.world.beacons == game.world.beacons and loaded.world.storms == game.world.storms, "Generated frequencies and storm state must survive loading")
 	check(loaded.measurement_lines == game.measurement_lines and loaded.radar_measurement_lines == game.radar_measurement_lines, "Both independent annotation sets must survive loading")
 	check(not loaded.final_trajectory_visible, "The final-trajectory visibility choice must survive loading")
+	check(loaded.navigation_map.weather_briefing_snapshot() == briefing_before_save, "Weather briefing marks, age origin and visibility must survive loading")
 	check(loaded.pending_measure == game.pending_measure and loaded.radar_pending_measure == game.radar_pending_measure, "Unfinished annotations must survive loading")
 	check(loaded.view_mode == game.ViewMode.CABIN and loaded.cabin_terrain_zoom == 2, "Side scene and zoom must survive loading")
 	check(is_equal_approx(loaded.scene_player_x,game.scene_player_x), "Cabin character position must survive loading")
@@ -122,9 +126,15 @@ func _run() -> void:
 	var legacy_v5_without_calculator := data.duplicate(true)
 	legacy_v5_without_calculator.ui.erase("flight_calculator")
 	check(Save.valid(legacy_v5_without_calculator), "Earlier v5 saves without calculator profiles must remain valid")
+	var legacy_v5_without_briefing := data.duplicate(true)
+	legacy_v5_without_briefing.ui.erase("weather_briefing")
+	check(Save.valid(legacy_v5_without_briefing), "Earlier v5 saves without weather briefings must remain valid")
 	var malformed_calculator := data.duplicate(true)
 	malformed_calculator.ui.flight_calculator.profiles[0].values.distance = "broken"
 	check(not Save.valid(malformed_calculator), "Malformed calculator profiles must invalidate the save")
+	var malformed_briefing := data.duplicate(true)
+	malformed_briefing.ui.weather_briefing.storms[0].radius_km = -1.0
+	check(not Save.valid(malformed_briefing), "Malformed weather briefing marks must invalidate the save")
 	# A paid runway preparation is gameplay state, not a transient operations-menu
 	# choice. Verify the complete disk path rather than only FlightModel.snapshot().
 	var prepared_slot := "user://test_prepared_save_%d.dat" % Time.get_ticks_usec()

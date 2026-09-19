@@ -21,6 +21,50 @@ func _run() -> void:
 	check(scene.map_center.is_equal_approx(Vector2(scene.world.airports[scene.flight.airport_index].position)), "New game map must be centred on the departure airport")
 	var initial_radius: float = maxf(map_size.x, map_size.y) / (scene.pixels_per_km() * 2.0)
 	check(initial_radius <= scene.INITIAL_MAP_RADIUS_KM + 0.01, "Initial map view must show about a 40 km radius")
+	var removed_receiver_shortcut := InputEventKey.new()
+	removed_receiver_shortcut.keycode = KEY_1
+	removed_receiver_shortcut.ctrl_pressed = true
+	removed_receiver_shortcut.pressed = true
+	scene._input(removed_receiver_shortcut)
+	check(scene.active_receiver == -1, "Removed Ctrl+1/2 shortcuts must not select a receiver")
+	var frequency_before_digit: int = scene.receiver_frequencies[0]
+	scene.active_receiver = 0
+	var removed_frequency_digit := InputEventKey.new()
+	removed_frequency_digit.keycode = KEY_3
+	removed_frequency_digit.unicode = 51
+	removed_frequency_digit.pressed = true
+	scene._input(removed_frequency_digit)
+	check(scene.receiver_frequencies[0] == frequency_before_digit, "Digit keys must no longer edit receiver frequency")
+	scene.active_receiver = -1
+	check(scene.navigation_map.weather_briefing_storms.size() == scene.world.storms.size(), "New game must start with a complete weather briefing")
+	var briefing_storm: Dictionary = scene.navigation_map.weather_briefing_storms[0]
+	var frozen_center := Vector2(briefing_storm.center)
+	var live_storm: Dictionary = scene.world.storms[0]
+	scene.world.update_weather(1800.0)
+	check(Vector2(scene.navigation_map.weather_briefing_storms[0].center) == frozen_center and scene.world.storm_position(live_storm) != frozen_center, "Map storm marks must remain a static snapshot while real storms move")
+	scene.economy.elapsed_seconds += 1800.0
+	check(scene.navigation_map.weather_briefing_age_text() == "30 мин", "Briefing age must use elapsed game time")
+	scene.navigation_map.refresh_weather_briefing()
+	check(Vector2(scene.navigation_map.weather_briefing_storms[0].center).is_equal_approx(scene.world.storm_position(live_storm)), "Refreshing a briefing must capture current storm positions without moving them")
+	scene.map_center = Vector2(scene.navigation_map.weather_briefing_storms[0].center)
+	scene.map_zoom = 8.0
+	var storm_screen: Vector2 = scene.world_to_screen(scene.navigation_map.weather_briefing_storms[0].center)
+	check(scene.navigation_map.weather_briefing_storm_at(storm_screen) == 0, "Hovering a mapped storm must find its briefing entry")
+	var motion_text: String = scene.navigation_map.weather_briefing_motion_text(scene.navigation_map.weather_briefing_storms[0])
+	check(motion_text.begins_with("≈") and motion_text.contains("° • ≈") and motion_text.ends_with(" км/ч"), "Mapped storm hover must format an approximate motion label beside its arrow")
+	scene.navigation_map.toggle_weather_briefing()
+	check(scene.navigation_map.weather_briefing_storm_at(storm_screen) == -1, "Hidden map storms must not retain hover interaction")
+	scene.navigation_map.toggle_weather_briefing()
+	var airport: Dictionary = scene.world.airports[0]
+	var capture_triangle: PackedVector2Array = scene.navigation_map.ils_capture_triangle(airport, 1.0)
+	var capture_forward: Vector2 = scene.world.heading_vector(airport.heading)
+	var capture_far_center := (capture_triangle[1] + capture_triangle[2]) * 0.5
+	var expected_capture_apex: Vector2 = Vector2(airport.position) + capture_forward * scene.FlightWorldScript.RUNWAY_LENGTH_KM * 0.5
+	check(capture_triangle[0].is_equal_approx(expected_capture_apex), "ILS capture cone must begin at the far runway threshold used by signal calculations")
+	check(is_equal_approx(Vector2(airport.position).distance_to(capture_far_center), scene.FlightWorldScript.ILS_RANGE_KM), "ILS capture crossbar must be centred 15 km from the airport beacon")
+	check(absf((capture_triangle[2] - capture_triangle[1]).dot(capture_forward)) < 0.0001, "ILS capture crossbar must be perpendicular to the glide path")
+	var expected_half_width: float = capture_triangle[0].distance_to(capture_far_center) * tan(deg_to_rad(scene.FlightWorldScript.ILS_HALF_CONE_DEG))
+	check(is_equal_approx(capture_triangle[1].distance_to(capture_far_center), expected_half_width), "ILS capture sides must use the actual localizer half-cone angle")
 	scene.map_zoom = 4.0
 	scene.map_center = Vector2(45,55)
 	scene.measurement_lines.append({"a":Vector2(20,30),"b":Vector2(40,60),"max_height_m":500.0})

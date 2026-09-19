@@ -74,15 +74,18 @@ func _run() -> void:
 	scene.flight._show_message("Обычное сообщение")
 	assert(scene._flight_message_color() == Color("e8d274"), "Ordinary information must remain yellow")
 	scene.flight.prepare_at_airport(0)
-	var action_buttons := [scene.get_cabin_button_rect(), scene.get_trajectory_button_rect(), scene.get_power_button_rect(), scene.get_engine_button_rect()]
-	var longest_labels := ["ВЫЙТИ В САЛОН [X]", "ПОКАЗАТЬ ТРАЕКТ.", "ВЫКЛЮЧИТЬ ПИТАНИЕ [P]", "ОСТАНОВИТЬ ДВИГАТЕЛЬ [M]"]
+	var action_buttons := [scene.get_cabin_button_rect(), scene.get_trajectory_button_rect(), scene.get_weather_briefing_button_rect(), scene.get_power_button_rect(), scene.get_engine_button_rect()]
+	var longest_labels := ["САЛОН", "ТР: ВЫКЛ", "ГР: ВЫКЛ", "ВЫКЛЮЧИТЬ ПИТАНИЕ [P]", "ОСТАНОВИТЬ ДВИГАТЕЛЬ [M]"]
 	for button_index in action_buttons.size():
 		assert(scene.panel_rect().encloses(action_buttons[button_index]), "Every cockpit action button must remain inside the panel")
-		var indicator_width := 16.0 if button_index in [2, 3] else 4.0
+		var indicator_width := 16.0 if button_index in [3, 4] else 4.0
 		var text_width: float = ThemeDB.fallback_font.get_string_size(longest_labels[button_index], HORIZONTAL_ALIGNMENT_CENTER, -1, 7).x
 		assert(text_width <= action_buttons[button_index].size.x - indicator_width - 3.0, "Even the longest action label must fit without clipping at the minimum font size")
 		for other_index in button_index:
 			assert(not action_buttons[other_index].intersects(action_buttons[button_index]), "Cockpit action button labels need separate, non-overlapping bounds")
+	var briefing_button: Rect2 = scene.get_weather_briefing_button_rect()
+	assert(briefing_button.end.x < scene.get_ils_rect().position.x and scene.panel_rect().encloses(briefing_button), "Weather layer button must fit to the left of ILS")
+	assert(ThemeDB.fallback_font.get_string_size("ГР: ВЫКЛ", HORIZONTAL_ALIGNMENT_LEFT, -1, 7).x <= briefing_button.size.x - 7.0, "Weather layer button label must fit at the minimum button font size")
 	var power_key := InputEventKey.new()
 	power_key.keycode = KEY_NONE
 	power_key.physical_keycode = KEY_P

@@ -77,13 +77,27 @@ func _generate_weather() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value + 44771
 	_generate_wind(rng)
+	_generate_storms(rng)
+
+func refresh_weather() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	_generate_wind(rng)
+	_generate_storms(rng)
+	# Newly generated storm origins describe their positions now, rather than
+	# being displaced by the elapsed time of the previous weather system.
+	weather_time_seconds = 0.0
+
+func _generate_storms(rng: RandomNumberGenerator) -> void:
 	storms.clear()
 	for region_y in REGIONS_PER_AXIS:
 		for region_x in REGIONS_PER_AXIS:
 			var region_origin := Vector2(region_x, region_y) * REGION_SIZE_KM
 			for index in STORMS_PER_REGION:
 				var drift_heading := rng.randf_range(0.0, 360.0)
-				var storm_radius := rng.randf_range(4.0, 8.0)
+				# Broad cells make route selection matter without increasing their
+				# number. Placement is deliberately independent of airports.
+				var storm_radius := rng.randf_range(6.0, 10.5)
 				var radar_lobes: Array[Dictionary] = [
 					{"offset_km": Vector2.ZERO, "radius_scale": 0.68, "strength": 1.0},
 				]
@@ -101,11 +115,6 @@ func _generate_weather() -> void:
 					"drift_kmh": heading_vector(drift_heading) * rng.randf_range(8.0, 18.0),
 					"radar_lobes": radar_lobes,
 				})
-
-func refresh_wind() -> void:
-	var rng := RandomNumberGenerator.new()
-	rng.randomize()
-	_generate_wind(rng)
 
 func _generate_wind(rng: RandomNumberGenerator) -> void:
 	wind_layers.clear()

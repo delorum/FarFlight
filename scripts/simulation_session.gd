@@ -52,6 +52,9 @@ func advance(real_delta: float, flight, economy, recorder, sleeping: bool) -> Di
 			trip_air_distance_km += previous_position.distance_to(flight.position_km)
 			trip_elapsed_seconds += step
 		if flight.state == Flight.State.LANDED and last_economy_flight_state != Flight.State.LANDED:
+			# A complete landing starts a new weather system for the next flight.
+			# Touch-and-go remains in ROLLING/FLYING and does not refresh it.
+			flight.world.refresh_weather()
 			economy.arrive_at_airport(flight.airport_index, flight.world)
 			events.landed = true
 			events.map_changed = true

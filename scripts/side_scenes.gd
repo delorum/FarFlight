@@ -1126,6 +1126,9 @@ func get_operations_refuel_rect() -> Rect2:
 func get_operations_runway_rect(reverse_direction: bool) -> Rect2:
 	return Rect2(host.size.x * 0.54, host.size.y * (0.48 if not reverse_direction else 0.59), minf(390.0, host.size.x * 0.40), 52)
 
+func get_operations_weather_rect() -> Rect2:
+	return Rect2(host.size.x * 0.54, host.size.y * 0.38, minf(390.0, host.size.x * 0.40), 52)
+
 func get_building_exit_rect() -> Rect2:
 	return Rect2(host.size.x * 0.54, get_operations_runway_rect(true).end.y + 18.0, minf(390.0, host.size.x * 0.40), 52)
 
@@ -1140,6 +1143,7 @@ func _draw_operations_scene() -> void:
 	host.draw_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.54, host.size.y * 0.22), host._operations_status_text(), HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.40, 15, status_color)
 	host.draw_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.54, host.size.y * 0.27), "Топливо: %.1f / %.0f л" % [host.flight.fuel_l, host.flight.fuel_capacity_l], HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.40, 16, Color("34372f"))
 	host.draw_string(ThemeDB.fallback_font, get_operations_refuel_rect().position + Vector2(0, 30), "Подготовка или смена ВПП: %d монет" % EconomyScript.PARKING_PRICE, HORIZONTAL_ALIGNMENT_CENTER, get_operations_refuel_rect().size.x, 15, AircraftArt.INK)
+	_draw_menu_button(get_operations_weather_rect(), "ОБНОВИТЬ МЕТЕОСВОДКУ • %s" % host.navigation_map.weather_briefing_age_text())
 	_draw_menu_button(get_operations_runway_rect(false), host._operations_runway_button_text(false))
 	_draw_menu_button(get_operations_runway_rect(true), host._operations_runway_button_text(true))
 	_draw_menu_button(get_building_exit_rect(), "ВЫЙТИ В АЭРОПОРТ [ESC]")

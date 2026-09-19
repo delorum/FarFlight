@@ -49,11 +49,82 @@ var large_weather_radar := false
 var radar_range_index := 0
 var hovered_airport_index := -1
 var hovered_wind_arrow := false
+var hovered_weather_storm_index := -1
 var measurement_label_refresh_remaining := 0.0
 var measurement_label_ground_speed_kmh := -INF
+var weather_briefing_storms: Array[Dictionary] = []
+var weather_briefing_time_seconds := 0.0
+var weather_briefing_visible := true
+var weather_briefing_age_minute := -1
 
 func _init(controller: Control) -> void:
 	host = controller
+
+func refresh_weather_briefing() -> void:
+	weather_briefing_storms.clear()
+	for storm in host.world.storms:
+		weather_briefing_storms.append({
+			"center": host.world.storm_position(storm),
+			"radius_km": float(storm.radius_km),
+			"intensity": float(storm.intensity),
+			"drift_kmh": Vector2(storm.drift_kmh),
+			"radar_lobes": host.world.storm_lobes(storm).duplicate(true),
+		})
+	weather_briefing_time_seconds = host.economy.elapsed_seconds
+	weather_briefing_age_minute = 0
+	hovered_weather_storm_index = -1
+	_queue_map_redraw()
+
+func weather_briefing_snapshot() -> Dictionary:
+	return {
+		"storms": weather_briefing_storms.duplicate(true),
+		"time_seconds": weather_briefing_time_seconds,
+		"visible": weather_briefing_visible,
+	}.duplicate(true)
+
+static func valid_weather_briefing(data: Variant) -> bool:
+	if not data is Dictionary or not data.get("storms") is Array or not data.get("time_seconds") is float or not data.get("visible") is bool:
+		return false
+	if not is_finite(float(data.time_seconds)) or float(data.time_seconds) < 0.0:
+		return false
+	for storm in data.storms:
+		if not storm is Dictionary or not storm.get("center") is Vector2 or not storm.get("drift_kmh") is Vector2:
+			return false
+		if not storm.get("radius_km") is float or not storm.get("intensity") is float or not storm.get("radar_lobes") is Array:
+			return false
+		if float(storm.radius_km) <= 0.0 or not is_finite(float(storm.radius_km)):
+			return false
+		for lobe in storm.radar_lobes:
+			if not lobe is Dictionary or not lobe.get("offset_km") is Vector2 or not lobe.get("radius_scale") is float or not lobe.get("strength") is float:
+				return false
+	return true
+
+func restore_weather_briefing(data: Dictionary) -> bool:
+	if not valid_weather_briefing(data):
+		return false
+	weather_briefing_storms.assign(data.storms.duplicate(true))
+	weather_briefing_time_seconds = data.time_seconds
+	weather_briefing_visible = data.visible
+	weather_briefing_age_minute = floori(weather_briefing_age_seconds() / 60.0)
+	hovered_weather_storm_index = -1
+	return true
+
+func weather_briefing_age_seconds() -> float:
+	return maxf(0.0, host.economy.elapsed_seconds - weather_briefing_time_seconds)
+
+func weather_briefing_age_text() -> String:
+	var total_minutes := floori(weather_briefing_age_seconds() / 60.0)
+	if total_minutes <= 0:
+		return "только что"
+	if total_minutes < 60:
+		return "%d мин" % total_minutes
+	return "%d ч %02d мин" % [total_minutes / 60, total_minutes % 60]
+
+func toggle_weather_briefing() -> void:
+	weather_briefing_visible = not weather_briefing_visible
+	hovered_weather_storm_index = -1
+	_queue_map_redraw()
+	host.queue_redraw()
 
 func map_rect() -> Rect2:
 	return Rect2(MAP_MARGIN, MAP_MARGIN, host.size.x - MAP_MARGIN * 2.0, max(300.0, host.size.y - PANEL_HEIGHT - MAP_MARGIN * 2.0))
@@ -127,6 +198,10 @@ func _draw_radar_measurement(canvas: CanvasItem, a_world: Vector2, b_world: Vect
 
 func update_dynamic_annotations(delta: float) -> void:
 	_prune_distant_radar_measurements()
+	var current_briefing_minute := floori(weather_briefing_age_seconds() / 60.0)
+	if current_briefing_minute != weather_briefing_age_minute:
+		weather_briefing_age_minute = current_briefing_minute
+		_queue_map_redraw()
 	if measurement_lines.is_empty():
 		measurement_label_ground_speed_kmh = host.flight.ground_speed_kmh()
 		return
@@ -202,6 +277,7 @@ func _draw_map() -> void:
 		a = world_to_screen(Vector2(0, k))
 		b = world_to_screen(Vector2(FlightWorldScript.SIZE_KM, k))
 		_draw_clipped_map_line(a, b, Color(0.25, 0.28, 0.22, 0.18), 1.0)
+	_draw_weather_briefing(rect)
 	for segment in contour_segments:
 		var level: float = segment.level
 		var color = Color("806f4b") if int(level) % 500 != 0 else Color("5c4b31")
@@ -221,18 +297,9 @@ func _draw_map() -> void:
 		_draw_measurement(pending_measure, _snap_map_point(host.get_local_mouse_position()), Color(0.1, 0.25, 0.7, 0.55))
 	_draw_completed_flight_trajectory()
 	host._draw_economy_hud(map_canvas, false)
+	_draw_hovered_weather_storm_motion(rect)
 	_draw_hovered_airport_services(rect)
 	map_canvas.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, 20), "НАВИГАЦИОННАЯ КАРТА", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("35372e"))
-	var position_hint = "Положение самолёта не отображается"
-	if host.trajectory_finished and host.final_trajectory_visible and host.flight.state != FlightModelScript.State.FLYING:
-		position_hint = "Итоговая траектория и положение самолёта"
-	elif host.trajectory_finished and _map_aircraft_visible():
-		position_hint = "Итоговая траектория скрыта • положение самолёта показано"
-	elif host.trajectory_finished:
-		position_hint = "Итоговая траектория скрыта"
-	elif _trajectory_overlay_visible():
-		position_hint = "Стартовая позиция самолёта показана"
-	map_canvas.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, 38), position_hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("55574a"))
 	var wind_altitude_label: String
 	if wind_overlay_index == WIND_OVERLAY_ALTITUDES.size():
 		wind_altitude_label = "текущая %.0f м" % host.flight.altitude_m
@@ -241,18 +308,17 @@ func _draw_map() -> void:
 	else:
 		wind_altitude_label = "%d м" % roundi(float(WIND_OVERLAY_ALTITUDES[wind_overlay_index]))
 	var wind_hint = "V: ветер [%s]" % wind_altitude_label
+	map_canvas.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, 39), "Метеосводка: возраст %s" % weather_briefing_age_text(), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("55574a"))
 	var map_hints = [
-		"Изолинии: 250 м",
 		wind_hint,
 		"ЛКМ: точка/линия",
 		"ЛКМ с движением: карта",
 		"ПКМ: отмена/стереть",
 		"Колесо: масштаб",
-		"Ctrl+1/2: выбрать приёмник",
-		"Цифры: частота • колесо над приёмником: 1 кГц, с Shift: 10 кГц",
+		"Колесо над приёмником: 1 кГц, с Shift: 10 кГц",
 	]
 	for hint_index in map_hints.size():
-		map_canvas.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, 57 + hint_index * 17), map_hints[hint_index], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("55574a"))
+		map_canvas.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, 58 + hint_index * 17), map_hints[hint_index], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("55574a"))
 	var scale_km = 10.0
 	var scale_px = scale_km * pixels_per_km()
 	var scale_start = rect.end - Vector2(scale_px + 18, 18)
@@ -262,6 +328,10 @@ func _draw_map() -> void:
 func _draw_hovered_airport_services(rect: Rect2) -> void:
 	var mouse = host.get_local_mouse_position()
 	if not rect.has_point(mouse):
+		return
+	# A storm has its own local arrow and label, like the weather radar, so do
+	# not repeat the same information in the map-wide footer.
+	if weather_briefing_storm_at(mouse) >= 0:
 		return
 	var index = _airport_hover_index(mouse)
 	var text = ""
@@ -273,6 +343,142 @@ func _draw_hovered_airport_services(rect: Rect2) -> void:
 	if not text.is_empty():
 		map_canvas.draw_rect(Rect2(rect.position.x + 8, rect.end.y - 47, minf(520.0, rect.size.x - 16), 25), Color("d7d0ad"), true)
 		map_canvas.draw_string(ThemeDB.fallback_font, Vector2(rect.position.x + 14, rect.end.y - 29), text, HORIZONTAL_ALIGNMENT_LEFT, minf(508.0, rect.size.x - 28), 12, Color("35372e"))
+
+func weather_briefing_motion_text(storm: Dictionary) -> String:
+	var drift := Vector2(storm.drift_kmh)
+	var approximate_heading := (roundi(host.world.vector_heading(drift) / 10.0) * 10) % 360
+	var approximate_speed := maxi(5, roundi(drift.length() / 5.0) * 5)
+	return "≈%03d° • ≈%d км/ч" % [approximate_heading, approximate_speed]
+
+func _draw_hovered_weather_storm_motion(rect: Rect2) -> void:
+	var mouse := host.get_local_mouse_position()
+	var storm_index := weather_briefing_storm_at(mouse)
+	if storm_index < 0:
+		return
+	var storm: Dictionary = weather_briefing_storms[storm_index]
+	var velocity := Vector2(storm.drift_kmh)
+	var direction := velocity.normalized()
+	var origin := Vector2(
+		clampf(mouse.x, rect.position.x + 48.0, rect.end.x - 48.0),
+		clampf(mouse.y, rect.position.y + 48.0, rect.end.y - 48.0)
+	)
+	var tip := origin + direction * 34.0
+	var color := Color("315e63")
+	if velocity.length_squared() > 0.000001:
+		map_canvas.draw_line(origin, tip, color, 2.0, true)
+		for angle in [-0.55, 0.55]:
+			map_canvas.draw_line(tip, tip - direction.rotated(angle) * 8.0, color, 2.0, true)
+	var label := weather_briefing_motion_text(storm)
+	var label_size := ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12)
+	var label_rect := WeatherRadarArt.storm_motion_label_rect(rect, origin, tip, label_size)
+	if label_rect.has_area():
+		map_canvas.draw_rect(label_rect, Color("d7d0ad"), true)
+		map_canvas.draw_rect(label_rect, Color(0.19, 0.37, 0.39, 0.45), false, 1.0)
+		map_canvas.draw_string(ThemeDB.fallback_font, label_rect.position + Vector2(4, 13), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, color)
+
+func _weather_briefing_contour(storm: Dictionary, center: Vector2) -> PackedVector2Array:
+	var points := PackedVector2Array()
+	var radius: float = float(storm.radius_km)
+	for sample_index in 48:
+		var direction := Vector2.RIGHT.rotated(TAU * sample_index / 48.0)
+		var extent := 0.0
+		for lobe in storm.radar_lobes:
+			var offset := Vector2(lobe.offset_km)
+			var lobe_radius := radius * float(lobe.radius_scale)
+			var projection := direction.dot(offset)
+			var discriminant := projection * projection - (offset.length_squared() - lobe_radius * lobe_radius)
+			if discriminant >= 0.0:
+				extent = maxf(extent, projection + sqrt(discriminant))
+		points.append(world_to_screen(center + direction * extent))
+	return points
+
+func _weather_briefing_circle(center: Vector2, radius: float) -> PackedVector2Array:
+	var points := PackedVector2Array()
+	for point_index in 40:
+		points.append(center + Vector2.RIGHT.rotated(TAU * point_index / 40.0) * radius)
+	return points
+
+func _weather_briefing_maximum_extent_km(storm: Dictionary) -> float:
+	var result := float(storm.radius_km)
+	for lobe in storm.radar_lobes:
+		result = maxf(result, Vector2(lobe.offset_km).length() + float(storm.radius_km) * float(lobe.radius_scale))
+	return result
+
+func _draw_weather_briefing_echoes(rect: Rect2, clip_polygon: PackedVector2Array) -> void:
+	# Reuse the radar's thresholds and hues, with much lower opacity on paper.
+	# Weak returns are drawn across every cell first so they never cover a core.
+	var map_alphas := [0.10, 0.14, 0.18]
+	for zone_index in WeatherRadarArt.ECHO_ZONES.size():
+		var zone: Dictionary = WeatherRadarArt.ECHO_ZONES[zone_index]
+		var zone_color := Color(zone.color, map_alphas[zone_index])
+		for storm in weather_briefing_storms:
+			for wrap_y in [-1, 0, 1]:
+				for wrap_x in [-1, 0, 1]:
+					var center := Vector2(storm.center) + Vector2(wrap_x, wrap_y) * FlightWorldScript.SIZE_KM
+					var center_screen := world_to_screen(center)
+					var maximum_extent_px := _weather_briefing_maximum_extent_km(storm) * pixels_per_km()
+					if not Rect2(center_screen - Vector2.ONE * maximum_extent_px, Vector2.ONE * maximum_extent_px * 2.0).intersects(rect):
+						continue
+					for lobe in storm.radar_lobes:
+						var peak := float(storm.intensity) * float(lobe.strength)
+						if peak <= float(zone.threshold):
+							continue
+						var ratio := 1.0 if float(zone.threshold) <= 0.0 else sqrt(1.0 - float(zone.threshold) / peak)
+						var echo_center := world_to_screen(center + Vector2(lobe.offset_km))
+						var echo_radius := float(storm.radius_km) * float(lobe.radius_scale) * ratio * pixels_per_km()
+						var bounds := Rect2(echo_center - Vector2.ONE * echo_radius, Vector2.ONE * echo_radius * 2.0)
+						if not bounds.intersects(rect):
+							continue
+						if rect.encloses(bounds):
+							map_canvas.draw_circle(echo_center, echo_radius, zone_color)
+						else:
+							for clipped_polygon in Geometry2D.intersect_polygons(_weather_briefing_circle(echo_center, echo_radius), clip_polygon):
+								map_canvas.draw_colored_polygon(clipped_polygon, zone_color)
+
+func _draw_weather_briefing(rect: Rect2) -> void:
+	if not weather_briefing_visible:
+		return
+	var clip_polygon := PackedVector2Array([rect.position, Vector2(rect.end.x, rect.position.y), rect.end, Vector2(rect.position.x, rect.end.y)])
+	_draw_weather_briefing_echoes(rect, clip_polygon)
+	var line_color := Color(0.52, 0.54, 0.16, 0.30)
+	for storm in weather_briefing_storms:
+		for wrap_y in [-1, 0, 1]:
+			for wrap_x in [-1, 0, 1]:
+				var center := Vector2(storm.center) + Vector2(wrap_x, wrap_y) * FlightWorldScript.SIZE_KM
+				var center_screen := world_to_screen(center)
+				var extent_px := _weather_briefing_maximum_extent_km(storm) * pixels_per_km()
+				if not Rect2(center_screen - Vector2.ONE * extent_px, Vector2.ONE * extent_px * 2.0).intersects(rect):
+					continue
+				var contour := _weather_briefing_contour(storm, center)
+				var bounds := Rect2(contour[0], Vector2.ZERO)
+				for point in contour:
+					bounds = bounds.expand(point)
+				if not bounds.intersects(rect):
+					continue
+				for point_index in contour.size():
+					_draw_clipped_map_line(contour[point_index], contour[(point_index + 1) % contour.size()], line_color, 1.2)
+
+func weather_briefing_storm_at(mouse: Vector2) -> int:
+	if large_weather_radar or not weather_briefing_visible or not map_rect().has_point(mouse):
+		return -1
+	var point := screen_to_world(mouse)
+	var strongest := 0.0
+	var selected := -1
+	for storm_index in weather_briefing_storms.size():
+		var storm: Dictionary = weather_briefing_storms[storm_index]
+		for lobe in storm.radar_lobes:
+			var center := Vector2(storm.center) + Vector2(lobe.offset_km)
+			var delta := point - center
+			delta.x = fposmod(delta.x + FlightWorldScript.SIZE_KM * 0.5, FlightWorldScript.SIZE_KM) - FlightWorldScript.SIZE_KM * 0.5
+			delta.y = fposmod(delta.y + FlightWorldScript.SIZE_KM * 0.5, FlightWorldScript.SIZE_KM) - FlightWorldScript.SIZE_KM * 0.5
+			var lobe_radius := float(storm.radius_km) * float(lobe.radius_scale)
+			var ratio := delta.length() / lobe_radius
+			if ratio < 1.0:
+				var strength := float(storm.intensity) * float(lobe.strength) * (1.0 - ratio * ratio)
+				if strength > strongest:
+					strongest = strength
+					selected = storm_index
+	return selected
 
 func _airport_hover_index(mouse: Vector2) -> int:
 	if not map_rect().has_point(mouse):
@@ -502,6 +708,11 @@ func _draw_approach_direction(airport: Dictionary, approach_sign: float) -> void
 	var forward: Vector2 = host.world.heading_vector(airport.heading) * approach_sign
 	var threshold: Vector2 = airport.position - forward * (FlightWorldScript.RUNWAY_LENGTH_KM * 0.5)
 	var touchdown_target: Vector2 = threshold + forward * FlightModelScript.GLIDE_TOUCHDOWN_OFFSET_KM
+	var capture_triangle := ils_capture_triangle(airport, approach_sign)
+	var approach_color := Color("287777")
+	_draw_clipped_map_line(world_to_screen(capture_triangle[0]), world_to_screen(capture_triangle[1]), approach_color, 1.5, true)
+	_draw_clipped_map_line(world_to_screen(capture_triangle[0]), world_to_screen(capture_triangle[2]), approach_color, 1.5, true)
+	_draw_clipped_map_line(world_to_screen(capture_triangle[1]), world_to_screen(capture_triangle[2]), approach_color, 1.5, true)
 	var approach_vertical_speed = -(92.0 / 3.6) * tan(deg_to_rad(FlightModelScript.GLIDE_SLOPE_DEG))
 	var markers_by_direction: Dictionary = airport.get("approach_markers", {})
 	var markers: Array = markers_by_direction.get(str(int(approach_sign)), [])
@@ -509,7 +720,7 @@ func _draw_approach_direction(airport: Dictionary, approach_sign: float) -> void
 		return
 	var farthest_distance_km: float = markers[-1].distance_km
 	var farthest_position = threshold - forward * farthest_distance_km
-	_draw_clipped_map_line(world_to_screen(farthest_position), world_to_screen(touchdown_target), Color("287777"), 1.5, true)
+	_draw_clipped_map_line(world_to_screen(farthest_position), world_to_screen(touchdown_target), approach_color, 1.5, true)
 	for marker in markers:
 		var distance_km: float = marker.distance_km
 		var approach_position: Vector2 = threshold - forward * distance_km
@@ -530,6 +741,20 @@ func _draw_approach_direction(airport: Dictionary, approach_sign: float) -> void
 		label_position.y = clampf(label_position.y, map_rect().position.y + text_size.y + 2.0, map_rect().end.y - 4.0)
 		map_canvas.draw_rect(Rect2(label_position + Vector2(-3, -11), text_size + Vector2(6, 3)), Color("d7d0ad"), true)
 		map_canvas.draw_string(ThemeDB.fallback_font, label_position, label, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("185f61"))
+
+func ils_capture_triangle(airport: Dictionary, approach_sign: float) -> PackedVector2Array:
+	var forward: Vector2 = host.world.heading_vector(airport.heading) * approach_sign
+	# The signal model uses the far runway threshold as its virtual cone apex so
+	# guidance remains available throughout the approach and ground roll.
+	var apex: Vector2 = Vector2(airport.position) + forward * (FlightWorldScript.RUNWAY_LENGTH_KM * 0.5)
+	# Keep the deliberately simple triangular chart symbol. Signal range is
+	# measured from the beacon in the airport centre, so place the middle of the
+	# perpendicular crossbar exactly 15 km from that beacon along the approach.
+	var far_center := Vector2(airport.position) - forward * FlightWorldScript.ILS_RANGE_KM
+	var right := Vector2(forward.y, -forward.x)
+	var apex_to_crossbar_km := apex.distance_to(far_center)
+	var half_width := apex_to_crossbar_km * tan(deg_to_rad(FlightWorldScript.ILS_HALF_CONE_DEG))
+	return PackedVector2Array([apex, far_center + right * half_width, far_center - right * half_width])
 
 func _build_approach_markers() -> void:
 	for airport in host.world.airports:

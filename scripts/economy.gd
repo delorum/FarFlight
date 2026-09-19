@@ -161,10 +161,6 @@ func buy_repair(requested_points: float, airport_index: int) -> float:
 func arrive_at_airport(airport_index: int, world) -> void:
 	if airport_index == last_landed_airport:
 		return
-	# Initial setup keeps the seeded weather; subsequent visits use the same
-	# different-airport rule as mail offers, including a return after another stop.
-	if last_landed_airport >= 0:
-		world.refresh_wind()
 	last_landed_airport = airport_index
 	offers_by_airport[airport_index] = _generate_offers(airport_index, world)
 

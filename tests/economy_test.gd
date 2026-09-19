@@ -53,12 +53,10 @@ func _init() -> void:
 	var old_offers: Array = economy.offers_at(0).duplicate(true)
 	economy.arrive_at_airport(0, world)
 	assert(economy.offers_at(0) == old_offers)
-	assert(world.wind_layers == initial_wind, "Landing at the same airport must preserve wind")
 	var initial_storms: Array = world.storms.duplicate(true)
 	economy.arrive_at_airport(destination, world)
 	assert(economy.offers_at(destination).size() == 3)
-	assert(world.wind_layers != initial_wind, "Landing at another airport must regenerate wind")
-	assert(world.storms == initial_storms, "Changing wind must not regenerate storms")
+	assert(world.wind_layers == initial_wind and world.storms == initial_storms, "Economy arrivals must not mutate physical weather")
 	for layer in world.wind_layers:
 		assert(layer.speed_kmh >= 8.0 and layer.speed_kmh <= 32.0)
 		assert(layer.from_deg >= 0.0 and layer.from_deg <= 360.0)
@@ -70,7 +68,7 @@ func _init() -> void:
 	saved_arrival.arrive_at_airport(destination, world)
 	assert(world.wind_layers == arrival_wind, "Restoring a save must preserve the previous-airport rule")
 	economy.arrive_at_airport(0, world)
-	assert(world.wind_layers != arrival_wind, "Returning after a different airport must change wind again")
+	assert(world.wind_layers == arrival_wind, "Mail offer refreshes must remain independent from weather")
 	assert(economy.buy_canister())
 	var fuel_money_before: int = economy.money
 	assert(is_equal_approx(economy.fill_carried_canister(19.7, economy.fuel_airports[0]), 19.7))

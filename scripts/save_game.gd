@@ -6,6 +6,7 @@ const PATH := "user://flight_save.dat"
 const WEB_KEY := "farflight.save.v5"
 const LEGACY_WEB_KEYS := ["farflight.save.v4", "farflight.save.v3"]
 const FlightCalculatorScript = preload("res://scripts/flight_calculator.gd")
+const NavigationMapScript = preload("res://scripts/navigation_map.gd")
 
 # Synchronous localStorage replacement survives an immediate page close. Keep
 # Variant's binary encoding: JSON alone loses Vector2 and 64-bit RNG state.
@@ -53,6 +54,7 @@ static func capture(game) -> Dictionary:
 		ui[field] = game.get(field)
 	ui["final_trajectory_visible"] = game.final_trajectory_visible
 	ui["flight_calculator"] = game.flight_calculator.snapshot()
+	ui["weather_briefing"] = game.navigation_map.weather_briefing_snapshot()
 	ui["player_screen_fraction"] = game.scene_player_x / maxf(game.size.x, 1.0)
 	ui["player_aircraft_x"] = (game.scene_player_x - game._aircraft_origin().x) / game._aircraft_scale()
 	return {
@@ -108,6 +110,8 @@ static func valid(data: Variant) -> bool:
 	if data.ui.has("final_trajectory_visible") and not data.ui.final_trajectory_visible is bool:
 		return false
 	if data.ui.has("flight_calculator") and not FlightCalculatorScript.valid_snapshot(data.ui.flight_calculator):
+		return false
+	if data.ui.has("weather_briefing") and not NavigationMapScript.valid_weather_briefing(data.ui.weather_briefing):
 		return false
 	for frequency in data.ui.receiver_frequencies:
 		if not frequency is int or frequency < 190 or frequency > 535:
@@ -222,13 +226,19 @@ static func restore(game, data: Dictionary) -> bool:
 		game.final_trajectory_visible = data.ui.final_trajectory_visible
 	if data.ui.has("flight_calculator") and not game.flight_calculator.restore_snapshot(data.ui.flight_calculator):
 		return false
+	if data.ui.has("weather_briefing"):
+		if not game.navigation_map.restore_weather_briefing(data.ui.weather_briefing):
+			return false
+	else:
+		# Existing v5 slots predate weather briefings. Build one from their saved
+		# physical weather without rejecting or mutating the old save.
+		game.navigation_map.refresh_weather_briefing()
 	if game.view_mode in [game.ViewMode.CABIN, game.ViewMode.APRON]:
 		game.scene_player_x = game._aircraft_origin().x + float(data.ui.player_aircraft_x) * game._aircraft_scale()
 	else:
 		game.scene_player_x = float(data.ui.player_screen_fraction) * game.size.x
 	game.scene_is_walking = false
 	game.flight.wheel_brakes_applied = false
-	game.receiver_frequency_entry = ""
 	game.active_receiver = -1
 	game._normalize_map_camera()
 	game._build_contours()

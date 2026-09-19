@@ -63,6 +63,20 @@ func _initialize() -> void:
 	assert(is_equal_approx(hotel_world.weather_time_seconds - weather_before, Economy.HOTEL_REST_SECONDS))
 	assert(is_equal_approx(hotel_economy.elapsed_seconds, Economy.HOTEL_REST_SECONDS))
 
+	var arrival_world := World.new(99117)
+	var arrival_flight := Flight.new(arrival_world)
+	var arrival_economy := Economy.new(arrival_world)
+	var arrival_session := Session.new()
+	var arrival_recorder := Recorder.new()
+	arrival_recorder.reset(arrival_flight)
+	var arrival_wind := arrival_world.wind_layers.duplicate(true)
+	var arrival_storms := arrival_world.storms.duplicate(true)
+	arrival_flight.state = Flight.State.LANDED
+	arrival_flight.speed_kmh = 0.0
+	arrival_session.last_economy_flight_state = Flight.State.FLYING
+	var arrival_result := arrival_session.advance(0.1, arrival_flight, arrival_economy, arrival_recorder, false)
+	assert(arrival_result.landed and arrival_world.wind_layers != arrival_wind and arrival_world.storms != arrival_storms, "Every completed landing must generate wind and storms for the next flight")
+
 	# Preparation is an explicit reservation, not inferred from current heading.
 	hotel_flight.prepare_at_airport(2, true)
 	hotel_flight.heading_deg += 1.0

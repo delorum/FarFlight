@@ -549,8 +549,6 @@ func _draw_beacon_instrument(center: Vector2, radius: float, instrument: int) ->
 	var title_color = Color("73d6d0") if host.active_receiver == instrument else Color("b8c5c8")
 	host.draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ПРИЁМНИК %d" % (instrument + 1), HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, title_color)
 	var frequency_text = "%03d кГц" % int(host.receiver_frequencies[instrument])
-	if host.active_receiver == instrument and not host.receiver_frequency_entry.is_empty():
-		frequency_text = "%s кГц" % host.receiver_frequency_entry.rpad(3, "_")
 	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 5.0, radius + 14), frequency_text, HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 10.0, 10, Color.WHITE)
 	if signal_available:
 		var delta: Vector2 = beacon.position - host.flight.position_km
@@ -580,22 +578,25 @@ func _draw_controls(rect: Rect2) -> void:
 	host.draw_rect(center_button, Color("82979f"), false, 1)
 	host.draw_string(ThemeDB.fallback_font, center_button.position + Vector2(0, 17), "ЦЕНТР [C]", HORIZONTAL_ALIGNMENT_CENTER, center_button.size.x, 10, Color.WHITE)
 	var cabin_button = get_cabin_button_rect()
-	_draw_cockpit_action_button(cabin_button, "ВЫЙТИ В САЛОН [X]")
+	_draw_cockpit_action_button(cabin_button, "САЛОН [X]" if cabin_button.size.x >= 80.0 else "САЛОН")
 	var power_button = get_power_button_rect()
 	_draw_cockpit_action_button(power_button, "ВЫКЛЮЧИТЬ ПИТАНИЕ [P]" if host.flight.electrical_power else "ВКЛЮЧИТЬ ПИТАНИЕ [P]", Color("65d48c") if host.flight.electrical_power else Color("c95d55"))
 	var engine_button = get_engine_button_rect()
 	_draw_cockpit_action_button(engine_button, "ОСТАНОВИТЬ ДВИГАТЕЛЬ [M]" if host.flight.engine_running else "ЗАПУСТИТЬ ДВИГАТЕЛЬ [M]", Color("65d48c") if host.flight.engine_running else Color("c95d55"))
 	var trajectory_button = get_trajectory_button_rect()
 	var trajectory_enabled = host._can_toggle_final_trajectory()
-	var roomy_trajectory_button = trajectory_button.size.x >= 150.0
 	var trajectory_text: String
 	if not trajectory_enabled:
-		trajectory_text = "ИТОГОВОЙ ТРАЕКТОРИИ НЕТ" if roomy_trajectory_button else "ТРАЕКТ.: НЕТ"
+		trajectory_text = "ТРАЕКТ.: НЕТ" if trajectory_button.size.x >= 80.0 else "ТР: НЕТ"
 	elif host.final_trajectory_visible:
-		trajectory_text = "СКРЫТЬ ИТОГОВУЮ ТРАЕКТОРИЮ" if roomy_trajectory_button else "СКРЫТЬ ТРАЕКТ."
+		trajectory_text = "ТРАЕКТ.: ВКЛ" if trajectory_button.size.x >= 80.0 else "ТР: ВКЛ"
 	else:
-		trajectory_text = "ПОКАЗАТЬ ИТОГОВУЮ ТРАЕКТОРИЮ" if roomy_trajectory_button else "ПОКАЗАТЬ ТРАЕКТ."
+		trajectory_text = "ТРАЕКТ.: ВЫКЛ" if trajectory_button.size.x >= 80.0 else "ТР: ВЫКЛ"
 	_draw_cockpit_action_button(trajectory_button, trajectory_text, Color.TRANSPARENT, trajectory_enabled)
+	var storms_button = get_weather_briefing_button_rect()
+	var roomy_storms_button: bool = storms_button.size.x >= 80.0
+	var storms_text: String = ("ГРОЗЫ: ВКЛ" if roomy_storms_button else "ГР: ВКЛ") if host.navigation_map.weather_briefing_visible else ("ГРОЗЫ: ВЫКЛ" if roomy_storms_button else "ГР: ВЫКЛ")
+	_draw_cockpit_action_button(storms_button, storms_text)
 	_draw_time_controls(false)
 
 func _draw_cockpit_action_button(rect: Rect2, label: String, indicator: Color = Color.TRANSPARENT, enabled: bool = true) -> void:
@@ -642,9 +643,9 @@ func get_yoke_rect() -> Rect2:
 	var rect = panel_rect()
 	return Rect2(rect.end.x - 136, rect.position.y + 62, 112, 112)
 
-func _split_cockpit_action_rect(area: Rect2, index: int) -> Rect2:
-	var gap = 8.0
-	var button_width = maxf(0.0, (area.size.x - gap) * 0.5)
+func _split_cockpit_action_rect(area: Rect2, index: int, count: int = 2) -> Rect2:
+	var gap = 4.0 if count >= 3 else 8.0
+	var button_width = maxf(0.0, (area.size.x - gap * (count - 1)) / count)
 	return Rect2(area.position + Vector2(index * (button_width + gap), 0.0), Vector2(button_width, area.size.y))
 
 func _left_cockpit_action_area() -> Rect2:
@@ -663,13 +664,13 @@ func get_engine_button_rect() -> Rect2:
 	return _split_cockpit_action_rect(_right_cockpit_action_area(), 1)
 
 func get_cabin_button_rect() -> Rect2:
-	return _split_cockpit_action_rect(_left_cockpit_action_area(), 0)
+	return _split_cockpit_action_rect(_left_cockpit_action_area(), 0, 3)
 
 func get_power_button_rect() -> Rect2:
 	return _split_cockpit_action_rect(_right_cockpit_action_area(), 0)
 
 func get_trajectory_button_rect() -> Rect2:
-	return _split_cockpit_action_rect(_left_cockpit_action_area(), 1)
+	return _split_cockpit_action_rect(_left_cockpit_action_area(), 1, 3)
 
 func get_center_yoke_button_rect() -> Rect2:
 	var yoke_rect = get_yoke_rect()
@@ -702,3 +703,6 @@ func get_weather_radar_rect() -> Rect2:
 	var available_width = maxf(0.0, ils_rect.position.x - rect.position.x - 16.0)
 	var radar_width = minf(184.0, available_width)
 	return Rect2(ils_rect.position.x - radar_width - 8.0, rect.end.y - 82.0, radar_width, 68.0)
+
+func get_weather_briefing_button_rect() -> Rect2:
+	return _split_cockpit_action_rect(_left_cockpit_action_area(), 2, 3)

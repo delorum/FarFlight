@@ -56,7 +56,6 @@ var economy
 # its owning module; these properties never keep a second copy.
 var receiver_frequencies := [305, 327]
 var active_receiver := -1
-var receiver_frequency_entry := ""
 var map_zoom: float:
 	get:
 		return navigation_map.map_zoom
@@ -337,6 +336,11 @@ var hovered_wind_arrow: bool:
 		return navigation_map.hovered_wind_arrow
 	set(value):
 		navigation_map.hovered_wind_arrow = value
+var hovered_weather_storm_index: int:
+	get:
+		return navigation_map.hovered_weather_storm_index
+	set(value):
+		navigation_map.hovered_weather_storm_index = value
 var time_scale_index: int:
 	get:
 		return simulation.time_scale_index
@@ -462,35 +466,6 @@ func _input(event: InputEvent) -> void:
 		_toggle_weather_radar()
 		get_viewport().set_input_as_handled()
 		return
-	if event is InputEventKey and event.pressed and not event.echo and event.ctrl_pressed and event.keycode in [KEY_1, KEY_2]:
-		active_receiver = 0 if event.keycode == KEY_1 else 1
-		receiver_frequency_entry = ""
-		get_viewport().set_input_as_handled()
-		queue_redraw()
-		return
-	if event is InputEventKey and event.pressed and not event.echo and active_receiver >= 0:
-		var entered_character := char(event.unicode)
-		if entered_character >= "0" and entered_character <= "9":
-			_enter_receiver_frequency_digit(entered_character)
-			get_viewport().set_input_as_handled()
-			queue_redraw()
-			return
-		if event.keycode == KEY_BACKSPACE:
-			receiver_frequency_entry = receiver_frequency_entry.left(maxi(0, receiver_frequency_entry.length() - 1))
-			get_viewport().set_input_as_handled()
-			queue_redraw()
-			return
-		if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
-			_commit_receiver_frequency_entry()
-			get_viewport().set_input_as_handled()
-			queue_redraw()
-			return
-		if event.keycode == KEY_ESCAPE:
-			receiver_frequency_entry = ""
-			active_receiver = -1
-			get_viewport().set_input_as_handled()
-			queue_redraw()
-			return
 	if event is InputEventKey and (event.keycode == KEY_W or event.keycode == KEY_S):
 		if event.echo:
 			get_viewport().set_input_as_handled()
@@ -530,6 +505,7 @@ func regenerate_world() -> void:
 	world = FlightWorldScript.new()
 	flight = FlightModelScript.new(world)
 	economy = EconomyScript.new(world)
+	navigation_map.refresh_weather_briefing()
 	last_economy_flight_state = flight.state
 	propeller_phase = 0.0
 	map_center = Vector2(world.airports[flight.airport_index].position)
@@ -594,6 +570,9 @@ func _process(delta: float) -> void:
 	var engine_before_update: bool = flight.engine_running
 	var events := simulation.advance(delta, flight, economy, recorder, cabin_sleeping)
 	var game_delta: float = events.elapsed
+	if events.landed:
+		navigation_map.refresh_weather_briefing()
+		weather_radar_cache.invalidate()
 	navigation_map.update_dynamic_annotations(delta)
 	signal_check_timer -= game_delta
 	if signal_check_timer <= 0.0:
@@ -666,11 +645,6 @@ func _key_causes_time_reset(event: InputEventKey) -> bool:
 		return true
 	if code in [KEY_X, KEY_M, KEY_B, KEY_W, KEY_S, KEY_SPACE, KEY_C, KEY_T, KEY_V] or physical in [KEY_X, KEY_B, KEY_W, KEY_S]:
 		return true
-	if event.ctrl_pressed and code in [KEY_1, KEY_2]:
-		return true
-	if active_receiver >= 0:
-		var entered_character := char(event.unicode)
-		return (entered_character >= "0" and entered_character <= "9") or code in [KEY_BACKSPACE, KEY_ENTER, KEY_KP_ENTER]
 	return false
 
 func _stop_cabin_sleep() -> void:
@@ -789,6 +763,12 @@ func _operations_runway_button_text(reverse_direction: bool) -> String:
 	if flight.departure_authorized:
 		return "СМЕНИТЬ ВПП НА %03d° • %d МОНЕТ" % [heading, EconomyScript.PARKING_PRICE]
 	return "ПОДГОТОВИТЬ К ВЫЛЕТУ • ВПП %03d° • %d МОНЕТ" % [heading, EconomyScript.PARKING_PRICE]
+
+func _refresh_weather_briefing() -> void:
+	navigation_map.refresh_weather_briefing()
+	scene_notice = "Метеосводка обновлена • положение гроз зафиксировано на %02d:%02d" % [floori(clock_seconds / 3600.0), floori(fmod(clock_seconds, 3600.0) / 60.0)]
+	_queue_map_redraw()
+	queue_redraw()
 
 func _near_cabin_ramp() -> bool:
 	var ramp_x := _aircraft_point(Vector2((AircraftArt.COCKPIT_RAMP_TOP_X + AircraftArt.COCKPIT_RAMP_BOTTOM_X) * 0.5, 0)).x
@@ -1042,6 +1022,9 @@ func _airport_buildings() -> Array[Dictionary]:
 
 func get_operations_runway_rect(reverse_direction: bool) -> Rect2:
 	return side_scenes.get_operations_runway_rect(reverse_direction)
+
+func get_operations_weather_rect() -> Rect2:
+	return side_scenes.get_operations_weather_rect()
 
 func get_building_exit_rect() -> Rect2:
 	return side_scenes.get_building_exit_rect()
@@ -1303,6 +1286,9 @@ func get_ils_rect() -> Rect2:
 func get_weather_radar_rect() -> Rect2:
 	return instrument_panel.get_weather_radar_rect()
 
+func get_weather_briefing_button_rect() -> Rect2:
+	return instrument_panel.get_weather_briefing_button_rect()
+
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		_handle_mouse_button(event)
@@ -1347,6 +1333,8 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			if get_building_exit_rect().has_point(event.position):
 				_leave_current_scene()
+			elif get_operations_weather_rect().has_point(event.position):
+				_refresh_weather_briefing()
 			elif get_operations_runway_rect(false).has_point(event.position):
 				_pay_and_prepare(false)
 			elif get_operations_runway_rect(true).has_point(event.position):
@@ -1369,13 +1357,15 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	if event.button_index == MOUSE_BUTTON_LEFT and event.pressed and get_weather_radar_rect().has_point(event.position):
 		_toggle_weather_radar()
 		return
+	if event.button_index == MOUSE_BUTTON_LEFT and event.pressed and get_weather_briefing_button_rect().has_point(event.position):
+		navigation_map.toggle_weather_briefing()
+		return
 	if large_weather_radar and (mrect.has_point(event.position) or map_drag_candidate or point_drag_candidate or dragging_measure_point):
 		_handle_radar_mouse_button(event)
 		return
 	var hovered_receiver := _receiver_at_point(event.position)
 	if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN] and event.pressed and hovered_receiver >= 0:
 		active_receiver = hovered_receiver
-		receiver_frequency_entry = ""
 		var wheel_direction := 1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1
 		_tune_receiver_frequency(hovered_receiver, wheel_direction * (10 if event.shift_pressed else 1))
 	elif event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed and mrect.has_point(event.position):
@@ -1407,12 +1397,6 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 				_enter_cabin(true)
 			elif get_trajectory_button_rect().has_point(event.position):
 				_toggle_final_trajectory()
-			elif _beacon_receiver_hit(event.position, 0):
-				active_receiver = 0
-				receiver_frequency_entry = ""
-			elif _beacon_receiver_hit(event.position, 1):
-				active_receiver = 1
-				receiver_frequency_entry = ""
 			elif mrect.has_point(event.position):
 				map_press_position = event.position
 				last_mouse = event.position
@@ -1458,9 +1442,14 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 		return
 	var next_hovered_airport := _airport_hover_index(event.position) if not large_weather_radar else -1
 	var next_hovered_wind := _wind_arrow_hovered(event.position)
-	if next_hovered_airport != hovered_airport_index or next_hovered_wind != hovered_wind_arrow:
+	var next_hovered_storm := navigation_map.weather_briefing_storm_at(event.position)
+	if next_hovered_airport != hovered_airport_index or next_hovered_wind != hovered_wind_arrow or next_hovered_storm != hovered_weather_storm_index:
 		hovered_airport_index = next_hovered_airport
 		hovered_wind_arrow = next_hovered_wind
+		hovered_weather_storm_index = next_hovered_storm
+		_queue_map_redraw()
+	elif next_hovered_storm >= 0:
+		# The storm-motion annotation follows the pointer within the echo.
 		_queue_map_redraw()
 	if point_drag_candidate and not dragging_measure_point and event.position.distance_to(map_press_position) >= 4.0:
 		dragging_measure_point = true
@@ -1514,22 +1503,6 @@ func _receiver_at_point(point: Vector2) -> int:
 
 func _tune_receiver_frequency(receiver: int, delta_khz: int) -> void:
 	receiver_frequencies[receiver] = clampi(int(receiver_frequencies[receiver]) + delta_khz, 190, 535)
-	_update_receiver_signals()
-
-func _enter_receiver_frequency_digit(digit: String) -> void:
-	if receiver_frequency_entry.length() >= 3:
-		receiver_frequency_entry = ""
-	receiver_frequency_entry += digit
-	if receiver_frequency_entry.length() == 3:
-		_commit_receiver_frequency_entry()
-
-func _commit_receiver_frequency_entry() -> void:
-	if active_receiver < 0 or receiver_frequency_entry.is_empty():
-		return
-	var entered_frequency := int(receiver_frequency_entry)
-	if entered_frequency >= 190 and entered_frequency <= 535:
-		receiver_frequencies[active_receiver] = entered_frequency
-	receiver_frequency_entry = ""
 	_update_receiver_signals()
 
 func _zoom_at(mouse: Vector2, factor: float) -> void:

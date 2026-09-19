@@ -19,6 +19,8 @@ func _initialize() -> void:
 		check(world.airports.size() == World.AIRPORT_COUNT, "World must contain eight airports")
 		check(world.beacons.size() == World.BEACON_COUNT, "World must contain eight airport and sixteen route beacons")
 		check(world.storms.size() == World.WEATHER_STORM_COUNT, "Storm density must scale with world area")
+		for storm in world.storms:
+			check(float(storm.radius_km) >= 6.0 and float(storm.radius_km) <= 10.5, "Storm cells must use the broader route-blocking size range")
 		for first_index in world.airports.size():
 			for second_index in range(first_index + 1, world.airports.size()):
 				var distance: float = Vector2(world.airports[first_index].position).distance_to(Vector2(world.airports[second_index].position))
@@ -58,5 +60,9 @@ func _initialize() -> void:
 	})
 	check(is_equal_approx(shape_world.storm_intensity_at(Vector2(52.0, 50.0)), 0.6), "Physical storm peak must match the radar lobe peak")
 	check(is_zero_approx(shape_world.storm_intensity_at(Vector2(50.0, 56.0))), "Area outside every visible radar lobe must have no rain or turbulence")
+	var old_wind: Array = shape_world.wind_layers.duplicate(true)
+	var old_storms: Array = shape_world.storms.duplicate(true)
+	shape_world.refresh_weather()
+	check(shape_world.wind_layers != old_wind and shape_world.storms != old_storms and is_zero_approx(shape_world.weather_time_seconds), "A weather refresh must replace wind and storms together from the current moment")
 	print("200×200 world: evenly distributed; shortest airport pair %.2f km; highest raw airport site %.0f m: %s" % [shortest_airport_distance, highest_airport_site, "FAIL" if failed else "OK"])
 	quit(1 if failed else 0)
