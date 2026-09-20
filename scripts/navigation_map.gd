@@ -13,15 +13,20 @@ const FlightModelScript = preload("res://scripts/flight_model.gd")
 const WIND_OVERLAY_ALTITUDES = FlightWorldScript.WIND_ALTITUDES_M
 const APPROACH_DETAIL_MIN_ZOOM := 20.0
 const MAX_MAP_ZOOM := 24.0
+const ILS_CAPTURE_ARC_SEGMENTS := 12
 const INITIAL_MAP_RADIUS_KM := 40.0
 const SAMPLE_GRID := 192
 const CONTOUR_STEP_M := 250.0
+const MEASUREMENT_COLOR := Color("254d9a")
+const LINKED_MEASUREMENT_COLOR := Color("c46f24")
+const ACTIVE_LINKED_MEASUREMENT_COLOR := Color("b72f29")
 var host: Control
 var map_zoom := 1.0
 var map_center := Vector2.ONE * FlightWorldScript.SIZE_KM * 0.5
 var contour_segments: Array[Dictionary] = []
 var terrain_peaks: Array[Dictionary] = []
 var measurement_lines: Array[Dictionary] = []
+var next_measurement_line_id := 1
 var pending_measure: Variant = null
 var radar_measurement_lines: Array[Dictionary] = []
 var radar_pending_measure: Variant = null
@@ -50,6 +55,7 @@ var radar_range_index := 0
 var hovered_airport_index := -1
 var hovered_wind_arrow := false
 var hovered_weather_storm_index := -1
+var hovered_weather_storm_anchor := Vector2.INF
 var measurement_label_refresh_remaining := 0.0
 var measurement_label_ground_speed_kmh := -INF
 var weather_briefing_storms: Array[Dictionary] = []
@@ -73,6 +79,7 @@ func refresh_weather_briefing() -> void:
 	weather_briefing_time_seconds = host.economy.elapsed_seconds
 	weather_briefing_age_minute = 0
 	hovered_weather_storm_index = -1
+	hovered_weather_storm_anchor = Vector2.INF
 	_queue_map_redraw()
 
 func weather_briefing_snapshot() -> Dictionary:
@@ -107,6 +114,7 @@ func restore_weather_briefing(data: Dictionary) -> bool:
 	weather_briefing_visible = data.visible
 	weather_briefing_age_minute = floori(weather_briefing_age_seconds() / 60.0)
 	hovered_weather_storm_index = -1
+	hovered_weather_storm_anchor = Vector2.INF
 	return true
 
 func weather_briefing_age_seconds() -> float:
@@ -123,6 +131,7 @@ func weather_briefing_age_text() -> String:
 func toggle_weather_briefing() -> void:
 	weather_briefing_visible = not weather_briefing_visible
 	hovered_weather_storm_index = -1
+	hovered_weather_storm_anchor = Vector2.INF
 	_queue_map_redraw()
 	host.queue_redraw()
 
@@ -146,6 +155,7 @@ func _draw_map_on(canvas: Control) -> void:
 func _toggle_weather_radar() -> void:
 	host.weather_radar_cache.invalidate()
 	large_weather_radar = not large_weather_radar
+	update_weather_storm_hover(-1, Vector2.ZERO)
 	# Preserve map camera, finished marks and a pending line, but stop gestures.
 	dragging_map = false
 	map_drag_candidate = false
@@ -291,8 +301,13 @@ func _draw_map() -> void:
 		_draw_approach_point(airport)
 	for beacon in host.world.beacons:
 		_draw_beacon(beacon)
+	ensure_measurement_line_ids()
+	var highlighted_line_id: int = host.flight_calculator.highlighted_line_id()
 	for line in measurement_lines:
-		_draw_measurement(line.a, line.b, Color("254d9a"), line.get("max_height_m", -1.0))
+		var line_id := int(line.id)
+		var linked: bool = host.flight_calculator.profile_for_line(line_id) >= 0
+		var highlighted: bool = line_id == highlighted_line_id
+		_draw_measurement(line.a, line.b, measurement_line_color(linked, highlighted), line.get("max_height_m", -1.0), linked, highlighted, line_id)
 	if pending_measure != null:
 		_draw_measurement(pending_measure, _snap_map_point(host.get_local_mouse_position()), Color(0.1, 0.25, 0.7, 0.55))
 	_draw_completed_flight_trajectory()
@@ -350,17 +365,25 @@ func weather_briefing_motion_text(storm: Dictionary) -> String:
 	var approximate_speed := maxi(5, roundi(drift.length() / 5.0) * 5)
 	return "≈%03d° • ≈%d км/ч" % [approximate_heading, approximate_speed]
 
+func update_weather_storm_hover(storm_index: int, pointer: Vector2) -> bool:
+	if storm_index == hovered_weather_storm_index:
+		return false
+	hovered_weather_storm_index = storm_index
+	# Capture the first visible point inside the cell. The annotation remains
+	# there until the pointer leaves this storm instead of following every motion.
+	hovered_weather_storm_anchor = pointer if storm_index >= 0 else Vector2.INF
+	return true
+
 func _draw_hovered_weather_storm_motion(rect: Rect2) -> void:
-	var mouse := host.get_local_mouse_position()
-	var storm_index := weather_briefing_storm_at(mouse)
+	var storm_index := hovered_weather_storm_index
 	if storm_index < 0:
 		return
 	var storm: Dictionary = weather_briefing_storms[storm_index]
 	var velocity := Vector2(storm.drift_kmh)
 	var direction := velocity.normalized()
 	var origin := Vector2(
-		clampf(mouse.x, rect.position.x + 48.0, rect.end.x - 48.0),
-		clampf(mouse.y, rect.position.y + 48.0, rect.end.y - 48.0)
+		clampf(hovered_weather_storm_anchor.x, rect.position.x + 48.0, rect.end.x - 48.0),
+		clampf(hovered_weather_storm_anchor.y, rect.position.y + 48.0, rect.end.y - 48.0)
 	)
 	var tip := origin + direction * 34.0
 	var color := Color("315e63")
@@ -708,11 +731,13 @@ func _draw_approach_direction(airport: Dictionary, approach_sign: float) -> void
 	var forward: Vector2 = host.world.heading_vector(airport.heading) * approach_sign
 	var threshold: Vector2 = airport.position - forward * (FlightWorldScript.RUNWAY_LENGTH_KM * 0.5)
 	var touchdown_target: Vector2 = threshold + forward * FlightModelScript.GLIDE_TOUCHDOWN_OFFSET_KM
-	var capture_triangle := ils_capture_triangle(airport, approach_sign)
+	var capture_boundary := ils_capture_boundary(airport, approach_sign)
+	var capture_arc: PackedVector2Array = capture_boundary.arc
 	var approach_color := Color("287777")
-	_draw_clipped_map_line(world_to_screen(capture_triangle[0]), world_to_screen(capture_triangle[1]), approach_color, 1.5, true)
-	_draw_clipped_map_line(world_to_screen(capture_triangle[0]), world_to_screen(capture_triangle[2]), approach_color, 1.5, true)
-	_draw_clipped_map_line(world_to_screen(capture_triangle[1]), world_to_screen(capture_triangle[2]), approach_color, 1.5, true)
+	_draw_clipped_map_line(world_to_screen(capture_boundary.apex), world_to_screen(capture_arc[0]), approach_color, 1.5, true)
+	_draw_clipped_map_line(world_to_screen(capture_boundary.apex), world_to_screen(capture_arc[-1]), approach_color, 1.5, true)
+	for point_index in range(1, capture_arc.size()):
+		_draw_clipped_map_line(world_to_screen(capture_arc[point_index - 1]), world_to_screen(capture_arc[point_index]), approach_color, 1.5, true)
 	var approach_vertical_speed = -(92.0 / 3.6) * tan(deg_to_rad(FlightModelScript.GLIDE_SLOPE_DEG))
 	var markers_by_direction: Dictionary = airport.get("approach_markers", {})
 	var markers: Array = markers_by_direction.get(str(int(approach_sign)), [])
@@ -742,19 +767,27 @@ func _draw_approach_direction(airport: Dictionary, approach_sign: float) -> void
 		map_canvas.draw_rect(Rect2(label_position + Vector2(-3, -11), text_size + Vector2(6, 3)), Color("d7d0ad"), true)
 		map_canvas.draw_string(ThemeDB.fallback_font, label_position, label, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("185f61"))
 
-func ils_capture_triangle(airport: Dictionary, approach_sign: float) -> PackedVector2Array:
+func ils_capture_boundary(airport: Dictionary, approach_sign: float) -> Dictionary:
 	var forward: Vector2 = host.world.heading_vector(airport.heading) * approach_sign
 	# The signal model uses the far runway threshold as its virtual cone apex so
 	# guidance remains available throughout the approach and ground roll.
 	var apex: Vector2 = Vector2(airport.position) + forward * (FlightWorldScript.RUNWAY_LENGTH_KM * 0.5)
-	# Keep the deliberately simple triangular chart symbol. Signal range is
-	# measured from the beacon in the airport centre, so place the middle of the
-	# perpendicular crossbar exactly 15 km from that beacon along the approach.
-	var far_center := Vector2(airport.position) - forward * FlightWorldScript.ILS_RANGE_KM
-	var right := Vector2(forward.y, -forward.x)
-	var apex_to_crossbar_km := apex.distance_to(far_center)
-	var half_width := apex_to_crossbar_km * tan(deg_to_rad(FlightWorldScript.ILS_HALF_CONE_DEG))
-	return PackedVector2Array([apex, far_center + right * half_width, far_center - right * half_width])
+	# The actual receiver range is circular around the beacon. Trace that same
+	# boundary instead of a perpendicular crossbar whose corners would lie more
+	# than 15 km away and visually promise coverage where there is none.
+	var beacon_position := Vector2(airport.position)
+	var approach_axis := -forward
+	var arc := PackedVector2Array()
+	for point_index in range(ILS_CAPTURE_ARC_SEGMENTS + 1):
+		var ratio := point_index / float(ILS_CAPTURE_ARC_SEGMENTS)
+		var ray_angle := deg_to_rad(lerpf(-FlightWorldScript.ILS_HALF_CONE_DEG, FlightWorldScript.ILS_HALF_CONE_DEG, ratio))
+		var ray_direction := approach_axis.rotated(ray_angle)
+		var apex_from_beacon := apex - beacon_position
+		var projection := apex_from_beacon.dot(ray_direction)
+		var discriminant := projection * projection + FlightWorldScript.ILS_RANGE_KM * FlightWorldScript.ILS_RANGE_KM - apex_from_beacon.length_squared()
+		var distance_along_ray := -projection + sqrt(maxf(0.0, discriminant))
+		arc.append(apex + ray_direction * distance_along_ray)
+	return {"apex": apex, "arc": arc}
 
 func _build_approach_markers() -> void:
 	for airport in host.world.airports:
@@ -791,10 +824,17 @@ func _draw_beacon(beacon: Dictionary) -> void:
 	map_canvas.draw_polyline(PackedVector2Array([points[0], points[1], points[2], points[0]]), Color("972d25"), 2.0)
 	_draw_clamped_map_text(p + Vector2(11, 4), "%s %.0f кГц R%.0f" % [beacon.name, beacon.frequency, beacon.range_km], 11, Color("76231d"))
 
-func _draw_measurement(a_world: Vector2, b_world: Vector2, color := Color("254d9a"), cached_max_height := -1.0) -> void:
+func measurement_line_color(linked: bool, highlighted: bool) -> Color:
+	if highlighted:
+		return ACTIVE_LINKED_MEASUREMENT_COLOR
+	if linked:
+		return LINKED_MEASUREMENT_COLOR
+	return MEASUREMENT_COLOR
+
+func _draw_measurement(a_world: Vector2, b_world: Vector2, color := MEASUREMENT_COLOR, cached_max_height := -1.0, directed := false, highlighted := false, line_id := -1) -> void:
 	var a = world_to_screen(a_world)
 	var b = world_to_screen(b_world)
-	_draw_clipped_map_line(a, b, color, 2.0, true)
+	_draw_clipped_map_line(a, b, color, 2.8 if highlighted else 2.0, true)
 	if map_rect().has_point(a):
 		map_canvas.draw_circle(a, 3, color)
 	if map_rect().has_point(b):
@@ -804,11 +844,21 @@ func _draw_measurement(a_world: Vector2, b_world: Vector2, color := Color("254d9
 	var direct_course = int(round(bearing)) % 360
 	var reverse_course = (direct_course + 180) % 360
 	var max_height: float = cached_max_height if cached_max_height >= 0.0 else _maximum_terrain_height_on_line(a_world, b_world)
-	var time_text := measurement_time_text(distance)
-	var label = "%.1f км • %s  %03d° / %03d°  %.0f м" % [distance, time_text, direct_course, reverse_course, max_height]
+	var linked_time: float = host.flight_calculator.line_time_minutes(line_id) if line_id >= 0 else -1.0
+	var time_text := "%.1f мин" % linked_time if linked_time >= 0.0 else measurement_time_text(distance)
+	# The label is rotated by 180 degrees when necessary to keep text upright.
+	# An arrow glyph inside it would then point against the actual vector, so
+	# direction is shown only by the geometry's independent arrowhead.
+	var course_text := "%03d°" % direct_course if directed else "%03d° / %03d°" % [direct_course, reverse_course]
+	var label = "%.1f км • %s  %s  %.0f м" % [distance, time_text, course_text, max_height]
 	var visible_segment = _clip_line_to_rect(a, b, map_rect().grow(-3.0))
 	if visible_segment.size() == 2:
 		var visible_direction: Vector2 = visible_segment[1] - visible_segment[0]
+		if directed and visible_direction.length() >= 28.0:
+			var arrow_tip: Vector2 = visible_segment[0].lerp(visible_segment[1], 0.72)
+			var backward := -visible_direction.normalized()
+			map_canvas.draw_line(arrow_tip, arrow_tip + backward.rotated(0.55) * 8.0, color, 2.0, true)
+			map_canvas.draw_line(arrow_tip, arrow_tip + backward.rotated(-0.55) * 8.0, color, 2.0, true)
 		var text_size = ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13)
 		# A label is useful only when the visible line is substantially longer
 		# than the text. Zooming in increases this length and reveals the label.
@@ -874,6 +924,7 @@ func _draw_rotated_map_label(position: Vector2, line_direction: Vector2, label: 
 	map_canvas.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _zoom_at(mouse: Vector2, factor: float) -> void:
+	update_weather_storm_hover(-1, Vector2.ZERO)
 	var before = screen_to_world(mouse)
 	map_zoom = clamp(map_zoom * factor, _minimum_map_zoom(), MAX_MAP_ZOOM)
 	var after = screen_to_world(mouse)
@@ -929,6 +980,98 @@ func world_to_screen(point: Vector2) -> Vector2:
 func screen_to_world(point: Vector2) -> Vector2:
 	return map_center + (point - map_rect().get_center()) / pixels_per_km()
 
+func ensure_measurement_line_ids() -> void:
+	var used: Dictionary = {}
+	for line in measurement_lines:
+		var line_id := int(line.get("id", -1))
+		if line_id < 1 or used.has(line_id):
+			while used.has(next_measurement_line_id):
+				next_measurement_line_id += 1
+			line_id = next_measurement_line_id
+			line.id = line_id
+			next_measurement_line_id += 1
+		used[line_id] = true
+		next_measurement_line_id = maxi(next_measurement_line_id, line_id + 1)
+
+func measurement_line_by_id(line_id: int) -> Dictionary:
+	ensure_measurement_line_ids()
+	for line in measurement_lines:
+		if int(line.id) == line_id:
+			return line
+	return {}
+
+func _measurement_line_index_at(screen_position: Vector2, maximum_distance: float = 8.0) -> int:
+	var nearest := -1
+	var nearest_distance := maximum_distance
+	for index in measurement_lines.size():
+		var a := world_to_screen(measurement_lines[index].a)
+		var b := world_to_screen(measurement_lines[index].b)
+		var candidate := screen_position.distance_to(Geometry2D.get_closest_point_to_segment(screen_position, a, b))
+		if candidate < nearest_distance:
+			nearest_distance = candidate
+			nearest = index
+	return nearest
+
+func bind_calculator_to_line_at(screen_position: Vector2) -> bool:
+	ensure_measurement_line_ids()
+	var line_index := _measurement_line_index_at(screen_position)
+	if line_index < 0:
+		return false
+	var line: Dictionary = measurement_lines[line_index]
+	return host.flight_calculator.bind_line(int(line.id), line.a, line.b)
+
+func release_calculator_line(line_id: int, except_profile: int) -> void:
+	host.flight_calculator.release_line_from_other_profiles(line_id, except_profile)
+
+func calculator_line_unlinked(_line_id: int) -> void:
+	_queue_map_redraw()
+
+func update_calculator_line(line_id: int, requested_distance: float, track_deg: float) -> Dictionary:
+	var line: Dictionary = measurement_line_by_id(line_id)
+	if line.is_empty():
+		return {}
+	var start: Vector2 = Vector2(line.a)
+	var direction: Vector2 = host.world.heading_vector(track_deg)
+	var maximum_distance: float = INF
+	if direction.x > 0.000001:
+		maximum_distance = minf(maximum_distance, (FlightWorldScript.SIZE_KM - start.x) / direction.x)
+	elif direction.x < -0.000001:
+		maximum_distance = minf(maximum_distance, -start.x / direction.x)
+	if direction.y > 0.000001:
+		maximum_distance = minf(maximum_distance, (FlightWorldScript.SIZE_KM - start.y) / direction.y)
+	elif direction.y < -0.000001:
+		maximum_distance = minf(maximum_distance, -start.y / direction.y)
+	if requested_distance > maxf(0.0, maximum_distance) + 0.000001:
+		return {"rejected": true, "reason": "Линия такой длины и направления выходит за границу карты"}
+	var actual_distance: float = requested_distance
+	var old_end: Vector2 = line.b
+	var new_end: Vector2 = start + direction * actual_distance
+	var affected: Dictionary = {}
+	for line_index in measurement_lines.size():
+		for endpoint_key in ["a", "b"]:
+			if int(measurement_lines[line_index].id) == line_id and endpoint_key == "a":
+				continue # The vector origin remains fixed, including after zero length.
+			if Vector2(measurement_lines[line_index][endpoint_key]).is_equal_approx(old_end):
+				measurement_lines[line_index][endpoint_key] = new_end
+				affected[line_index] = true
+	for line_index in affected:
+		var affected_line: Dictionary = measurement_lines[int(line_index)]
+		affected_line.max_height_m = _maximum_terrain_height_on_line(affected_line.a, affected_line.b)
+		if int(affected_line.id) != line_id:
+			host.flight_calculator.measurement_line_changed(affected_line)
+	_queue_map_redraw()
+	return line
+
+func reverse_calculator_line(line_id: int) -> Dictionary:
+	var line: Dictionary = measurement_line_by_id(line_id)
+	if line.is_empty():
+		return {}
+	var old_start: Vector2 = line.a
+	line.a = line.b
+	line.b = old_start
+	_queue_map_redraw()
+	return line
+
 func _erase_nearest_measurement(mouse: Vector2) -> void:
 	var closest = -1
 	var closest_distance = 18.0
@@ -941,31 +1084,22 @@ func _erase_nearest_measurement(mouse: Vector2) -> void:
 			closest = i
 			closest_distance = distance
 	if closest >= 0:
+		if not large_weather_radar:
+			ensure_measurement_line_ids()
+			host.flight_calculator.measurement_line_removed(int(active_measurement_lines[closest].id))
 		active_measurement_lines.remove_at(closest)
 
 func _handle_map_click(screen_position: Vector2) -> void:
-	# Endpoint clicks still start connected segments; dragging still edits the
-	# map/vertices. A plain click on a finished segment copies it for planning.
-	if not large_weather_radar and pending_measure == null and _find_measure_connections(screen_position).is_empty():
-		var nearest = -1
-		var distance = 8.0
-		for index in measurement_lines.size():
-			var a = world_to_screen(measurement_lines[index].a)
-			var b = world_to_screen(measurement_lines[index].b)
-			var closest = Geometry2D.get_closest_point_to_segment(screen_position, a, b)
-			var candidate = closest.distance_to(screen_position)
-			if candidate < distance:
-				distance = candidate
-				nearest = index
-		if nearest >= 0:
-			host.flight_calculator.use_line(measurement_lines[nearest].a, measurement_lines[nearest].b)
-			return
 	var point = _snap_map_point(screen_position)
 	if active_pending_measure == null:
 		active_pending_measure = point
 	else:
 		var height = -1.0 if large_weather_radar else _maximum_terrain_height_on_line(active_pending_measure, point)
-		active_measurement_lines.append({"a": active_pending_measure, "b": point, "max_height_m": height})
+		var line: Dictionary = {"a": active_pending_measure, "b": point, "max_height_m": height}
+		if not large_weather_radar:
+			line.id = next_measurement_line_id
+			next_measurement_line_id += 1
+		active_measurement_lines.append(line)
 		active_pending_measure = null
 
 func _maximum_terrain_height_on_line(a: Vector2, b: Vector2) -> float:
@@ -997,6 +1131,7 @@ func _refresh_measurement_max_heights(connections: Array[Dictionary]) -> void:
 			continue
 		var line: Dictionary = measurement_lines[line_index]
 		line.max_height_m = _maximum_terrain_height_on_line(line.a, line.b)
+		host.flight_calculator.measurement_line_changed(line)
 		refreshed[line_index] = true
 
 func _find_measure_connections(screen_position: Vector2) -> Array[Dictionary]:

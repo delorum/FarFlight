@@ -14,11 +14,17 @@ var toggle: Button
 var fields: Dictionary = {}
 var current_buttons: Dictionary = {}
 var profile_buttons: Array[Button] = []
+var line_link_button: Button
 var profile_states: Array[Dictionary] = []
 var active_profile := 0
 var profiles_initialized := false
+var bound_line_id := -1
+var selecting_line := false
+var syncing_line := false
 # Time is stored in minutes, distance in km, vertical speed in m/s.
-var values := {"distance": 50.0, "time": 20.0, "speed": 150.0, "vertical": 0.0, "altitude": 0.0}
+const DEFAULT_DISTANCE_KM := 50.0
+const MIN_DISTANCE_KM := 0.001
+var values := {"distance": DEFAULT_DISTANCE_KM, "time": 20.0, "speed": 150.0, "vertical": 0.0, "altitude": 0.0}
 var last_changed := "distance"
 var initial_altitude := 0.0
 var valid := true
@@ -100,8 +106,12 @@ func _ready() -> void:
 	toggle.focus_mode = Control.FOCUS_NONE
 	toggle.pressed.connect(func():
 		expanded = not expanded
+		if not expanded:
+			selecting_line = false
 		body.visible = expanded
 		toggle.text = "Свернуть" if expanded else "Развернуть"
+		_refresh_line_link_button()
+		controller.navigation_map._queue_map_redraw()
 		size = Vector2.ZERO
 	)
 	header.add_child(toggle)
@@ -167,10 +177,15 @@ func _ready() -> void:
 			var reverse := Button.new()
 			reverse.text = "Обратно"
 			reverse.focus_mode = Control.FOCUS_NONE
-			reverse.pressed.connect(func(): _set_value("track", float(values.track) + 180.0))
+			reverse.pressed.connect(_reverse_track)
 			grid.add_child(reverse)
 		else:
 			grid.add_child(Control.new())
+	line_link_button = Button.new()
+	line_link_button.focus_mode = Control.FOCUS_NONE
+	line_link_button.pressed.connect(_toggle_line_link)
+	body.add_child(line_link_button)
+	_refresh_line_link_button()
 	_refresh_fields()
 	body.hide()
 	call_deferred("_initialize_values")
@@ -185,7 +200,6 @@ func _initialize_values() -> void:
 	initial_altitude = controller.flight.altitude_m
 	values.altitude = initial_altitude
 	if values.speed <= 0.0:
-		values.distance = 0.0
 		values.time = 0.0
 	_recalculate()
 	_use_forecast()
@@ -196,20 +210,58 @@ func _initialize_values() -> void:
 	position = controller.map_rect().position + Vector2(340, 12)
 
 func _capture_profile_state() -> Dictionary:
+	var normalized_values: Dictionary = {}
+	for key in VALUE_KEYS:
+		normalized_values[key] = float(values.get(key, 0.0))
+	var normalized_edit_order: Dictionary = {}
+	for key in edit_order:
+		normalized_edit_order[str(key)] = int(edit_order[key])
 	return {
-		"values": values.duplicate(true),
+		"values": normalized_values,
 		"last_changed": last_changed,
-		"initial_altitude": initial_altitude,
+		"initial_altitude": float(initial_altitude),
 		"heading_based": heading_based,
-		"edit_order": edit_order.duplicate(true),
-		"edit_sequence": edit_sequence,
+		"edit_order": normalized_edit_order,
+		"edit_sequence": int(edit_sequence),
 		"derive_speed": derive_speed,
 		"derive_vertical": derive_vertical,
+		"bound_line_id": int(bound_line_id),
+	}
+
+func _normalize_profile_state(state: Dictionary) -> Dictionary:
+	var normalized_values: Dictionary = {}
+	var state_values: Dictionary = state.get("values", {})
+	for key in VALUE_KEYS:
+		normalized_values[key] = float(state_values.get(key, values.get(key, 0.0)))
+	# Older saves and the original on-ground initialization could contain a
+	# zero-length plan. A calculator tab always represents a real leg now, so
+	# keep a useful distance instead of reviving that destructive state.
+	if float(normalized_values.distance) < MIN_DISTANCE_KM:
+		normalized_values.distance = DEFAULT_DISTANCE_KM
+	var normalized_edit_order: Dictionary = {}
+	var state_edit_order: Dictionary = state.get("edit_order", {})
+	for key in state_edit_order:
+		normalized_edit_order[str(key)] = maxi(0, int(state_edit_order[key]))
+	var normalized_last_changed := str(state.get("last_changed", "distance"))
+	if normalized_last_changed not in ["distance", "time", "altitude"]:
+		normalized_last_changed = "distance"
+	return {
+		"values": normalized_values,
+		"last_changed": normalized_last_changed,
+		"initial_altitude": float(state.get("initial_altitude", initial_altitude)),
+		"heading_based": bool(state.get("heading_based", false)),
+		"edit_order": normalized_edit_order,
+		"edit_sequence": maxi(0, int(state.get("edit_sequence", 0))),
+		"derive_speed": bool(state.get("derive_speed", false)),
+		"derive_vertical": bool(state.get("derive_vertical", false)),
+		"bound_line_id": maxi(-1, int(state.get("bound_line_id", -1))),
 	}
 
 func snapshot() -> Dictionary:
 	_initialize_values()
 	profile_states[active_profile] = _capture_profile_state()
+	for profile_index in profile_states.size():
+		profile_states[profile_index] = _normalize_profile_state(profile_states[profile_index])
 	return {
 		"profiles": profile_states.duplicate(true),
 		"active_profile": active_profile,
@@ -241,6 +293,8 @@ static func valid_snapshot(data: Variant) -> bool:
 			return false
 		if not profile.get("heading_based") is bool or not profile.get("derive_speed") is bool or not profile.get("derive_vertical") is bool:
 			return false
+		if profile.has("bound_line_id") and (not profile.bound_line_id is int or int(profile.bound_line_id) < -1):
+			return false
 		if not profile.get("edit_sequence") is int or profile.edit_sequence < 0 or not profile.get("edit_order") is Dictionary:
 			return false
 		for key in profile.edit_order:
@@ -252,7 +306,10 @@ func restore_snapshot(data: Dictionary) -> bool:
 	if not valid_snapshot(data):
 		return false
 	_initialize_values()
-	profile_states.assign(data.profiles.duplicate(true))
+	profile_states.clear()
+	for saved_profile in data.profiles:
+		profile_states.append(_normalize_profile_state(saved_profile))
+	_sanitize_profile_line_links()
 	active_profile = data.active_profile
 	_apply_profile_state(profile_states[active_profile])
 	for profile_index in profile_buttons.size():
@@ -264,6 +321,19 @@ func restore_snapshot(data: Dictionary) -> bool:
 	size = Vector2.ZERO
 	return true
 
+func _sanitize_profile_line_links() -> void:
+	var used_line_ids: Dictionary = {}
+	for profile_index in profile_states.size():
+		var state: Dictionary = profile_states[profile_index]
+		var line_id := int(state.get("bound_line_id", -1))
+		if line_id < 0:
+			continue
+		if used_line_ids.has(line_id) or controller.navigation_map.measurement_line_by_id(line_id).is_empty():
+			state.bound_line_id = -1
+		else:
+			used_line_ids[line_id] = true
+		profile_states[profile_index] = state
+
 func _apply_profile_state(state: Dictionary) -> void:
 	values = state.values.duplicate(true)
 	last_changed = state.last_changed
@@ -273,7 +343,11 @@ func _apply_profile_state(state: Dictionary) -> void:
 	edit_sequence = state.edit_sequence
 	derive_speed = state.derive_speed
 	derive_vertical = state.derive_vertical
+	bound_line_id = int(state.get("bound_line_id", -1))
+	selecting_line = false
 	_recalculate()
+	_sync_active_profile_from_line()
+	_refresh_line_link_button()
 
 func _select_profile(profile_index: int) -> void:
 	if not profiles_initialized or profile_index == active_profile:
@@ -282,6 +356,7 @@ func _select_profile(profile_index: int) -> void:
 	profile_states[active_profile] = _capture_profile_state()
 	active_profile = profile_index
 	_apply_profile_state(profile_states[active_profile])
+	controller.navigation_map._queue_map_redraw()
 
 func _text_changed(text: String, key: String) -> void:
 	var normalized := text.strip_edges().replace(",", ".")
@@ -306,7 +381,13 @@ func _field_input(event: InputEvent, key: String, step_value: float) -> void:
 func _set_value(key: String, number: float) -> void:
 	_change_value(key, number)
 
-func _change_value(key: String, number: float, editing_key: String = "") -> void:
+func _change_value(key: String, number: float, editing_key: String = "", preserve: String = "") -> void:
+	if key == "distance" and number < MIN_DISTANCE_KM:
+		# Never let a transient zero collapse a plan or a linked map vector. Keep
+		# the previous distance and show the rejected edit as an invalid state.
+		_show_error("Расстояние должно быть больше нуля", editing_key)
+		return
+	var previous_state := _capture_profile_state()
 	if key == "initial_altitude":
 		initial_altitude = number
 	else:
@@ -314,12 +395,29 @@ func _change_value(key: String, number: float, editing_key: String = "") -> void
 	if key in ["track", "heading"]:
 		heading_based = key == "heading"
 	_select_constraints(key)
+	if preserve in ["distance", "time", "altitude"]:
+		# Sampling a live instrument answers a question about the existing plan.
+		# In particular, "current speed" must calculate the duration of the
+		# current route rather than collapse its distance (and linked vector) when
+		# the aircraft is stopped or the previously edited constraint was time.
+		last_changed = preserve
+		derive_speed = false
+	if bound_line_id >= 0:
+		# A linked vector makes distance and duration geometric constraints. Do
+		# not silently solve them by replacing the chosen airspeed.
+		derive_speed = false
+		if key in ["distance", "time"]:
+			last_changed = key
 	edit_sequence += 1
 	edit_order[key] = edit_sequence
 	if key == "initial_altitude":
 		_use_forecast(editing_key)
 	else:
 		_recalculate(editing_key)
+	var line_error := _sync_active_line_from_calculator()
+	if not line_error.is_empty():
+		_apply_profile_state(previous_state)
+		_show_error(line_error, editing_key)
 
 func _recent(key: String) -> int:
 	return int(edit_order.get(key, 0))
@@ -328,49 +426,45 @@ func _select_constraints(key: String) -> void:
 	derive_speed = false
 	derive_vertical = false
 	var height_edit := maxi(_recent("altitude"), _recent("initial_altitude"))
-	var duration_edit := maxi(_recent("time"), _recent("distance"))
-	if key in ["distance", "time"]:
-		var other := "time" if key == "distance" else "distance"
-		derive_speed = _recent(other) > _recent("speed")
-		# A zero duration cannot cover a nonzero distance: release the older
-		# constraint instead of producing an infinite airspeed.
-		if float(values.time) <= 0.0:
-			derive_speed = false
-		last_changed = "time" if derive_speed else key
+	# Distance is the permanent anchor of every calculator tab. Only editing the
+	# distance field itself or moving its linked map line may change it.
+	last_changed = "distance"
+	if key == "time":
+		# A manually entered duration is satisfied by deriving the airspeed. If it
+		# is impossible, the edit remains red and the route length stays intact.
+		derive_speed = true
+		derive_vertical = height_edit > _recent("vertical")
+	elif key == "distance":
 		derive_vertical = height_edit > _recent("vertical")
 	elif key in ["altitude", "initial_altitude"]:
-		var difference := float(values.altitude) - initial_altitude
-		if duration_edit > _recent("vertical") or is_zero_approx(float(values.vertical)) or difference * float(values.vertical) < 0.0:
-			last_changed = "time"
-			derive_vertical = true
-		else:
-			last_changed = "altitude"
+		derive_vertical = true
 	elif key == "vertical":
-		last_changed = "altitude" if height_edit > duration_edit else ("distance" if _recent("distance") > _recent("time") else "time")
-		_release_unreachable_altitude(key)
+		# The new vertical speed determines Height 2 over the fixed route time.
+		derive_vertical = false
 	elif key in ["speed", "wind_from", "wind_speed", "track", "heading"]:
-		last_changed = "distance" if _recent("distance") >= _recent("time") else "time"
-		if height_edit > duration_edit and _recent("vertical") > duration_edit:
-			last_changed = "altitude"
-
-func _release_unreachable_altitude(key: String) -> void:
-	if key != "vertical" or last_changed != "altitude":
-		return
-	# Levelling off or reversing the climb/descent preserves the planned
-	# duration and derives a new destination altitude instead.
-	var vertical := float(values.vertical)
-	var height_difference := float(values.altitude) - initial_altitude
-	if is_zero_approx(vertical) or height_difference * vertical < 0.0:
-		last_changed = "time"
+		derive_vertical = height_edit > _recent("vertical")
 
 func _use_current(key: String) -> void:
 	var number: float = controller.flight.speed_kmh if key == "speed" else controller.flight.vertical_speed_mps
 	if key == "heading":
 		number = controller.flight.heading_deg
-	_set_value(key, number)
+	if key == "speed":
+		_change_value(key, number, "", "distance")
+	else:
+		_set_value(key, number)
 
 func _use_current_altitude() -> void:
 	_set_value("initial_altitude", controller.flight.altitude_m)
+
+func _reverse_track() -> void:
+	if bound_line_id >= 0:
+		var line: Dictionary = controller.navigation_map.reverse_calculator_line(bound_line_id)
+		if not line.is_empty():
+			_sync_values_from_line(line.a, line.b)
+			profile_states[active_profile] = _capture_profile_state()
+			controller.navigation_map._queue_map_redraw()
+			return
+	_set_value("track", float(values.track) + 180.0)
 
 func _use_forecast(editing_key: String = "") -> void:
 	var wind: Vector2 = controller.world.wind_at(initial_altitude)
@@ -378,60 +472,232 @@ func _use_forecast(editing_key: String = "") -> void:
 	values.wind_from = fposmod(rad_to_deg(atan2(-wind.x, wind.y)), 360.0) if wind.length_squared() > 0.000001 else 0.0
 	_recalculate(editing_key)
 
-func use_line(a: Vector2, b: Vector2) -> void:
+func _toggle_line_link() -> void:
+	if bound_line_id >= 0:
+		var old_line_id := bound_line_id
+		bound_line_id = -1
+		selecting_line = false
+		profile_states[active_profile] = _capture_profile_state()
+		controller.navigation_map.calculator_line_unlinked(old_line_id)
+	else:
+		selecting_line = not selecting_line
+	_refresh_line_link_button()
+	controller.navigation_map._queue_map_redraw()
+
+func _refresh_line_link_button() -> void:
+	if line_link_button == null:
+		return
+	if bound_line_id >= 0:
+		line_link_button.text = "ОТВЯЗАТЬ ОТ ЛИНИИ"
+	elif selecting_line:
+		line_link_button.text = "ОТМЕНИТЬ ВЫБОР ЛИНИИ"
+	else:
+		line_link_button.text = "ПРИВЯЗАТЬ К ЛИНИИ"
+
+func awaiting_line_binding() -> bool:
+	return visible and expanded and selecting_line and bound_line_id < 0
+
+func bind_line(line_id: int, a: Vector2, b: Vector2) -> bool:
+	_initialize_values()
+	var delta := b - a
+	if line_id < 0 or delta.length_squared() < 0.000001:
+		return false
+	controller.navigation_map.release_calculator_line(line_id, active_profile)
+	bound_line_id = line_id
+	selecting_line = false
+	_sync_values_from_line(a, b)
+	profile_states[active_profile] = _capture_profile_state()
+	_refresh_line_link_button()
+	controller.navigation_map._queue_map_redraw()
+	return true
+
+func _sync_values_from_line(a: Vector2, b: Vector2) -> void:
 	var delta := b - a
 	if delta.length_squared() < 0.000001:
 		return
+	syncing_line = true
 	values.distance = delta.length()
 	values.track = fposmod(rad_to_deg(atan2(delta.x, -delta.y)), 360.0)
+	edit_sequence += 1
+	edit_order.distance = edit_sequence
+	edit_order.track = edit_sequence
 	heading_based = false
-	expanded = true
-	body.show()
-	toggle.text = "Свернуть"
-	_set_value("distance", delta.length())
+	last_changed = "distance"
+	derive_speed = false
+	derive_vertical = false
+	_recalculate()
+	syncing_line = false
+
+func _sync_active_profile_from_line() -> void:
+	if bound_line_id < 0 or controller == null:
+		return
+	var line: Dictionary = controller.navigation_map.measurement_line_by_id(bound_line_id)
+	if line.is_empty():
+		bound_line_id = -1
+		profile_states[active_profile] = _capture_profile_state()
+		_refresh_line_link_button()
+		return
+	var delta: Vector2 = Vector2(line.b) - Vector2(line.a)
+	var line_track := fposmod(rad_to_deg(atan2(delta.x, -delta.y)), 360.0)
+	var track_difference := absf(fposmod(line_track - float(values.track) + 180.0, 360.0) - 180.0)
+	if not is_equal_approx(delta.length(), float(values.distance)) or track_difference > 0.0001:
+		_sync_values_from_line(line.a, line.b)
+	profile_states[active_profile] = _capture_profile_state()
+
+func measurement_line_changed(line: Dictionary) -> void:
+	var line_id := int(line.get("id", -1))
+	var profile_index := profile_for_line(line_id)
+	if profile_index < 0:
+		return
+	if profile_index == active_profile:
+		_sync_values_from_line(line.a, line.b)
+		profile_states[active_profile] = _capture_profile_state()
+		return
+	var state: Dictionary = profile_states[profile_index].duplicate(true)
+	var line_delta: Vector2 = Vector2(line.b) - Vector2(line.a)
+	if line_delta.length_squared() < 0.000001:
+		return
+	state.values.distance = line_delta.length()
+	state.values.track = fposmod(rad_to_deg(atan2(line_delta.x, -line_delta.y)), 360.0)
+	state.heading_based = false
+	state.last_changed = "distance"
+	state.derive_speed = false
+	state.derive_vertical = false
+	var prediction := calculate(state.values, "distance", float(state.initial_altitude), false)
+	if prediction.valid:
+		state.values = prediction.values
+	profile_states[profile_index] = state
+
+func measurement_line_removed(line_id: int) -> void:
+	for profile_index in profile_states.size():
+		var state: Dictionary = _capture_profile_state() if profile_index == active_profile else profile_states[profile_index]
+		if int(state.get("bound_line_id", -1)) != line_id:
+			continue
+		state.bound_line_id = -1
+		profile_states[profile_index] = state
+		if profile_index == active_profile:
+			bound_line_id = -1
+			selecting_line = false
+	_refresh_line_link_button()
+
+func clear_line_links() -> void:
+	bound_line_id = -1
+	selecting_line = false
+	for profile_index in profile_states.size():
+		var state: Dictionary = _capture_profile_state() if profile_index == active_profile else profile_states[profile_index]
+		state.bound_line_id = -1
+		profile_states[profile_index] = state
+	_refresh_line_link_button()
+
+func release_line_from_other_profiles(line_id: int, except_profile: int) -> void:
+	for profile_index in profile_states.size():
+		if profile_index == except_profile:
+			continue
+		var state: Dictionary = _capture_profile_state() if profile_index == active_profile else profile_states[profile_index]
+		if int(state.get("bound_line_id", -1)) != line_id:
+			continue
+		state.bound_line_id = -1
+		profile_states[profile_index] = state
+		if profile_index == active_profile:
+			bound_line_id = -1
+	_refresh_line_link_button()
+
+func profile_for_line(line_id: int) -> int:
+	if line_id < 0:
+		return -1
+	for profile_index in profile_states.size():
+		var state: Dictionary = _capture_profile_state() if profile_index == active_profile else profile_states[profile_index]
+		if int(state.get("bound_line_id", -1)) == line_id:
+			return profile_index
+	return -1
+
+func highlighted_line_id() -> int:
+	return bound_line_id if expanded and visible else -1
+
+func line_time_minutes(line_id: int) -> float:
+	var profile_index := profile_for_line(line_id)
+	if profile_index < 0:
+		return -1.0
+	var state: Dictionary = _capture_profile_state() if profile_index == active_profile else profile_states[profile_index]
+	return float(state.values.time)
+
+func _sync_active_line_from_calculator() -> String:
+	if syncing_line or bound_line_id < 0 or not valid or controller == null:
+		return ""
+	profile_states[active_profile] = _capture_profile_state()
+	syncing_line = true
+	var line: Dictionary = controller.navigation_map.update_calculator_line(bound_line_id, float(values.distance), float(values.track))
+	if line.is_empty():
+		bound_line_id = -1
+	elif bool(line.get("rejected", false)):
+		syncing_line = false
+		return str(line.get("reason", "Связанную линию невозможно обновить"))
+	else:
+		var actual_distance := Vector2(line.a).distance_to(Vector2(line.b))
+		if not is_equal_approx(actual_distance, float(values.distance)):
+			_sync_values_from_line(line.a, line.b)
+	syncing_line = false
+	profile_states[active_profile] = _capture_profile_state()
+	_refresh_line_link_button()
+	return ""
 
 func _recalculate(editing_key: String = "") -> void:
+	var locked_distance := float(values.distance)
 	var speed_error := ""
 	if derive_speed:
-		var required_ground_speed := float(values.distance) / float(values.time) * 60.0
-		var wind_angle := deg_to_rad(float(values.wind_from))
-		var wind_vector := Vector2(-sin(wind_angle), cos(wind_angle)) * float(values.wind_speed)
-		var angle := deg_to_rad(float(values.heading if heading_based else values.track))
-		var forward := Vector2(sin(angle), -cos(angle))
-		if heading_based:
-			var along := wind_vector.dot(forward)
-			var discriminant := required_ground_speed * required_ground_speed - (wind_vector.length_squared() - along * along)
-			var speed := -along + sqrt(maxf(0.0, discriminant))
-			if discriminant < -0.000001 or speed < 0.0:
-				speed_error = "Такое время и расстояние недостижимы при заданных ветре и курсе"
-			else:
-				values.speed = speed
+		if float(values.time) <= 0.0:
+			speed_error = "Для ненулевого расстояния задайте время больше нуля"
 		else:
-			values.speed = (forward * required_ground_speed - wind_vector).length()
-	if derive_vertical and last_changed == "time":
-		_derive_vertical_speed()
+			var required_ground_speed := locked_distance / float(values.time) * 60.0
+			var wind_angle := deg_to_rad(float(values.wind_from))
+			var wind_vector := Vector2(-sin(wind_angle), cos(wind_angle)) * float(values.wind_speed)
+			var angle := deg_to_rad(float(values.heading if heading_based else values.track))
+			var forward := Vector2(sin(angle), -cos(angle))
+			if heading_based:
+				var along := wind_vector.dot(forward)
+				var discriminant := required_ground_speed * required_ground_speed - (wind_vector.length_squared() - along * along)
+				var speed := -along + sqrt(maxf(0.0, discriminant))
+				if discriminant < -0.000001 or speed < 0.0:
+					speed_error = "Такое время и расстояние недостижимы при заданных ветре и курсе"
+				else:
+					values.speed = speed
+			else:
+				values.speed = (forward * required_ground_speed - wind_vector).length()
 	var wind := navigation(values, heading_based)
 	if wind.valid:
 		values.heading = wind.heading
 		values.track = wind.track
-	var prediction := calculate(values, last_changed, initial_altitude, heading_based)
+	var prediction := calculate(values, "distance", initial_altitude, heading_based)
 	if not speed_error.is_empty():
 		prediction = {"valid": false, "reason": speed_error}
-	if prediction.valid and derive_vertical and last_changed == "distance":
+	if prediction.valid and derive_vertical:
 		values.time = prediction.values.time
 		_derive_vertical_speed()
-		prediction = calculate(values, "time", initial_altitude, heading_based)
+		prediction = calculate(values, "distance", initial_altitude, heading_based)
+	if prediction.valid and float(prediction.values.distance) < MIN_DISTANCE_KM:
+		prediction = {"valid": false, "reason": "Расстояние не может быть обнулено: измените время или скорость"}
 	valid = prediction.valid
 	if valid:
 		values = prediction.values
-	for key in fields:
-		fields[key].tooltip_text = "" if valid else prediction.reason
-		fields[key].add_theme_color_override("font_color", MAJOR_CONTOUR_COLOR if valid else Color("a3483f"))
+		# Avoid even microscopic floating-point drift: the distance field is an
+		# exact user/line-owned value, never a derived result.
+		values.distance = locked_distance
+	_apply_validation_style("" if valid else prediction.reason)
 	_refresh_fields(editing_key)
 	if not wind.valid:
 		var derived := "track" if heading_based else "heading"
 		if derived != editing_key:
 			fields[derived].text = "—"
+
+func _show_error(reason: String, editing_key: String = "") -> void:
+	valid = false
+	_apply_validation_style(reason)
+	_refresh_fields(editing_key)
+
+func _apply_validation_style(reason: String) -> void:
+	for key in fields:
+		fields[key].tooltip_text = reason
+		fields[key].add_theme_color_override("font_color", MAJOR_CONTOUR_COLOR if reason.is_empty() else Color("a3483f"))
 
 func _derive_vertical_speed() -> void:
 	var difference := float(values.altitude) - initial_altitude
@@ -503,7 +769,10 @@ static func calculate(input: Dictionary, changed: String, altitude: float, from_
 		else:
 			minutes = height_difference / float(output.vertical) / 60.0
 	output.time = minutes
-	output.distance = ground_speed * minutes / 60.0
+	var calculated_distance := ground_speed * minutes / 60.0
+	if calculated_distance < MIN_DISTANCE_KM:
+		return {"valid": false, "reason": "Расстояние не может быть обнулено: измените время или скорость"}
+	output.distance = calculated_distance
 	output.altitude = altitude + float(output.vertical) * minutes * 60.0
 	for key in output:
 		if not is_finite(float(output[key])):

@@ -38,13 +38,15 @@ var beacons: Array[Dictionary] = []
 var wind_layers: Array[Dictionary] = []
 var storms: Array[Dictionary] = []
 var weather_time_seconds := 0.0
+var weather_generation := 0
 var _route_grid: AStarGrid2D
 var _route_distance_cache: Dictionary = {}
 
 # Explicit model snapshot. Runtime noise/cache objects never enter the save.
 func snapshot() -> Dictionary:
 	return {"seed": seed_value, "airports": airports, "beacons": beacons,
-		"wind_layers": wind_layers, "storms": storms, "time": weather_time_seconds}.duplicate(true)
+		"wind_layers": wind_layers, "storms": storms, "time": weather_time_seconds,
+		"weather_generation": weather_generation}.duplicate(true)
 
 func restore_snapshot(data: Dictionary) -> void:
 	# SaveGame validates the schema and constructs this world using data.seed.
@@ -54,6 +56,10 @@ func restore_snapshot(data: Dictionary) -> void:
 	wind_layers.assign(data.wind_layers.duplicate(true))
 	storms.assign(data.storms.duplicate(true))
 	weather_time_seconds = data.time
+	# Saves written before deterministic weather cycles did not contain this
+	# counter. Their current weather is retained, and the next landing starts at
+	# the first reproducible post-start cycle.
+	weather_generation = maxi(0, int(data.get("weather_generation", 0)))
 	_invalidate_route_cache()
 
 func _init(requested_seed: int = 0) -> void:
@@ -75,18 +81,21 @@ func _init(requested_seed: int = 0) -> void:
 
 func _generate_weather() -> void:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = seed_value + 44771
+	rng.seed = _weather_seed(weather_generation)
 	_generate_wind(rng)
 	_generate_storms(rng)
 
 func refresh_weather() -> void:
-	var rng := RandomNumberGenerator.new()
-	rng.randomize()
-	_generate_wind(rng)
-	_generate_storms(rng)
+	weather_generation += 1
+	_generate_weather()
 	# Newly generated storm origins describe their positions now, rather than
 	# being displaced by the elapsed time of the previous weather system.
 	weather_time_seconds = 0.0
+
+func _weather_seed(generation: int) -> int:
+	# A large odd stride keeps consecutive cycles separate while making the
+	# complete sequence reproducible from the public world seed.
+	return seed_value + 44771 + generation * 1000003
 
 func _generate_storms(rng: RandomNumberGenerator) -> void:
 	storms.clear()

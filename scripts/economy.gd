@@ -32,6 +32,7 @@ var fuel_airports: Array[int] = []
 var food_airports: Array[int] = []
 var hotel_airports: Array[int] = []
 var repair_airports: Array[int] = []
+var visited_airports: Array[int] = []
 var last_landed_airport := -1
 var next_parcel_id := 1
 var game_over_reason := ""
@@ -76,14 +77,33 @@ func _pick_three(rng: RandomNumberGenerator, count: int) -> Array[int]:
 func services_at(airport_index: int) -> Array[String]:
 	var result: Array[String] = ["почта", "лётная служба"]
 	if airport_index in fuel_airports:
-		result.append("топливо")
+		result.append(_known_price_label("топливо", fuel_airports, airport_index))
 	if airport_index in food_airports:
-		result.append("еда")
+		result.append(_known_price_label("еда", food_airports, airport_index))
 	if airport_index in hotel_airports:
-		result.append("гостиница")
+		result.append(_known_price_label("гостиница", hotel_airports, airport_index))
 	if airport_index in repair_airports:
-		result.append("ремонт")
+		result.append(_known_price_label("ремонт", repair_airports, airport_index))
 	return result
+
+func _known_price_label(label: String, service_airports: Array[int], airport_index: int) -> String:
+	if airport_index not in visited_airports:
+		return label
+	var known_airports: Array[int] = []
+	# Service arrays are stored in ascending price order. Filtering that array by
+	# visited locations therefore ranks only prices the pilot has actually seen.
+	for service_airport in service_airports:
+		if service_airport in visited_airports:
+			known_airports.append(service_airport)
+	if known_airports.size() < 2:
+		return label
+	var known_rank := known_airports.find(airport_index)
+	if known_rank < 0:
+		return label
+	var price_marks := ""
+	for _mark in known_rank + 1:
+		price_marks += "+"
+	return "%s (%s)" % [label, price_marks]
 
 func optional_service_count(airport_index: int) -> int:
 	var count := 0
@@ -159,6 +179,8 @@ func buy_repair(requested_points: float, airport_index: int) -> float:
 	return repaired
 
 func arrive_at_airport(airport_index: int, world) -> void:
+	if airport_index not in visited_airports:
+		visited_airports.append(airport_index)
 	if airport_index == last_landed_airport:
 		return
 	last_landed_airport = airport_index
@@ -367,7 +389,7 @@ func snapshot() -> Dictionary:
 		"elapsed_seconds": elapsed_seconds, "need_accumulator_seconds": need_accumulator_seconds,
 		"inventory": inventory, "carried_item": carried_item, "offers_by_airport": offers_by_airport,
 		"fuel_airports": fuel_airports, "food_airports": food_airports, "hotel_airports": hotel_airports,
-		"repair_airports": repair_airports,
+		"repair_airports": repair_airports, "visited_airports": visited_airports,
 		"last_landed_airport": last_landed_airport, "next_parcel_id": next_parcel_id,
 		"game_over_reason": game_over_reason,
 	}.duplicate(true)
@@ -416,6 +438,23 @@ func restore(data: Dictionary, world = null) -> bool:
 		repair_airports = _generate_repair_airports(world)
 	_balance_service_coverage(world.airports.size() if world != null else 8)
 	last_landed_airport = int(data.last_landed_airport)
+	visited_airports.clear()
+	if data.has("visited_airports"):
+		if not data.visited_airports is Array:
+			return false
+		for airport_index in data.visited_airports:
+			if not airport_index is int or airport_index < 0 or airport_index >= (world.airports.size() if world != null else 8) or airport_index in visited_airports:
+				return false
+			visited_airports.append(airport_index)
+	else:
+		# Older saves did not track visits explicitly. Mail-offer origins are the
+		# best available record of airports at which the player has already landed.
+		for origin in offers_by_airport.keys():
+			var airport_index := int(origin)
+			if airport_index >= 0 and airport_index < (world.airports.size() if world != null else 8) and airport_index not in visited_airports:
+				visited_airports.append(airport_index)
+		if last_landed_airport >= 0 and last_landed_airport not in visited_airports:
+			visited_airports.append(last_landed_airport)
 	next_parcel_id = int(data.next_parcel_id)
 	game_over_reason = String(data.game_over_reason)
 	return true

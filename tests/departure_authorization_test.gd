@@ -15,6 +15,12 @@ func _run() -> void:
 	flight.toggle_electrical_power()
 	flight.toggle_engine()
 	assert(flight.engine_running)
+	flight.toggle_electrical_power()
+	assert(not flight.electrical_power and not flight.engine_running and flight.message == "Питание и двигатель выключены", "Switching master power off must also stop the running engine")
+	flight.toggle_electrical_power()
+	assert(flight.electrical_power and not flight.engine_running, "Switching master power on must not start the engine")
+	flight.toggle_engine()
+	assert(flight.engine_running)
 	flight.toggle_engine()
 	assert(not flight.engine_running and flight.departure_authorized, "Stopping the engine before takeoff must preserve paid departure preparation")
 	var fuel_before_power_only: float = flight.fuel_l
@@ -27,6 +33,12 @@ func _run() -> void:
 	flight.toggle_electrical_power()
 	assert(not flight.electrical_power and not flight.departure_authorized, "Electrical power must remain switchable without departure authorization")
 	flight.toggle_electrical_power()
+	var legacy_power_snapshot := flight.snapshot()
+	legacy_power_snapshot.electrical_power = false
+	legacy_power_snapshot.engine_running = true
+	var restored_legacy_power = Flight.new(World.new(424242))
+	assert(restored_legacy_power.restore_snapshot(legacy_power_snapshot, flight.turbulence_rng.state))
+	assert(not restored_legacy_power.electrical_power and not restored_legacy_power.engine_running, "Loading an old power-off save must stop its formerly independent engine")
 
 	flight.prepare_at_airport(0)
 	assert(flight.departure_authorized)

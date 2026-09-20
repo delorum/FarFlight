@@ -333,7 +333,7 @@ func _draw_compass(center: Vector2, radius: float) -> void:
 	]), Color("e5b752"))
 	host.draw_circle(center, 3.0, Color("e5b752"))
 	host.draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "КОМПАС", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "%03d°" % int(round(host.flight.heading_deg)), HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 14, Color.WHITE)
+	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "%05.1f°" % host.flight.heading_deg, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 14, Color.WHITE)
 
 func _draw_variometer(center: Vector2, radius: float) -> void:
 	host.draw_circle(center, radius, Color("0a0e10"))
@@ -369,7 +369,8 @@ func _draw_clock(center: Vector2, radius: float, beige: bool = false) -> void:
 	host.draw_line(center, center + Vector2(cos(second_angle), sin(second_angle)) * (radius * 0.73), AircraftArt.LIGHT if beige else Color("ed775f"), 1.0, true)
 	host.draw_circle(center, 2.5, ink)
 	host.draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ЧАСЫ", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 10, AircraftArt.INK if beige else Color("b8c5c8"))
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 14), "%02d:%02d:%02d" % [hours, minutes, seconds], HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 10, AircraftArt.INK if beige else Color.WHITE)
+	var time_label_width := maxf(radius * 2.0, 142.0)
+	host.draw_string(ThemeDB.fallback_font, center + Vector2(-time_label_width * 0.5, radius + 14), "ДЕНЬ %d • %02d:%02d:%02d" % [game_day_number(), hours, minutes, seconds], HORIZONTAL_ALIGNMENT_CENTER, time_label_width, 10, AircraftArt.INK if beige else Color.WHITE)
 	if beige:
 		return
 	var trip_whole_seconds = int(host.trip_elapsed_seconds)
@@ -380,6 +381,11 @@ func _draw_clock(center: Vector2, radius: float, beige: bool = false) -> void:
 	host.draw_rect(reset_button, Color("334b55"), true)
 	host.draw_rect(reset_button, Color("82979f"), false, 1.0)
 	host.draw_string(ThemeDB.fallback_font, reset_button.position + Vector2(0.0, 13.0), "СБРОС [T]", HORIZONTAL_ALIGNMENT_CENTER, reset_button.size.x, 8, Color.WHITE)
+
+func game_day_number() -> int:
+	if host.economy == null:
+		return 1
+	return floori(maxf(0.0, float(host.economy.elapsed_seconds)) / 86400.0) + 1
 
 func _draw_time_controls(beige: bool = false) -> void:
 	UIButton.draw(host, get_time_scale_button_rect(beige), "ВРЕМЯ %d× [⇧Z]" % roundi(TIME_SCALES[host.time_scale_index]), beige, 9)

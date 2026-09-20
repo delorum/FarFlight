@@ -3,10 +3,14 @@ extends RefCounted
 ## slot intact until the replacement has been written and validated.
 const VERSION := 5
 const PATH := "user://flight_save.dat"
+const INVALID_DEBUG_SUFFIX := ".invalid-debug"
 const WEB_KEY := "farflight.save.v5"
 const LEGACY_WEB_KEYS := ["farflight.save.v4", "farflight.save.v3"]
 const FlightCalculatorScript = preload("res://scripts/flight_calculator.gd")
 const NavigationMapScript = preload("res://scripts/navigation_map.gd")
+const FlightHistoryScript = preload("res://scripts/flight_history.gd")
+const ViewMode = preload("res://scripts/scene_modes.gd").ViewMode
+static var last_validation_error := ""
 
 # Synchronous localStorage replacement survives an immediate page close. Keep
 # Variant's binary encoding: JSON alone loses Vector2 and 64-bit RNG state.
@@ -49,9 +53,16 @@ static func flight_fields(flight) -> Dictionary:
 	return flight.snapshot()
 
 static func capture(game) -> Dictionary:
+	game.navigation_map.ensure_measurement_line_ids()
 	var ui := {}
 	for field in UI_FIELDS:
-		ui[field] = game.get(field)
+		var value: Variant = game.get(field)
+		# History selection/scroll is deliberately transient. Reopen the flight
+		# service after loading instead of restoring a route-detail screen without
+		# its selected route.
+		if field == "view_mode" and value in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY]:
+			value = ViewMode.OPERATIONS
+		ui[field] = value
 	ui["final_trajectory_visible"] = game.final_trajectory_visible
 	ui["flight_calculator"] = game.flight_calculator.snapshot()
 	ui["weather_briefing"] = game.navigation_map.weather_briefing_snapshot()
@@ -59,20 +70,28 @@ static func capture(game) -> Dictionary:
 	ui["player_aircraft_x"] = (game.scene_player_x - game._aircraft_origin().x) / game._aircraft_scale()
 	return {
 		"version": VERSION,
+		"run_finished": game.flight.state == game.FlightModelScript.State.CRASHED,
 		"world": game.world.snapshot(),
 		"flight": flight_fields(game.flight), "rng_state": game.flight.turbulence_rng.state,
 		"economy": game.economy.snapshot(),
+		"flight_history": game.simulation.flight_history.snapshot(),
 		"ui": ui,
 	}.duplicate(true)
 
 static func valid(data: Variant) -> bool:
 	if not data is Dictionary or data.get("version") not in [3, 4, VERSION]:
 		return false
+	if data.has("run_finished") and not data.run_finished is bool:
+		return false
+	if bool(data.get("run_finished", false)) and int(data.get("flight", {}).get("state", -1)) != 4:
+		return false
 	for key in ["world", "flight", "ui", "economy"]:
 		if not data.get(key) is Dictionary:
 			return false
 	var world: Dictionary = data.world
 	if not world.get("seed") is int or not world.get("time") is float or not data.get("rng_state") is int:
+		return false
+	if world.has("weather_generation") and (not world.weather_generation is int or int(world.weather_generation) < 0):
 		return false
 	for key in ["airports", "beacons", "wind_layers", "storms"]:
 		if not world.get(key) is Array:
@@ -81,6 +100,8 @@ static func valid(data: Variant) -> bool:
 			if not item is Dictionary:
 				return false
 	if world.airports.size() != 8 or world.beacons.size() != 24 or world.wind_layers.size() < 2:
+		return false
+	if data.has("flight_history") and not FlightHistoryScript.valid_snapshot(data.flight_history, world.airports.size()):
 		return false
 	for airport in world.airports:
 		if not airport.get("position") is Vector2 or not airport.get("heading") is float or not airport.get("name") is String:
@@ -138,12 +159,22 @@ static func valid(data: Variant) -> bool:
 				return false
 			if key != "flight_trajectory" and (not entry.get("a") is Vector2 or not entry.get("b") is Vector2 or not entry.has("max_height_m")):
 				return false
+			if key == "measurement_lines" and entry.has("id") and (not entry.id is int or int(entry.id) < 1):
+				return false
 			if key == "flight_trajectory" and (not entry.get("position") is Vector2 or not entry.has_all(["time_seconds", "distance_km"])):
 				return false
 	if not data.economy.has_all(["money", "hunger", "fatigue", "inventory", "carried_item", "offers_by_airport", "fuel_airports", "food_airports", "hotel_airports"]):
 		return false
 	if data.economy.has("repair_airports") and (not data.economy.repair_airports is Array or data.economy.repair_airports.size() != 3):
 		return false
+	if data.economy.has("visited_airports"):
+		if not data.economy.visited_airports is Array:
+			return false
+		var visited := {}
+		for airport_index in data.economy.visited_airports:
+			if not airport_index is int or airport_index not in range(world.airports.size()) or visited.has(airport_index):
+				return false
+			visited[airport_index] = true
 	if not data.economy.inventory is Array or data.economy.inventory.size() != 6:
 		return false
 	var time_state_valid := true
@@ -151,7 +182,7 @@ static func valid(data: Variant) -> bool:
 		time_state_valid = data.ui.time_scale_index is int and data.ui.time_scale_index in range(5) and data.ui.cabin_sleeping is bool and data.ui.cabin_sleep_progress_seconds is float and data.ui.cabin_sleep_progress_seconds >= 0.0 and data.ui.cabin_sleep_progress_seconds < 1200.0
 	var condition: Variant = data.flight.get("airframe_condition", 100.0)
 	var condition_valid: bool = condition is float and condition >= 0.0 and condition <= 100.0
-	return data.flight.get("position_km") is Vector2 and data.flight.get("state") in range(5) and data.ui.view_mode in range(10) and data.ui.radar_range_index in range(4) and data.ui.cabin_terrain_zoom in range(4) and time_state_valid and condition_valid
+	return data.flight.get("position_km") is Vector2 and data.flight.get("state") in range(5) and data.ui.view_mode in range(12) and data.ui.radar_range_index in range(4) and data.ui.cabin_terrain_zoom in range(4) and time_state_valid and condition_valid
 
 static func read_slot(path: String = PATH) -> Dictionary:
 	if OS.has_feature("web") and path == PATH:
@@ -168,7 +199,13 @@ static func read_slot(path: String = PATH) -> Dictionary:
 static func write_slot(game, path: String = PATH) -> Error:
 	var data := capture(game)
 	if not valid(data):
+		last_validation_error = _validation_error(data)
+		_write_invalid_debug_snapshot(data, path)
 		return ERR_INVALID_DATA
+	last_validation_error = ""
+	var debug_path := path + INVALID_DEBUG_SUFFIX
+	if FileAccess.file_exists(debug_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(debug_path))
 	if OS.has_feature("web") and path == PATH:
 		var encoded := encode_web(data)
 		if decode_web(encoded) != data:
@@ -191,6 +228,40 @@ static func write_slot(game, path: String = PATH) -> Error:
 		return ERR_FILE_CORRUPT
 	return DirAccess.rename_absolute(ProjectSettings.globalize_path(temporary), ProjectSettings.globalize_path(path))
 
+static func _write_invalid_debug_snapshot(data: Dictionary, path: String) -> void:
+	# Keep the valid slot untouched. This sidecar is only a recovery diagnostic
+	# for a live game whose in-memory state cannot be reproduced by tests.
+	var file := FileAccess.open(path + INVALID_DEBUG_SUFFIX, FileAccess.WRITE)
+	if file == null:
+		return
+	file.store_var(data, false)
+	file.close()
+
+static func _validation_error(data: Variant) -> String:
+	if not data is Dictionary:
+		return "корневой снимок не является словарём"
+	if data.get("ui") is Dictionary:
+		var ui: Dictionary = data.ui
+		if ui.has("flight_calculator") and not FlightCalculatorScript.valid_snapshot(ui.flight_calculator):
+			return "некорректное состояние расчёта полёта"
+		if ui.has("weather_briefing") and not NavigationMapScript.valid_weather_briefing(ui.weather_briefing):
+			return "некорректное состояние метеосводки"
+		for key in ["measurement_lines", "radar_measurement_lines"]:
+			if not ui.get(key) is Array:
+				return "%s: ожидался массив" % key
+			for entry in ui[key]:
+				if not entry is Dictionary or not entry.get("a") is Vector2 or not entry.get("b") is Vector2 or not entry.has("max_height_m"):
+					return "%s: повреждена линия" % key
+	if data.has("flight_history") and data.get("world") is Dictionary and not FlightHistoryScript.valid_snapshot(data.flight_history, data.world.get("airports", []).size()):
+		return "некорректная история полётов"
+	if data.get("flight") is Dictionary and data.get("world") is Dictionary:
+		var airport_count: int = data.world.get("airports", []).size()
+		if data.flight.get("airport_index", -1) not in range(airport_count):
+			return "некорректный текущий аэродром самолёта"
+		if data.flight.get("prepared_airport_index", -1) not in range(airport_count):
+			return "некорректный аэродром подготовки к вылету"
+	return "одно из полей игрового состояния имеет несовместимый тип или значение"
+
 static func restore(game, data: Dictionary) -> bool:
 	if not valid(data):
 		return false
@@ -202,6 +273,10 @@ static func restore(game, data: Dictionary) -> bool:
 		return false
 	if not new_flight.restore_snapshot(data.flight, data.rng_state):
 		return false
+	if data.has("flight_history") and not game.simulation.flight_history.restore_snapshot(data.flight_history, new_world.airports.size()):
+		return false
+	if not data.has("flight_history"):
+		game.simulation.flight_history.reset()
 	for field in UI_FIELDS:
 		if not data.ui.has(field):
 			continue
@@ -212,6 +287,7 @@ static func restore(game, data: Dictionary) -> bool:
 	game.world = new_world
 	game.flight = new_flight
 	game.economy = new_economy
+	game.run_finish_save_attempted = bool(data.get("run_finished", new_flight.state == game.FlightModelScript.State.CRASHED))
 	game._set_view_mode(data.ui.view_mode)
 	for field in UI_FIELDS:
 		if not data.ui.has(field):
@@ -222,6 +298,24 @@ static func restore(game, data: Dictionary) -> bool:
 			game.set(field, float(data.ui[field]))
 		else:
 			game.set(field, data.ui[field])
+	if not data.has("flight_history") and new_flight.state in [game.FlightModelScript.State.FLYING, game.FlightModelScript.State.ROLLING] and game.trajectory_recording_started and not game.trajectory_finished:
+		# A pre-history save may already be airborne. Recover its current route
+		# from the recorded trajectory so that the first landing after updating is
+		# not silently omitted from statistics.
+		var origin := int(new_flight.airport_index)
+		if not game.flight_trajectory.is_empty():
+			var first_position: Vector2 = game.flight_trajectory[0].position
+			var nearest_distance := INF
+			for airport_index in new_world.airports.size():
+				var candidate_distance: float = first_position.distance_squared_to(Vector2(new_world.airports[airport_index].position))
+				if candidate_distance < nearest_distance:
+					nearest_distance = candidate_distance
+					origin = airport_index
+		game.simulation.flight_history.active = true
+		game.simulation.flight_history.active_origin = origin
+		game.simulation.flight_history.active_start_seconds = maxf(0.0, new_economy.elapsed_seconds - game.trajectory_elapsed_seconds)
+		game.simulation.flight_history.active_distance_km = maxf(0.0, game.trajectory_distance_km)
+	game.navigation_map.ensure_measurement_line_ids()
 	if data.ui.has("final_trajectory_visible"):
 		game.final_trajectory_visible = data.ui.final_trajectory_visible
 	if data.ui.has("flight_calculator") and not game.flight_calculator.restore_snapshot(data.ui.flight_calculator):
@@ -251,3 +345,8 @@ static func restore(game, data: Dictionary) -> bool:
 	game._queue_map_redraw()
 	game.queue_redraw()
 	return true
+
+static func is_finished_run(data: Dictionary) -> bool:
+	if data.is_empty():
+		return false
+	return bool(data.get("run_finished", int(data.get("flight", {}).get("state", -1)) == 4))

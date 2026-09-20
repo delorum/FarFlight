@@ -48,7 +48,7 @@ func _run() -> void:
 	var pause_key := InputEventKey.new()
 	pause_key.keycode = KEY_SPACE
 	pause_key.pressed = true
-	for mode in [scene.ViewMode.COCKPIT, scene.ViewMode.CABIN, scene.ViewMode.APRON, scene.ViewMode.AIRPORT, scene.ViewMode.OPERATIONS, scene.ViewMode.MAIL, scene.ViewMode.SHOP, scene.ViewMode.HOTEL, scene.ViewMode.FUEL, scene.ViewMode.REPAIR]:
+	for mode in [scene.ViewMode.COCKPIT, scene.ViewMode.CABIN, scene.ViewMode.APRON, scene.ViewMode.AIRPORT, scene.ViewMode.OPERATIONS, scene.ViewMode.MAIL, scene.ViewMode.SHOP, scene.ViewMode.HOTEL, scene.ViewMode.FUEL, scene.ViewMode.REPAIR, scene.ViewMode.FLIGHT_HISTORY, scene.ViewMode.ROUTE_HISTORY]:
 		scene._set_view_mode(mode)
 		scene.simulation_paused = false
 		scene._input(pause_key)
@@ -92,6 +92,9 @@ func _run() -> void:
 		check(scene.view_mode == scene.ViewMode.AIRPORT,"Click airport exit must reach airport")
 		click_and_walk(scene,scene._scene_hotspots()[0])
 		check(scene.view_mode == scene.ViewMode.OPERATIONS,"Click operations door must enter service building")
+		scene._interact_in_scene()
+		check(scene.view_mode == scene.ViewMode.AIRPORT,"Enter must leave a service building as advertised")
+		click_and_walk(scene,scene._scene_hotspots()[0])
 		click_and_walk(scene, {"rect":scene.get_building_exit_rect()})
 		check(scene.view_mode == scene.ViewMode.AIRPORT,"Click exit must immediately leave the building")
 		scene._enter_apron()

@@ -122,7 +122,10 @@ static func draw_storm_motion(canvas: CanvasItem, rect: Rect2, world, flight, mo
 		return
 	var velocity := Vector2(selected.drift_kmh)
 	var direction := velocity.normalized().rotated(-deg_to_rad(flight.heading_deg))
-	var origin := center + (mouse - center).limit_length(maxf(0.0, radius - 48.0))
+	# Anchor the annotation to the selected cell itself. Moving the pointer
+	# inside the same echo no longer drags the arrow across the radar.
+	var storm_relative: Vector2 = (world.storm_position(selected) - flight.position_km).rotated(-deg_to_rad(flight.heading_deg))
+	var origin := center + (storm_relative / range_km * radius).limit_length(maxf(0.0, radius - 48.0))
 	var tip := origin + direction * 34.0
 	var color := Color("b8e3e7")
 	if velocity.length_squared() > 0.000001:

@@ -156,6 +156,10 @@ func restore_snapshot(data: Dictionary, rng_state: int) -> bool:
 		departure_authorized = false
 	if not data.has("electrical_power"):
 		electrical_power = engine_running
+	elif not electrical_power:
+		# Older saves could contain this combination because the master power
+		# switch previously left the engine running. Enforce the new invariant.
+		engine_running = false
 	if not data.has("prepared_airport_index"):
 		prepared_airport_index = airport_index
 	if not data.has("prepared_reverse_direction"):
@@ -272,8 +276,15 @@ func toggle_engine() -> void:
 func toggle_electrical_power() -> void:
 	if state == State.CRASHED:
 		return
-	electrical_power = not electrical_power
-	_show_message("Питание включено" if electrical_power else "Питание выключено", 3.0, "")
+	if electrical_power:
+		electrical_power = false
+		var stopped_engine := engine_running
+		engine_running = false
+		_show_message("Питание и двигатель выключены" if stopped_engine else "Питание выключено", 3.0, "")
+	else:
+		electrical_power = true
+		# Energizing instruments never starts the engine implicitly.
+		_show_message("Питание включено", 3.0, "")
 
 func leave_cockpit_on_ground() -> void:
 	if state not in [State.PARKED, State.LANDED, State.ROLLING]:

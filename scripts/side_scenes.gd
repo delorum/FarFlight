@@ -10,6 +10,7 @@ const CABIN_TABLE_X = UILayout.CABIN_TABLE_X
 const CABIN_TABLE_SEAT_X = UILayout.CABIN_TABLE_SEAT_X
 const FlightWorldScript = preload("res://scripts/world.gd")
 const UIButton = preload("res://scripts/ui_button.gd")
+const SERVICE_BUILDING_HEIGHT := 270.0
 var host: Control
 var view_mode := ViewMode.COCKPIT
 var scene_player_x := 180.0
@@ -30,6 +31,15 @@ var fuel_amount_litres := 20.0
 var dragging_fuel_slider := false
 var cabin_sleeping := false
 var cabin_table_seated := false
+var history_scroll := 0
+var history_selected := 0
+var route_history_scroll := 0
+var route_history_selected := 0
+var route_history_origin := -1
+var route_history_destination := -1
+var route_history_records_cache: Array[Dictionary] = []
+var history_route_counts: Dictionary = {}
+var history_route_counts_size := -1
 
 func _init(controller: Control) -> void:
 	host = controller
@@ -46,6 +56,11 @@ func _set_view_mode(next_mode: int) -> void:
 	dragging_fuel_slider = false
 	if view_mode == ViewMode.FUEL:
 		_set_default_fuel_amount()
+	if view_mode == ViewMode.FLIGHT_HISTORY:
+		history_route_counts_size = -1
+		_clamp_history_selection(false)
+	elif view_mode == ViewMode.ROUTE_HISTORY:
+		_clamp_history_selection(true)
 	scene_is_walking = false
 	host.dragging_map = false
 	host.map_drag_candidate = false
@@ -56,6 +71,8 @@ func _set_view_mode(next_mode: int) -> void:
 	host.dragging_throttle = false
 	host.throttle_up_held = false
 	host.throttle_down_held = false
+	host.steering_left_held = false
+	host.steering_right_held = false
 	scene_notice = ""
 	host._update_crash_overlay()
 	host._queue_map_redraw()
@@ -221,7 +238,7 @@ func _update_scene_walking(delta: float) -> void:
 		scene_notice = ""
 	host.queue_redraw()
 func _interact_in_scene() -> void:
-	if host.flight.state == FlightModelScript.State.CRASHED:
+	if host.flight.state == FlightModelScript.State.CRASHED and view_mode not in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY]:
 		return
 	match view_mode:
 		ViewMode.CABIN:
@@ -245,10 +262,21 @@ func _interact_in_scene() -> void:
 						break
 		ViewMode.OPERATIONS:
 			_set_view_mode(ViewMode.AIRPORT)
+		ViewMode.FLIGHT_HISTORY:
+			_open_selected_history_route()
+		ViewMode.ROUTE_HISTORY:
+			pass
 		ViewMode.MAIL, ViewMode.SHOP, ViewMode.HOTEL, ViewMode.FUEL, ViewMode.REPAIR:
 			_set_view_mode(ViewMode.AIRPORT)
 func _leave_current_scene() -> void:
 	match view_mode:
+		ViewMode.ROUTE_HISTORY:
+			_set_view_mode(ViewMode.FLIGHT_HISTORY)
+		ViewMode.FLIGHT_HISTORY:
+			if host.pause_history_active:
+				host.return_to_pause_menu_from_history()
+			else:
+				_set_view_mode(ViewMode.OPERATIONS)
 		ViewMode.OPERATIONS:
 			_set_view_mode(ViewMode.AIRPORT)
 		ViewMode.MAIL, ViewMode.SHOP, ViewMode.HOTEL, ViewMode.FUEL, ViewMode.REPAIR:
@@ -1129,15 +1157,18 @@ func get_operations_runway_rect(reverse_direction: bool) -> Rect2:
 func get_operations_weather_rect() -> Rect2:
 	return Rect2(host.size.x * 0.54, host.size.y * 0.38, minf(390.0, host.size.x * 0.40), 52)
 
+func get_operations_history_rect() -> Rect2:
+	return Rect2(host.size.x * 0.54, host.size.y * 0.70, minf(390.0, host.size.x * 0.40), 52)
+
 func get_building_exit_rect() -> Rect2:
-	return Rect2(host.size.x * 0.54, get_operations_runway_rect(true).end.y + 18.0, minf(390.0, host.size.x * 0.40), 52)
+	return Rect2(host.size.x * 0.54, host.size.y * 0.79, minf(390.0, host.size.x * 0.40), 52)
 
 func _draw_menu_button(rect: Rect2, text: String, font_size: int = 14) -> void:
 	UIButton.draw(host, rect, text, true, font_size)
 
 func _draw_operations_scene() -> void:
 	var floor_y = _draw_scene_background("ЛЁТНАЯ СЛУЖБА")
-	_draw_building(host.size.x*0.25,floor_y,Vector2(host.size.x*0.35,minf(350,floor_y-200)),"ЛЁТНАЯ СЛУЖБА",AircraftArt.PAPER)
+	_draw_building(host.size.x * 0.25, floor_y, Vector2(host.size.x * 0.35, minf(SERVICE_BUILDING_HEIGHT, floor_y - 200.0)), "ЛЁТНАЯ СЛУЖБА", AircraftArt.PAPER)
 	host.draw_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.52, 120), "ОБСЛУЖИВАНИЕ САМОЛЁТА", HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.44, 18, Color("34372f"))
 	var status_color = Color("567044") if host.flight.departure_authorized else Color("a3483f")
 	host.draw_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.54, host.size.y * 0.22), host._operations_status_text(), HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.40, 15, status_color)
@@ -1146,8 +1177,206 @@ func _draw_operations_scene() -> void:
 	_draw_menu_button(get_operations_weather_rect(), "ОБНОВИТЬ МЕТЕОСВОДКУ • %s" % host.navigation_map.weather_briefing_age_text())
 	_draw_menu_button(get_operations_runway_rect(false), host._operations_runway_button_text(false))
 	_draw_menu_button(get_operations_runway_rect(true), host._operations_runway_button_text(true))
-	_draw_menu_button(get_building_exit_rect(), "ВЫЙТИ В АЭРОПОРТ [ESC]")
-	_scene_prompt(scene_notice if not scene_notice.is_empty() else "ENTER / ESC: выйти из здания")
+	_draw_menu_button(get_operations_history_rect(), "СТАТИСТИКА ПОЛЁТОВ • %d" % host.simulation.flight_history.records.size())
+	_draw_menu_button(get_building_exit_rect(), "ВЫЙТИ В АЭРОПОРТ [ENTER]")
+	_scene_prompt(scene_notice if not scene_notice.is_empty() else "Enter: выйти из здания • Esc: меню")
+
+func get_history_back_rect() -> Rect2:
+	var button_width := minf(270.0, host.size.x * 0.30)
+	return Rect2(host.size.x - _history_right_margin() - button_width, 108.0, button_width, 44.0)
+
+func _history_list_rect() -> Rect2:
+	var left := _history_left_margin()
+	return Rect2(left, 160.0, host.size.x - left - _history_right_margin(), maxf(80.0, host.size.y - 270.0))
+
+func _history_left_margin() -> float:
+	# The clock controls end at x=202. Match their 48 px distance from the left
+	# edge on the other side of the column: the journal starts at x=250.
+	return 250.0
+
+func _history_right_margin() -> float:
+	# There is no instrument column on the right, so retain only the normal
+	# scene-edge breathing room and give the journal the otherwise empty width.
+	return 40.0
+
+func _history_visible_rows() -> int:
+	return maxi(1, floori(_history_list_rect().size.y / 64.0))
+
+func _active_history_records() -> Array[Dictionary]:
+	if view_mode == ViewMode.ROUTE_HISTORY:
+		return route_history_records_cache
+	return host.simulation.flight_history.records
+
+func _history_route_key(origin: int, destination: int) -> String:
+	return "%d:%d" % [origin, destination]
+
+func _history_route_count(origin: int, destination: int) -> int:
+	var records: Array[Dictionary] = host.simulation.flight_history.records
+	if history_route_counts_size != records.size():
+		history_route_counts.clear()
+		for record in records:
+			var key := _history_route_key(int(record.origin), int(record.destination))
+			history_route_counts[key] = int(history_route_counts.get(key, 0)) + 1
+		history_route_counts_size = records.size()
+	return int(history_route_counts.get(_history_route_key(origin, destination), 0))
+
+func _clamp_history_selection(route_details: bool) -> void:
+	var records: Array[Dictionary] = route_history_records_cache if route_details else host.simulation.flight_history.records
+	var maximum := maxi(0, records.size() - 1)
+	if route_details:
+		route_history_selected = clampi(route_history_selected, 0, maximum)
+		route_history_scroll = clampi(route_history_scroll, 0, maxi(0, records.size() - _history_visible_rows()))
+		if route_history_selected < route_history_scroll:
+			route_history_scroll = route_history_selected
+		elif route_history_selected >= route_history_scroll + _history_visible_rows():
+			route_history_scroll = route_history_selected - _history_visible_rows() + 1
+	else:
+		history_selected = clampi(history_selected, 0, maximum)
+		history_scroll = clampi(history_scroll, 0, maxi(0, records.size() - _history_visible_rows()))
+		if history_selected < history_scroll:
+			history_scroll = history_selected
+		elif history_selected >= history_scroll + _history_visible_rows():
+			history_scroll = history_selected - _history_visible_rows() + 1
+
+func handle_history_key(keycode: int) -> bool:
+	if view_mode not in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY]:
+		return false
+	var records := _active_history_records()
+	if keycode in [KEY_UP, KEY_DOWN, KEY_PAGEUP, KEY_PAGEDOWN, KEY_HOME, KEY_END]:
+		var selected := route_history_selected if view_mode == ViewMode.ROUTE_HISTORY else history_selected
+		match keycode:
+			KEY_UP: selected -= 1
+			KEY_DOWN: selected += 1
+			KEY_PAGEUP: selected -= _history_visible_rows()
+			KEY_PAGEDOWN: selected += _history_visible_rows()
+			KEY_HOME: selected = 0
+			KEY_END: selected = records.size() - 1
+		selected = clampi(selected, 0, maxi(0, records.size() - 1))
+		if view_mode == ViewMode.ROUTE_HISTORY:
+			route_history_selected = selected
+		else:
+			history_selected = selected
+		_clamp_history_selection(view_mode == ViewMode.ROUTE_HISTORY)
+		host.queue_redraw()
+		return true
+	return false
+
+func handle_history_mouse(event: InputEventMouseButton) -> bool:
+	if view_mode not in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY] or not event.pressed:
+		return false
+	if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+		var delta := -1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1
+		if view_mode == ViewMode.ROUTE_HISTORY:
+			route_history_scroll += delta
+		else:
+			history_scroll += delta
+		_clamp_history_scroll(view_mode == ViewMode.ROUTE_HISTORY)
+		# Keep keyboard selection inside the newly scrolled viewport so drawing
+		# does not immediately pull the list back to the previous selection.
+		var first_visible := route_history_scroll if view_mode == ViewMode.ROUTE_HISTORY else history_scroll
+		var last_visible := mini(_active_history_records().size() - 1, first_visible + _history_visible_rows() - 1)
+		if view_mode == ViewMode.ROUTE_HISTORY:
+			route_history_selected = clampi(route_history_selected, first_visible, maxi(first_visible, last_visible))
+		else:
+			history_selected = clampi(history_selected, first_visible, maxi(first_visible, last_visible))
+		host.queue_redraw()
+		return true
+	if event.button_index != MOUSE_BUTTON_LEFT:
+		return false
+	if get_history_back_rect().has_point(event.position):
+		_leave_current_scene()
+		return true
+	var list_rect := _history_list_rect()
+	if not list_rect.has_point(event.position):
+		return false
+	var scroll := route_history_scroll if view_mode == ViewMode.ROUTE_HISTORY else history_scroll
+	var row := floori((event.position.y - list_rect.position.y) / 64.0) + scroll
+	var records := _active_history_records()
+	if row < 0 or row >= records.size():
+		return false
+	if view_mode == ViewMode.ROUTE_HISTORY:
+		route_history_selected = row
+	else:
+		history_selected = row
+	host.queue_redraw()
+	return true
+
+func _clamp_history_scroll(route_details: bool) -> void:
+	var count := _active_history_records().size()
+	var maximum := maxi(0, count - _history_visible_rows())
+	if route_details:
+		route_history_scroll = clampi(route_history_scroll, 0, maximum)
+	else:
+		history_scroll = clampi(history_scroll, 0, maximum)
+
+func _open_selected_history_route() -> void:
+	var records: Array[Dictionary] = host.simulation.flight_history.records
+	if records.is_empty() or history_selected < 0 or history_selected >= records.size():
+		return
+	var record: Dictionary = records[history_selected]
+	var count: int = _history_route_count(int(record.origin), int(record.destination))
+	if count < 2:
+		return
+	route_history_origin = int(record.origin)
+	route_history_destination = int(record.destination)
+	route_history_records_cache = host.simulation.flight_history.route_records(route_history_origin, route_history_destination)
+	route_history_selected = 0
+	route_history_scroll = 0
+	_set_view_mode(ViewMode.ROUTE_HISTORY)
+
+func _format_history_duration(seconds_value: float) -> String:
+	var total := maxi(0, roundi(seconds_value))
+	return "%02d:%02d:%02d" % [total / 3600, (total % 3600) / 60, total % 60]
+
+func _format_history_timestamp(seconds_value: float) -> String:
+	var total := maxi(0, roundi(seconds_value))
+	var day := total / 86400 + 1
+	var within_day := total % 86400
+	return "день %d %02d:%02d:%02d" % [day, within_day / 3600, (within_day % 3600) / 60, within_day % 60]
+
+func _draw_flight_history_scene() -> void:
+	var route_details := view_mode == ViewMode.ROUTE_HISTORY
+	_draw_scene_background("СТАТИСТИКА ПОЛЁТОВ")
+	var records := _active_history_records()
+	var title := "ИСТОРИЯ ПОЛЁТОВ • ХРОНОЛОГИЧЕСКИЙ ПОРЯДОК"
+	if route_details and route_history_origin in range(host.world.airports.size()) and route_history_destination in range(host.world.airports.size()):
+		title = "%s → %s • ВСЕГО ПОЛЁТОВ: %d • РЕКОРД СВЕРХУ" % [host.world.airports[route_history_origin].name, host.world.airports[route_history_destination].name, records.size()]
+	var back_rect := get_history_back_rect()
+	host.draw_string(ThemeDB.fallback_font, Vector2(_history_left_margin(), 139), title, HORIZONTAL_ALIGNMENT_LEFT, maxf(100.0, back_rect.position.x - _history_left_margin() - 18.0), 17, AircraftArt.INK)
+	_draw_menu_button(get_history_back_rect(), "НАЗАД")
+	var list_rect := _history_list_rect()
+	host.draw_rect(list_rect, Color("d7d0ad"), true)
+	host.draw_rect(list_rect, AircraftArt.INK, false, 1.0)
+	if records.is_empty():
+		host.draw_string(ThemeDB.fallback_font, list_rect.position + Vector2(0, 42), "Завершённых полётов пока нет", HORIZONTAL_ALIGNMENT_CENTER, list_rect.size.x, 17, AircraftArt.INK)
+		_scene_prompt("Колесо / ↑↓: прокрутка • Enter: открыть рекорды маршрута • кнопка «Назад»: вернуться")
+		return
+	_clamp_history_selection(route_details)
+	var scroll := route_history_scroll if route_details else history_scroll
+	var selected := route_history_selected if route_details else history_selected
+	var end_index := mini(records.size(), scroll + _history_visible_rows())
+	for record_index in range(scroll, end_index):
+		var record: Dictionary = records[record_index]
+		var row_rect := Rect2(list_rect.position + Vector2(5, (record_index - scroll) * 64.0 + 4), Vector2(list_rect.size.x - 10, 56))
+		if record_index == selected:
+			host.draw_rect(row_rect, Color("c4ba91"), true)
+		var origin_name: String = host.world.airports[int(record.origin)].name
+		var destination_name: String = host.world.airports[int(record.destination)].name
+		var count: int = _history_route_count(int(record.origin), int(record.destination))
+		var count_text := " • всего полётов: %d • Enter: рекорды" % count if not route_details and count > 1 else ""
+		var rank_text := "%d. " % (record_index + 1) if route_details else ""
+		if route_details and record_index == 0:
+			rank_text += "РЕКОРД • "
+		host.draw_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 21), "%s%s → %s%s" % [rank_text, origin_name, destination_name, count_text], HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 15, AircraftArt.INK)
+		var details := "%.1f км • %s • %s → %s" % [float(record.distance_km), _format_history_duration(float(record.duration_seconds)), _format_history_timestamp(float(record.start_seconds)), _format_history_timestamp(float(record.end_seconds))]
+		host.draw_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 43), details, HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 13, Color("6f5b3e"))
+	if records.size() > _history_visible_rows():
+		var bar := Rect2(list_rect.end.x - 7, list_rect.position.y + 4, 3, list_rect.size.y - 8)
+		host.draw_rect(bar, Color("aa9c72"), true)
+		var thumb_height := maxf(22.0, bar.size.y * _history_visible_rows() / float(records.size()))
+		var thumb_y := bar.position.y + (bar.size.y - thumb_height) * scroll / float(maxi(1, records.size() - _history_visible_rows()))
+		host.draw_rect(Rect2(bar.position.x - 1, thumb_y, 5, thumb_height), AircraftArt.INK, true)
+	_scene_prompt("Колесо / ↑↓: прокрутка • Enter: открыть рекорды маршрута • кнопка «Назад»: вернуться")
 
 func _economy_button_rect(index: int) -> Rect2:
 	return Rect2(host.size.x * 0.48, 165.0 + index * 64.0, minf(520.0, host.size.x * 0.46), 48.0)
@@ -1162,7 +1391,7 @@ func _draw_economy_scene() -> void:
 	var titles = {ViewMode.MAIL:"ПОЧТА", ViewMode.SHOP:"МАГАЗИН", ViewMode.HOTEL:"ГОСТИНИЦА", ViewMode.FUEL:"ЗАПРАВКА", ViewMode.REPAIR:"РЕМОНТНЫЙ АНГАР"}
 	var title: String = titles.get(view_mode, "СЛУЖБА")
 	var floor_y = _draw_scene_background(title)
-	_draw_building(host.size.x * 0.23, floor_y, Vector2(host.size.x * 0.32, minf(340.0, floor_y - 190.0)), title, AircraftArt.PAPER)
+	_draw_building(host.size.x * 0.23, floor_y, Vector2(host.size.x * 0.32, minf(SERVICE_BUILDING_HEIGHT, floor_y - 190.0)), title, AircraftArt.PAPER)
 	host.draw_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.48, 120), "%s • %d монет" % [host.world.airports[host.flight.airport_index].name, host.economy.money], HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.46, 18, AircraftArt.INK)
 	match view_mode:
 		ViewMode.MAIL:
@@ -1190,5 +1419,5 @@ func _draw_economy_scene() -> void:
 			var full_cost: int = host.economy.repair_cost(missing, host.flight.airport_index)
 			host.draw_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.48, 148), "Точное состояние: %.1f/100 • %.1f мон./ед." % [host.flight.airframe_condition, host.economy.repair_price_per_point(host.flight.airport_index)], HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.46, 14, AircraftArt.INK)
 			_draw_menu_button(_economy_button_rect(0), "РЕМОНТ ДО 100 • %d монет" % full_cost)
-	_draw_menu_button(_economy_button_rect(5), "ВЫЙТИ В АЭРОПОРТ [ESC]")
-	_scene_prompt(scene_notice if not scene_notice.is_empty() else "Клик: действие • Esc: выйти")
+	_draw_menu_button(_economy_button_rect(5), "ВЫЙТИ В АЭРОПОРТ [ENTER]")
+	_scene_prompt(scene_notice if not scene_notice.is_empty() else "Клик: действие • Enter: выйти • Esc: меню")

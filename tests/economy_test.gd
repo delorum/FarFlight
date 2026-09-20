@@ -12,6 +12,7 @@ func _init() -> void:
 	assert(economy.food_airports.size() == 3)
 	assert(economy.hotel_airports.size() == 3)
 	assert(economy.repair_airports.size() == 3)
+	assert(economy.visited_airports == [0])
 	assert(economy.money == 160)
 	assert(is_equal_approx(economy.fuel_price_per_l(economy.fuel_airports[0]), 1.4))
 	assert(is_equal_approx(economy.fuel_price_per_l(economy.fuel_airports[1]), 2.0))
@@ -22,6 +23,17 @@ func _init() -> void:
 	assert(economy.hotel_rest_price(economy.hotel_airports[0]) == 7)
 	assert(economy.hotel_rest_price(economy.hotel_airports[1]) == 10)
 	assert(economy.hotel_rest_price(economy.hotel_airports[2]) == 13)
+	var price_memory = Economy.new(world)
+	var cheap_food_airport: int = price_memory.food_airports[0]
+	var regular_food_airport: int = price_memory.food_airports[1]
+	var expensive_food_airport: int = price_memory.food_airports[2]
+	price_memory.arrive_at_airport(cheap_food_airport, world)
+	price_memory.arrive_at_airport(regular_food_airport, world)
+	assert("еда (+)" in price_memory.services_at(cheap_food_airport))
+	assert("еда (++)" in price_memory.services_at(regular_food_airport))
+	assert("еда" in price_memory.services_at(expensive_food_airport) and "еда (+++)" not in price_memory.services_at(expensive_food_airport), "Unvisited airport prices must remain unknown")
+	price_memory.arrive_at_airport(expensive_food_airport, world)
+	assert("еда (+++)" in price_memory.services_at(expensive_food_airport))
 	var empty_airports := 0
 	for airport_index in world.airports.size():
 		if economy.optional_service_count(airport_index) == 0:
@@ -79,6 +91,10 @@ func _init() -> void:
 	var snapshot := economy.snapshot()
 	var restored = Economy.new()
 	assert(restored.restore(snapshot) and restored.snapshot() == snapshot)
+	var legacy_snapshot: Dictionary = snapshot.duplicate(true)
+	legacy_snapshot.erase("visited_airports")
+	var legacy_restored = Economy.new()
+	assert(legacy_restored.restore(legacy_snapshot, world) and legacy_restored.last_landed_airport in legacy_restored.visited_airports)
 	assert(is_equal_approx(restored.fuel_price_per_l(restored.fuel_airports[2]), 2.6))
 	var shopper = Economy.new(world)
 	var food_money_before: int = shopper.money

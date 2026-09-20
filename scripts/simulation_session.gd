@@ -3,6 +3,7 @@ extends RefCounted
 ## No drawing, input polling or scene objects; consumers handle returned events.
 const Flight = preload("res://scripts/flight_model.gd")
 const Economy = preload("res://scripts/economy.gd")
+const FlightHistory = preload("res://scripts/flight_history.gd")
 const TIME_SCALES := [1.0, 2.0, 4.0, 8.0, 16.0]
 const MAX_STEP := 1.0 / 30.0
 var clock_seconds := 12.0 * 3600.0
@@ -12,6 +13,7 @@ var trip_elapsed_seconds := 0.0
 var time_scale_index := 0
 var cabin_sleep_progress_seconds := 0.0
 var last_economy_flight_state := -1
+var flight_history := FlightHistory.new()
 
 static func storm_turning(flight) -> bool:
 	return flight.state == Flight.State.FLYING and flight.storm_intensity > 0.01 and absf(flight.storm_roll_bias_deg) > 0.01
@@ -48,6 +50,7 @@ func advance(real_delta: float, flight, economy, recorder, sleeping: bool) -> Di
 			flight._crash(economy.game_over_reason)
 		else:
 			flight.update(step) # Owns weather evolution as well as aircraft physics.
+		flight_history.update(flight, previous_state, previous_position, economy.elapsed_seconds, step)
 		if previous_state == Flight.State.FLYING:
 			trip_air_distance_km += previous_position.distance_to(flight.position_km)
 			trip_elapsed_seconds += step

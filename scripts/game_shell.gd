@@ -9,9 +9,12 @@ var game: Control
 var menu_root: Control
 var content: VBoxContainer
 var about_open := false
+var new_game_setup_open := false
 var menu_open := true
 var error_text := ""
 var save_path := SaveGame.PATH
+var new_game_seed_text := ""
+var new_game_seed_field: LineEdit
 
 func _ready() -> void:
 	Engine.max_fps = 60
@@ -98,16 +101,50 @@ func _rebuild_menu() -> void:
 		description.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		scroll.add_child(description)
 		_button("Назад", _close_about)
+	elif new_game_setup_open:
+		content.add_child(_label("НОВАЯ ИГРА", 22))
+		var seed_help := _label("Введите seed от 1 до 2147483647, чтобы воспроизвести тот же мир. Оставьте поле пустым для случайного seed.", 16)
+		seed_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		content.add_child(seed_help)
+		new_game_seed_field = LineEdit.new()
+		new_game_seed_field.name = "WorldSeed"
+		new_game_seed_field.placeholder_text = "Seed мира — пусто: случайный"
+		new_game_seed_field.text = new_game_seed_text
+		new_game_seed_field.max_length = 10
+		new_game_seed_field.custom_minimum_size.y = 48
+		new_game_seed_field.add_theme_font_size_override("font_size", 19)
+		new_game_seed_field.add_theme_color_override("font_color", INK)
+		new_game_seed_field.add_theme_color_override("font_placeholder_color", Color(0.32, 0.25, 0.18, 0.55))
+		new_game_seed_field.add_theme_color_override("caret_color", INK)
+		for state in ["normal", "focus", "read_only"]:
+			var field_style := StyleBoxFlat.new()
+			field_style.bg_color = Color(0.93, 0.89, 0.79, 0.66)
+			field_style.border_color = Color(0.40, 0.29, 0.18, 0.55 if state == "focus" else 0.28)
+			field_style.set_border_width_all(1)
+			field_style.content_margin_left = 12
+			field_style.content_margin_right = 12
+			new_game_seed_field.add_theme_stylebox_override(state, field_style)
+		new_game_seed_field.text_changed.connect(func(value: String): new_game_seed_text = value)
+		new_game_seed_field.text_submitted.connect(func(_value: String): _start_configured_new_game())
+		content.add_child(new_game_seed_field)
+		_button("Начать игру", _start_configured_new_game)
+		_button("Назад", _close_new_game_setup)
 	elif game != null:
-		content.add_child(_label("ПАУЗА", 14))
-		_button("Продолжить", _resume_game)
-		_button("Новая игра", _new_game)
-		_button("Сохранить и выйти", _save_and_exit)
+		var run_finished: bool = game.flight.state == game.FlightModelScript.State.CRASHED
+		content.add_child(_label("ИТОГИ ПРОХОЖДЕНИЯ" if run_finished else "ПАУЗА", 14))
+		_button(("Вернуться к итогам" if run_finished else "Продолжить") + " • seed %d" % game.world.seed_value, _resume_game)
+		_button("Статистика полётов", _open_pause_flight_history)
+		_button("Новая игра", _open_new_game_setup)
+		if run_finished:
+			_button("Выйти", _exit_game)
+		else:
+			_button("Сохранить и выйти", _save_and_exit)
 	else:
 		var slot := SaveGame.read_slot(save_path)
 		if not slot.is_empty():
-			_button("Продолжить", _continue_game)
-		_button("Новая игра", _new_game)
+			var saved_action: String = "Итоги" if SaveGame.is_finished_run(slot) else "Продолжить"
+			_button("%s • seed %d" % [saved_action, int(slot.world.seed)], _continue_game)
+		_button("Новая игра", _open_new_game_setup)
 		_button("Об игре", _open_about)
 		_button("Выход", _exit_game)
 		if SaveGame.slot_exists(save_path) and slot.is_empty():
@@ -118,10 +155,14 @@ func _rebuild_menu() -> void:
 		error_label.add_theme_color_override("font_color", Color("893f2f"))
 		content.add_child(error_label)
 	_layout_menu()
-	for child in content.get_children():
-		if child is Button and not child.disabled:
-			child.grab_focus()
-			break
+	if new_game_setup_open and new_game_seed_field != null:
+		new_game_seed_field.grab_focus()
+		new_game_seed_field.caret_column = new_game_seed_field.text.length()
+	else:
+		for child in content.get_children():
+			if child is Button and not child.disabled:
+				child.grab_focus()
+				break
 
 func _layout_menu() -> void:
 	if content == null:
@@ -132,22 +173,53 @@ func _layout_menu() -> void:
 	if scroll != null:
 		scroll.custom_minimum_size.y = clampf(size.y - 365.0,160.0,480.0)
 
-func _create_game() -> Control:
+func _create_game(requested_seed: int = 0) -> Control:
 	var instance: Control = GAME_SCENE.instantiate()
+	instance.requested_world_seed = requested_seed
 	add_child(instance)
 	move_child(instance, 0)
 	instance.set_process(false)
 	instance.set_process_input(false)
 	return instance
 
-func _new_game() -> void:
+func _open_new_game_setup() -> void:
+	new_game_setup_open = true
+	about_open = false
+	error_text = ""
+	new_game_seed_text = ""
+	_rebuild_menu()
+
+func _close_new_game_setup() -> void:
+	new_game_setup_open = false
+	error_text = ""
+	_rebuild_menu()
+
+func _start_configured_new_game() -> void:
+	if new_game_seed_field != null:
+		new_game_seed_text = new_game_seed_field.text
+	var text_value := new_game_seed_text.strip_edges()
+	var requested_seed := 0
+	if not text_value.is_empty():
+		if not text_value.is_valid_int():
+			error_text = "Seed должен быть целым числом."
+			_rebuild_menu()
+			return
+		requested_seed = int(text_value)
+		if requested_seed < 1 or requested_seed > 2147483647:
+			error_text = "Seed должен находиться в диапазоне от 1 до 2147483647."
+			_rebuild_menu()
+			return
+	_new_game(requested_seed)
+
+func _new_game(requested_seed: int = 0) -> void:
 	if game != null:
 		game.set_process(false)
 		game.set_process_input(false)
 		game.hide()
 		game.queue_free()
-	game = _create_game()
+	game = _create_game(requested_seed)
 	error_text = ""
+	new_game_setup_open = false
 	_resume_game()
 
 func _continue_game() -> void:
@@ -168,6 +240,7 @@ func _continue_game() -> void:
 func _pause_game() -> void:
 	if game == null:
 		return
+	game._prepare_return_from_pause_history()
 	menu_open = true
 	about_open = false
 	game.set_process(false)
@@ -189,6 +262,22 @@ func _pause_game() -> void:
 	menu_root.show()
 	_rebuild_menu()
 
+func _open_pause_flight_history() -> void:
+	if game == null:
+		return
+	game.open_flight_history_from_pause()
+	_resume_game()
+
+func _on_run_finished(finished_game: Control) -> void:
+	if finished_game != game:
+		return
+	var error := SaveGame.write_slot(game, save_path)
+	if error == OK:
+		error_text = ""
+	else:
+		var details := " (%s)" % SaveGame.last_validation_error if not SaveGame.last_validation_error.is_empty() else ""
+		error_text = "Итоги прохождения не сохранены: %s%s." % [error_string(error), details]
+
 func _resume_game() -> void:
 	if game == null:
 		return
@@ -206,7 +295,8 @@ func _save_and_exit() -> void:
 	if error == OK:
 		_exit_game()
 	else:
-		error_text = "Сохранение не записано: %s. Игра не закрыта." % error_string(error)
+		var details := " (%s)" % SaveGame.last_validation_error if not SaveGame.last_validation_error.is_empty() else ""
+		error_text = "Сохранение не записано: %s%s. Игра не закрыта." % [error_string(error), details]
 		_rebuild_menu()
 
 func _exit_game() -> void:
@@ -228,6 +318,7 @@ func _exit_game() -> void:
 
 func _open_about() -> void:
 	about_open = true
+	new_game_setup_open = false
 	error_text = ""
 	_rebuild_menu()
 
@@ -242,6 +333,8 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		if about_open:
 			_close_about()
+		elif new_game_setup_open:
+			_close_new_game_setup()
 		elif game != null:
 			if menu_open:
 				_resume_game()

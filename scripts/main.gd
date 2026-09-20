@@ -37,6 +37,8 @@ const INSTRUMENT_RADIUS = UILayout.INSTRUMENT_RADIUS
 const INSTRUMENT_GAP = UILayout.INSTRUMENT_GAP
 const THROTTLE_HOLD_DELAY := 0.32
 const THROTTLE_HOLD_RATE := 0.35
+const STEERING_TAP_DEGREES := 0.1
+const STEERING_FINE_RATE_DEG_S := 0.1
 const USE_STYLIZED_YOKE := true
 const MAX_MAP_ZOOM := 24.0
 const INITIAL_MAP_RADIUS_KM := 40.0
@@ -52,6 +54,7 @@ const ViewMode = preload("res://scripts/scene_modes.gd").ViewMode
 var world
 var flight
 var economy
+var requested_world_seed := 0
 # Compatibility facade for input, calculator and v3/v4 saves. State lives in
 # its owning module; these properties never keep a second copy.
 var receiver_frequencies := [305, 327]
@@ -196,6 +199,11 @@ var trajectory_last_position: Vector2:
 		recorder.trajectory_last_position = value
 var ils_airport_index := 1
 var simulation_paused := false
+var run_finish_save_attempted := false
+var pause_history_active := false
+var pause_history_return_view_mode := ViewMode.COCKPIT
+var pause_history_previous_simulation_paused := false
+var pause_history_return_state: Dictionary = {}
 var signal_check_timer := 0.0
 var receiver_signal_status: Array[Dictionary] = [{}, {}]
 var ils_signal_status: Dictionary = {}
@@ -211,6 +219,8 @@ var throttle_up_held := false
 var throttle_down_held := false
 var throttle_up_hold_time := 0.0
 var throttle_down_hold_time := 0.0
+var steering_left_held := false
+var steering_right_held := false
 var wind_overlay_index: int:
 	get:
 		return navigation_map.wind_overlay_index
@@ -379,7 +389,7 @@ func _ready() -> void:
 	add_child(weather_radar_cache)
 	_build_crash_overlay()
 	resized.connect(_on_viewport_resized)
-	regenerate_world()
+	regenerate_world(requested_world_seed)
 	set_process(true)
 	queue_redraw()
 
@@ -395,13 +405,14 @@ func _input(event: InputEvent) -> void:
 	# Simulation pause is global: it must remain available in the cockpit, the
 	# cabin, exterior views and every airport building.
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_SPACE:
-		simulation_paused = not simulation_paused
+		if not pause_history_active:
+			simulation_paused = not simulation_paused
 		get_viewport().set_input_as_handled()
 		queue_redraw()
 		return
 	if flight_calculator != null and flight_calculator.editing() and event is InputEventKey:
 		return
-	if flight != null and flight.state == FlightModelScript.State.CRASHED:
+	if flight != null and flight.state == FlightModelScript.State.CRASHED and view_mode not in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY]:
 		if event is InputEventKey and event.pressed and not event.echo:
 			if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
 				_show_crash_map()
@@ -425,6 +436,9 @@ func _input(event: InputEvent) -> void:
 		return
 	if view_mode != ViewMode.COCKPIT:
 		if event is InputEventKey and event.pressed and not event.echo:
+			if side_scenes.handle_history_key(event.keycode):
+				get_viewport().set_input_as_handled()
+				return
 			if view_mode == ViewMode.CABIN and cabin_terrain_zoom == 0 and event.keycode == KEY_DOWN and _near_cabin_ramp():
 				_enter_fuel_bay()
 				queue_redraw()
@@ -466,6 +480,33 @@ func _input(event: InputEvent) -> void:
 		_toggle_weather_radar()
 		get_viewport().set_input_as_handled()
 		return
+	if event is InputEventKey and event.keycode in [KEY_LEFT, KEY_RIGHT]:
+		if event.echo:
+			get_viewport().set_input_as_handled()
+			return
+		var steer_right: bool = event.keycode == KEY_RIGHT
+		if event.pressed:
+			if event.shift_pressed and not dragging_yoke:
+				if steer_right:
+					steering_right_held = true
+				else:
+					steering_left_held = true
+				flight.heading_deg = fposmod(flight.heading_deg + (STEERING_TAP_DEGREES if steer_right else -STEERING_TAP_DEGREES), 360.0)
+			else:
+				# Plain arrows are read as an immediate continuous yoke axis in
+				# _process(). They no longer wait behind the fine-steering timer.
+				if steer_right:
+					steering_right_held = false
+				else:
+					steering_left_held = false
+		else:
+			if steer_right:
+				steering_right_held = false
+			else:
+				steering_left_held = false
+		get_viewport().set_input_as_handled()
+		queue_redraw()
+		return
 	if event is InputEventKey and (event.keycode == KEY_W or event.keycode == KEY_S):
 		if event.echo:
 			get_viewport().set_input_as_handled()
@@ -501,8 +542,9 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			_queue_map_redraw()
 
-func regenerate_world() -> void:
-	world = FlightWorldScript.new()
+func regenerate_world(requested_seed: int = 0) -> void:
+	run_finish_save_attempted = false
+	world = FlightWorldScript.new(requested_seed)
 	flight = FlightModelScript.new(world)
 	economy = EconomyScript.new(world)
 	navigation_map.refresh_weather_briefing()
@@ -511,6 +553,7 @@ func regenerate_world() -> void:
 	map_center = Vector2(world.airports[flight.airport_index].position)
 	map_zoom = _initial_map_zoom(map_center)
 	_clamp_map_center()
+	flight_calculator.clear_line_links()
 	measurement_lines.clear()
 	pending_measure = null
 	radar_measurement_lines.clear()
@@ -522,6 +565,7 @@ func regenerate_world() -> void:
 	cabin_sleep_progress_seconds = 0.0
 	trip_air_distance_km = 0.0
 	trip_elapsed_seconds = 0.0
+	simulation.flight_history.reset()
 	_reset_flight_trajectory()
 	ils_airport_index = 0
 	ils_prediction_timer = 0.0
@@ -539,22 +583,27 @@ func _process(delta: float) -> void:
 		# or while the full-screen weather radar is open. Always leave those views
 		# for the navigation-map debrief instead of trapping the player behind a
 		# display whose controls are intentionally disabled after game over.
-		if view_mode != ViewMode.COCKPIT or large_weather_radar:
+		if view_mode not in [ViewMode.COCKPIT, ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY] or large_weather_radar:
 			_show_crash_map()
-		return
+		if not run_finish_save_attempted and get_parent().has_method("_on_run_finished"):
+			run_finish_save_attempted = true
+			get_parent()._on_run_finished(self)
+		if view_mode not in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY]:
+			return
 	if view_mode != ViewMode.COCKPIT:
 		_update_scene_walking(delta)
-	elif not flight_calculator.editing() and (absf(Input.get_axis("ui_left", "ui_right")) > 0.05 or absf(Input.get_axis("ui_up", "ui_down")) > 0.05 or throttle_up_held or throttle_down_held or dragging_yoke or dragging_throttle or dragging_map or dragging_measure_point):
+	elif not flight_calculator.editing() and (steering_left_held or steering_right_held or absf(Input.get_axis("ui_left", "ui_right")) > 0.05 or absf(Input.get_axis("ui_up", "ui_down")) > 0.05 or throttle_up_held or throttle_down_held or dragging_yoke or dragging_throttle):
 		# Also catches a control that was already held when Z was pressed.
 		_reset_time_scale_for_action()
 	if simulation_paused:
 		return
 	if time_scale_index != 0 and _storm_is_turning_aircraft():
 		_reset_time_scale()
-	var keyboard_yoke := Vector2(
-		Input.get_axis("ui_left", "ui_right"),
-		Input.get_axis("ui_up", "ui_down")
-	)
+	_update_held_steering(delta)
+	# Shift+arrow is a direct fine course adjustment and must not also feed the
+	# yoke axis. Plain arrows reach the yoke immediately through the input map.
+	var steering_axis := 0.0 if steering_left_held or steering_right_held else Input.get_axis("ui_left", "ui_right")
+	var keyboard_yoke := Vector2(steering_axis, Input.get_axis("ui_up", "ui_down"))
 	if flight_calculator != null and flight_calculator.editing():
 		keyboard_yoke = Vector2.ZERO
 	if view_mode == ViewMode.COCKPIT and not dragging_yoke:
@@ -687,7 +736,7 @@ func _update_crash_overlay() -> void:
 	if crash_overlay == null or flight == null:
 		return
 	var needs_death: bool = economy != null and not economy.game_over_reason.is_empty()
-	crash_overlay.visible = flight.state == FlightModelScript.State.CRASHED and (view_mode != ViewMode.COCKPIT or needs_death)
+	crash_overlay.visible = flight.state == FlightModelScript.State.CRASHED and view_mode not in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY] and (view_mode != ViewMode.COCKPIT or needs_death)
 	if not crash_overlay.visible:
 		return
 	var overlay_width := minf(760,size.x-40)
@@ -876,6 +925,44 @@ func _format_trajectory_time(seconds_value: float) -> String:
 func _set_view_mode(next_mode: int) -> void:
 	side_scenes._set_view_mode(next_mode)
 
+func open_flight_history_from_pause() -> void:
+	pause_history_active = true
+	pause_history_return_view_mode = view_mode
+	pause_history_previous_simulation_paused = simulation_paused
+	pause_history_return_state = {
+		"cabin_terrain_zoom": cabin_terrain_zoom,
+		"in_fuel_bay": in_fuel_bay,
+		"cabin_table_seated": cabin_table_seated,
+		"cabin_sleeping": cabin_sleeping,
+		"cabin_sleep_progress_seconds": cabin_sleep_progress_seconds,
+		"scene_notice": scene_notice,
+		"scene_player_x": scene_player_x,
+		"scene_player_facing": scene_player_facing,
+		"scene_walk_phase": scene_walk_phase,
+		"scene_is_walking": scene_is_walking,
+		"large_weather_radar": large_weather_radar,
+	}
+	simulation_paused = true
+	large_weather_radar = false
+	_set_view_mode(ViewMode.FLIGHT_HISTORY)
+
+func _prepare_return_from_pause_history() -> void:
+	if not pause_history_active:
+		return
+	pause_history_active = false
+	_set_view_mode(pause_history_return_view_mode)
+	simulation_paused = pause_history_previous_simulation_paused
+	for field in pause_history_return_state:
+		set(field, pause_history_return_state[field])
+	pause_history_return_state.clear()
+	_update_crash_overlay()
+	queue_redraw()
+
+func return_to_pause_menu_from_history() -> void:
+	_prepare_return_from_pause_history()
+	if get_parent().has_method("_pause_game"):
+		get_parent()._pause_game()
+
 func _aircraft_mirrored() -> bool:
 	return side_scenes._aircraft_mirrored()
 
@@ -1026,6 +1113,9 @@ func get_operations_runway_rect(reverse_direction: bool) -> Rect2:
 func get_operations_weather_rect() -> Rect2:
 	return side_scenes.get_operations_weather_rect()
 
+func get_operations_history_rect() -> Rect2:
+	return side_scenes.get_operations_history_rect()
+
 func get_building_exit_rect() -> Rect2:
 	return side_scenes.get_building_exit_rect()
 
@@ -1056,6 +1146,11 @@ func _update_held_throttle(delta: float) -> void:
 			flight.throttle = 0.0
 			flight.wheel_brakes_applied = true
 
+func _update_held_steering(delta: float) -> void:
+	var direction := float(int(steering_right_held) - int(steering_left_held))
+	if not is_zero_approx(direction):
+		flight.heading_deg = fposmod(flight.heading_deg + direction * STEERING_FINE_RATE_DEG_S * delta, 360.0)
+
 func _aircraft_is_on_ground() -> bool:
 	return flight.state == FlightModelScript.State.PARKED or flight.state == FlightModelScript.State.ROLLING or flight.state == FlightModelScript.State.LANDED
 
@@ -1078,12 +1173,20 @@ func _draw() -> void:
 			_draw_airport_scene()
 		ViewMode.OPERATIONS:
 			_draw_operations_scene()
+		ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY:
+			side_scenes._draw_flight_history_scene()
 		ViewMode.MAIL, ViewMode.SHOP, ViewMode.HOTEL, ViewMode.FUEL, ViewMode.REPAIR:
 			_draw_economy_scene()
 	if view_mode != ViewMode.COCKPIT:
 		_draw_economy_hud(self, false)
 		_draw_clock(Vector2(109, 172), 34.0, true)
 		_draw_time_controls(true)
+		_draw_side_scene_pause_indicator()
+
+func _draw_side_scene_pause_indicator() -> void:
+	if not simulation_paused:
+		return
+	draw_string(ThemeDB.fallback_font, Vector2(0, 44), "ПАУЗА", HORIZONTAL_ALIGNMENT_CENTER, size.x, 16, AircraftArt.INK)
 
 func _draw_economy_hud(canvas: CanvasItem, dark: bool) -> void:
 	if economy == null:
@@ -1296,7 +1399,7 @@ func _gui_input(event: InputEvent) -> void:
 		_handle_mouse_motion(event)
 
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
-	if flight.state == FlightModelScript.State.CRASHED and (view_mode != ViewMode.COCKPIT or not (map_rect().has_point(event.position) or get_trajectory_button_rect().has_point(event.position))):
+	if flight.state == FlightModelScript.State.CRASHED and view_mode not in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY] and (view_mode != ViewMode.COCKPIT or not (map_rect().has_point(event.position) or get_trajectory_button_rect().has_point(event.position))):
 		return
 	if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		if get_time_scale_button_rect(view_mode != ViewMode.COCKPIT).has_point(event.position):
@@ -1305,7 +1408,10 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		if get_time_reset_button_rect(view_mode != ViewMode.COCKPIT).has_point(event.position):
 			_reset_time_scale()
 			return
-	if event.pressed:
+	# Planning on the chart does not affect the aircraft. Panning, zooming and
+	# editing measurement lines may therefore continue at accelerated time.
+	var map_interaction := view_mode == ViewMode.COCKPIT and map_rect().has_point(event.position)
+	if event.pressed and not map_interaction:
 		_reset_time_scale_for_action()
 	if event.button_index == MOUSE_BUTTON_LEFT and _fuel_slider_is_active():
 		var slider_origin: Vector2 = _active_fuel_slider_origin()
@@ -1333,6 +1439,8 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			if get_building_exit_rect().has_point(event.position):
 				_leave_current_scene()
+			elif get_operations_history_rect().has_point(event.position):
+				_set_view_mode(ViewMode.FLIGHT_HISTORY)
 			elif get_operations_weather_rect().has_point(event.position):
 				_refresh_weather_briefing()
 			elif get_operations_runway_rect(false).has_point(event.position):
@@ -1340,6 +1448,10 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 			elif get_operations_runway_rect(true).has_point(event.position):
 				_pay_and_prepare(true)
 			queue_redraw()
+		return
+	if view_mode in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY]:
+		if event is InputEventMouseButton:
+			side_scenes.handle_history_mouse(event)
 		return
 	if view_mode in [ViewMode.MAIL, ViewMode.SHOP, ViewMode.HOTEL, ViewMode.FUEL, ViewMode.REPAIR]:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
@@ -1398,16 +1510,19 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 			elif get_trajectory_button_rect().has_point(event.position):
 				_toggle_final_trajectory()
 			elif mrect.has_point(event.position):
-				map_press_position = event.position
-				last_mouse = event.position
-				if pending_measure == null:
-					dragged_measure_connections = _find_measure_connections(event.position)
+				if flight_calculator.awaiting_line_binding():
+					navigation_map.bind_calculator_to_line_at(event.position)
 				else:
-					dragged_measure_connections.clear()
-				if dragged_measure_connections.is_empty():
-					map_drag_candidate = true
-				else:
-					point_drag_candidate = true
+					map_press_position = event.position
+					last_mouse = event.position
+					if pending_measure == null:
+						dragged_measure_connections = _find_measure_connections(event.position)
+					else:
+						dragged_measure_connections.clear()
+					if dragged_measure_connections.is_empty():
+						map_drag_candidate = true
+					else:
+						point_drag_candidate = true
 		else:
 			if dragging_measure_point:
 				_snap_dragged_measure_point_to_endpoint(event.position)
@@ -1442,14 +1557,13 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 		return
 	var next_hovered_airport := _airport_hover_index(event.position) if not large_weather_radar else -1
 	var next_hovered_wind := _wind_arrow_hovered(event.position)
-	var next_hovered_storm := navigation_map.weather_briefing_storm_at(event.position)
-	if next_hovered_airport != hovered_airport_index or next_hovered_wind != hovered_wind_arrow or next_hovered_storm != hovered_weather_storm_index:
+	# Hide the fixed annotation while panning: the chart moves underneath it.
+	# It will be placed again on the next ordinary pointer motion.
+	var next_hovered_storm := navigation_map.weather_briefing_storm_at(event.position) if not map_drag_candidate and not dragging_map else -1
+	var storm_hover_changed := navigation_map.update_weather_storm_hover(next_hovered_storm, event.position)
+	if next_hovered_airport != hovered_airport_index or next_hovered_wind != hovered_wind_arrow or storm_hover_changed:
 		hovered_airport_index = next_hovered_airport
 		hovered_wind_arrow = next_hovered_wind
-		hovered_weather_storm_index = next_hovered_storm
-		_queue_map_redraw()
-	elif next_hovered_storm >= 0:
-		# The storm-motion annotation follows the pointer within the echo.
 		_queue_map_redraw()
 	if point_drag_candidate and not dragging_measure_point and event.position.distance_to(map_press_position) >= 4.0:
 		dragging_measure_point = true

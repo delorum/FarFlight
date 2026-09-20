@@ -50,21 +50,28 @@ func _run() -> void:
 	scene.map_zoom = 8.0
 	var storm_screen: Vector2 = scene.world_to_screen(scene.navigation_map.weather_briefing_storms[0].center)
 	check(scene.navigation_map.weather_briefing_storm_at(storm_screen) == 0, "Hovering a mapped storm must find its briefing entry")
+	check(scene.navigation_map.update_weather_storm_hover(0, storm_screen), "Entering a mapped storm must create its motion annotation")
+	var fixed_storm_anchor: Vector2 = scene.navigation_map.hovered_weather_storm_anchor
+	check(not scene.navigation_map.update_weather_storm_hover(0, storm_screen + Vector2(12, 7)) and scene.navigation_map.hovered_weather_storm_anchor == fixed_storm_anchor, "Moving inside one storm must not move or redraw its annotation")
+	check(scene.navigation_map.update_weather_storm_hover(-1, Vector2.ZERO) and scene.navigation_map.hovered_weather_storm_anchor == Vector2.INF, "Leaving a mapped storm must clear its fixed annotation")
 	var motion_text: String = scene.navigation_map.weather_briefing_motion_text(scene.navigation_map.weather_briefing_storms[0])
 	check(motion_text.begins_with("≈") and motion_text.contains("° • ≈") and motion_text.ends_with(" км/ч"), "Mapped storm hover must format an approximate motion label beside its arrow")
 	scene.navigation_map.toggle_weather_briefing()
 	check(scene.navigation_map.weather_briefing_storm_at(storm_screen) == -1, "Hidden map storms must not retain hover interaction")
 	scene.navigation_map.toggle_weather_briefing()
 	var airport: Dictionary = scene.world.airports[0]
-	var capture_triangle: PackedVector2Array = scene.navigation_map.ils_capture_triangle(airport, 1.0)
+	var capture_boundary: Dictionary = scene.navigation_map.ils_capture_boundary(airport, 1.0)
+	var capture_arc: PackedVector2Array = capture_boundary.arc
 	var capture_forward: Vector2 = scene.world.heading_vector(airport.heading)
-	var capture_far_center := (capture_triangle[1] + capture_triangle[2]) * 0.5
 	var expected_capture_apex: Vector2 = Vector2(airport.position) + capture_forward * scene.FlightWorldScript.RUNWAY_LENGTH_KM * 0.5
-	check(capture_triangle[0].is_equal_approx(expected_capture_apex), "ILS capture cone must begin at the far runway threshold used by signal calculations")
-	check(is_equal_approx(Vector2(airport.position).distance_to(capture_far_center), scene.FlightWorldScript.ILS_RANGE_KM), "ILS capture crossbar must be centred 15 km from the airport beacon")
-	check(absf((capture_triangle[2] - capture_triangle[1]).dot(capture_forward)) < 0.0001, "ILS capture crossbar must be perpendicular to the glide path")
-	var expected_half_width: float = capture_triangle[0].distance_to(capture_far_center) * tan(deg_to_rad(scene.FlightWorldScript.ILS_HALF_CONE_DEG))
-	check(is_equal_approx(capture_triangle[1].distance_to(capture_far_center), expected_half_width), "ILS capture sides must use the actual localizer half-cone angle")
+	check(Vector2(capture_boundary.apex).is_equal_approx(expected_capture_apex), "ILS capture cone must begin at the far runway threshold used by signal calculations")
+	check(capture_arc.size() == scene.navigation_map.ILS_CAPTURE_ARC_SEGMENTS + 1, "ILS range arc must use a small fixed segment budget")
+	for arc_point in capture_arc:
+		check(is_equal_approx(Vector2(airport.position).distance_to(arc_point), scene.FlightWorldScript.ILS_RANGE_KM), "Every point of the ILS range arc must be exactly 15 km from the airport beacon")
+	var approach_axis := -capture_forward
+	var left_angle := absf(rad_to_deg(approach_axis.angle_to(capture_arc[0] - expected_capture_apex)))
+	var right_angle := absf(rad_to_deg(approach_axis.angle_to(capture_arc[-1] - expected_capture_apex)))
+	check(is_equal_approx(left_angle, scene.FlightWorldScript.ILS_HALF_CONE_DEG) and is_equal_approx(right_angle, scene.FlightWorldScript.ILS_HALF_CONE_DEG), "ILS arc endpoints must meet the actual localizer cone sides")
 	scene.map_zoom = 4.0
 	scene.map_center = Vector2(45,55)
 	scene.measurement_lines.append({"a":Vector2(20,30),"b":Vector2(40,60),"max_height_m":500.0})
