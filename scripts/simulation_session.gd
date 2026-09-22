@@ -6,7 +6,6 @@ const Economy = preload("res://scripts/economy.gd")
 const FlightHistory = preload("res://scripts/flight_history.gd")
 const TIME_SCALES := [1.0, 2.0, 4.0, 8.0, 16.0]
 const MAX_STEP := 1.0 / 30.0
-var clock_seconds := 12.0 * 3600.0
 var status_timer := 0.0
 var trip_air_distance_km := 0.0
 var trip_elapsed_seconds := 0.0
@@ -18,8 +17,10 @@ var flight_history := FlightHistory.new()
 static func storm_turning(flight) -> bool:
 	return flight.state == Flight.State.FLYING and flight.storm_intensity > 0.01 and absf(flight.storm_roll_bias_deg) > 0.01
 
+static func time_of_day(elapsed_seconds: float) -> float:
+	return fposmod(elapsed_seconds, 86400.0)
+
 func advance_clocks(seconds: float, economy, sleeping: bool) -> void:
-	clock_seconds = fmod(clock_seconds + seconds, 86400.0)
 	status_timer += seconds
 	economy.advance_time(seconds, sleeping)
 

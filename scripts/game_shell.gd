@@ -3,12 +3,13 @@ extends Control
 const SaveGame = preload("res://scripts/save_game.gd")
 const GAME_SCENE = preload("res://scenes/main.tscn")
 const INK := Color("513e2c")
-const ABOUT := "Вы — почтальон-пилот. Между затерянными аэродромами почтовая авиация связывает людей: посылки, письма и вести издалека должны добраться до адресата. Выбирайте заказы на почте, загружайте самолёт и старайтесь уложиться в срочный срок — такая доставка оплачивается вдвое дороже.\n\nНо здесь небо почти никогда не бывает ясным. Уже в ста метрах над землёй начинается сплошная облачность. Дальше — полёт по приборам: курс, высота, скорость, сигналы радиомаяков и ваши пометки на карте. Положение самолёта на ней не отмечено — его предстоит определить самому.\n\nУчитывайте ветер, обходите грозы и планируйте остановки: топливо, еда, гостиницы и ремонтные ангары есть не на каждом аэродроме. Канистры и грузы занимают место, пилоту нужно есть и отдыхать, а самолёт постепенно изнашивается — особенно в грозах и при превышении безопасной скорости. Летайте между аэродромами, доставляйте почту и зарабатывайте деньги на новые рейсы."
+const ABOUT := "Вы — почтальон-пилот. Между затерянными аэродромами почтовая авиация связывает людей: посылки, письма и вести издалека должны добраться до адресата. Выбирайте заказы на почте, загружайте самолёт и составляйте выгодные маршруты для нескольких доставок. Дальние заказы оплачиваются лучше.\n\nНо здесь небо почти никогда не бывает ясным. Уже в ста метрах над землёй начинается сплошная облачность. Дальше — полёт по приборам: курс, высота, скорость, сигналы радиомаяков и ваши пометки на карте. Положение самолёта на ней не отмечено — его предстоит определить самому.\n\nУчитывайте ветер, обходите грозы и планируйте остановки: топливо, еда, гостиницы и ремонтные ангары есть не на каждом аэродроме. Канистры и грузы занимают место, пилоту нужно есть и отдыхать, а самолёт постепенно изнашивается — особенно в грозах и при превышении безопасной скорости. Летайте между аэродромами, доставляйте почту и зарабатывайте деньги на новые рейсы."
 
 var game: Control
 var menu_root: Control
 var content: VBoxContainer
 var about_open := false
+var authors_open := false
 var new_game_setup_open := false
 var menu_open := true
 var error_text := ""
@@ -77,6 +78,16 @@ func _button(text: String, action: Callable, disabled := false) -> Button:
 	content.add_child(button)
 	return button
 
+func _link(text: String, url: String) -> LinkButton:
+	var link := LinkButton.new()
+	link.text = text
+	link.uri = url
+	link.add_theme_color_override("font_color", INK)
+	link.add_theme_color_override("font_hover_color", Color("8a552f"))
+	link.add_theme_font_size_override("font_size", 20)
+	content.add_child(link)
+	return link
+
 func _rebuild_menu() -> void:
 	if content != null:
 		content.hide()
@@ -101,6 +112,10 @@ func _rebuild_menu() -> void:
 		description.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		scroll.add_child(description)
 		_button("Назад", _close_about)
+	elif authors_open:
+		content.add_child(_label("Авторы", 22))
+		_link("github.com/delorum", "https://github.com/delorum")
+		_button("Назад", _close_authors)
 	elif new_game_setup_open:
 		content.add_child(_label("НОВАЯ ИГРА", 22))
 		var seed_help := _label("Введите seed от 1 до 2147483647, чтобы воспроизвести тот же мир. Оставьте поле пустым для случайного seed.", 16)
@@ -146,6 +161,7 @@ func _rebuild_menu() -> void:
 			_button("%s • seed %d" % [saved_action, int(slot.world.seed)], _continue_game)
 		_button("Новая игра", _open_new_game_setup)
 		_button("Об игре", _open_about)
+		_button("Авторы", _open_authors)
 		_button("Выход", _exit_game)
 		if SaveGame.slot_exists(save_path) and slot.is_empty():
 			error_text = "Сохранение повреждено или несовместимо с этой версией."
@@ -185,6 +201,7 @@ func _create_game(requested_seed: int = 0) -> Control:
 func _open_new_game_setup() -> void:
 	new_game_setup_open = true
 	about_open = false
+	authors_open = false
 	error_text = ""
 	new_game_seed_text = ""
 	_rebuild_menu()
@@ -243,6 +260,7 @@ func _pause_game() -> void:
 	game._prepare_return_from_pause_history()
 	menu_open = true
 	about_open = false
+	authors_open = false
 	game.set_process(false)
 	game.set_process_input(false)
 	game.hide()
@@ -312,18 +330,31 @@ func _exit_game() -> void:
 		game = null
 	menu_open = true
 	about_open = false
+	authors_open = false
 	error_text = "Можно закрыть вкладку. Сохранения хранятся в этом браузере."
 	menu_root.show()
 	_rebuild_menu()
 
 func _open_about() -> void:
 	about_open = true
+	authors_open = false
 	new_game_setup_open = false
 	error_text = ""
 	_rebuild_menu()
 
 func _close_about() -> void:
 	about_open = false
+	_rebuild_menu()
+
+func _open_authors() -> void:
+	authors_open = true
+	about_open = false
+	new_game_setup_open = false
+	error_text = ""
+	_rebuild_menu()
+
+func _close_authors() -> void:
+	authors_open = false
 	_rebuild_menu()
 
 func _input(event: InputEvent) -> void:
@@ -333,6 +364,8 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		if about_open:
 			_close_about()
+		elif authors_open:
+			_close_authors()
 		elif new_game_setup_open:
 			_close_new_game_setup()
 		elif game != null:

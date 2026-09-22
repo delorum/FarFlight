@@ -81,8 +81,12 @@ func _flight_message_color() -> Color:
 
 func _draw_radio_altimeter(center: Vector2) -> void:
 	var height_m: float = host.flight.radio_height_m()
-	var label = "РВ %.0f м" % height_m if height_m >= 0.0 else "РВ —"
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(-INSTRUMENT_RADIUS, INSTRUMENT_RADIUS + 34), label, HORIZONTAL_ALIGNMENT_CENTER, INSTRUMENT_RADIUS * 2.0, 11, Color("73d6d0"))
+	# Truncate the displayed reading so 99.9 m cannot appear as a red "100 м".
+	var label = "РВ %d м" % floori(height_m) if height_m >= 0.0 else "РВ —"
+	host.draw_string(ThemeDB.fallback_font, center + Vector2(-INSTRUMENT_RADIUS, INSTRUMENT_RADIUS + 34), label, HORIZONTAL_ALIGNMENT_CENTER, INSTRUMENT_RADIUS * 2.0, 11, radio_altimeter_text_color(height_m))
+
+static func radio_altimeter_text_color(height_m: float) -> Color:
+	return Color("ef645e") if height_m >= 0.0 and height_m < 100.0 else Color("73d6d0")
 
 func _draw_unpowered_instruments(gauge_y: float) -> void:
 	# Pitot/static instruments and the independent clock remain available.

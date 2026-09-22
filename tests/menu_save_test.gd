@@ -42,10 +42,15 @@ func _run() -> void:
 	root.add_child(shell)
 	await process_frame
 	check(shell.menu_open and shell.game == null, "Startup must show title menu without running a flight")
-	check(button_texts(shell) == ["Новая игра", "Об игре", "Выход"], "Startup without a save must hide Continue and keep the requested order")
+	check(button_texts(shell) == ["Новая игра", "Об игре", "Авторы", "Выход"], "Startup without a save must hide Continue and keep the requested order")
 	shell._open_about()
 	check(shell.about_open, "About page must open")
 	shell._close_about()
+	shell._open_authors()
+	check(shell.authors_open, "Authors page must open")
+	var author_links: Array = shell.content.get_children().filter(func(child): return child is LinkButton)
+	check(author_links.size() == 1 and author_links[0].text == "github.com/delorum" and author_links[0].uri == "https://github.com/delorum", "Authors page must expose the requested GitHub link")
+	shell._close_authors()
 	shell._open_new_game_setup()
 	check(shell.new_game_setup_open and shell.new_game_seed_field != null, "New Game must open seed configuration before replacing the current session")
 	shell.new_game_seed_field.text = "not-a-seed"
@@ -74,7 +79,7 @@ func _run() -> void:
 	game.world.refresh_weather()
 	game.world.refresh_weather()
 	game.world.weather_time_seconds = 123.45
-	game.clock_seconds = 43777.0
+	game.economy.elapsed_seconds = 43777.0
 	game.time_scale_index = 3
 	game.cabin_sleeping = true
 	game.cabin_sleep_progress_seconds = 777.0
@@ -147,6 +152,7 @@ func _run() -> void:
 	check(saved_error == OK, "Save file must be written atomically: %s" % error_string(saved_error))
 	var data := Save.read_slot(slot)
 	check(not data.is_empty(), "Written save must be readable")
+	check(not data.ui.has("clock_seconds"), "New saves must not duplicate the economic clock in UI state")
 	if data.is_empty():
 		quit(1)
 		return
@@ -165,6 +171,9 @@ func _run() -> void:
 	check(loaded.view_mode == game.ViewMode.CABIN and loaded.cabin_terrain_zoom == 2, "Side scene and zoom must survive loading")
 	check(is_equal_approx(loaded.scene_player_x,game.scene_player_x), "Cabin character position must survive loading")
 	check(loaded.clock_seconds == clock_before and loaded.receiver_frequencies == [333,377], "Time and radio tuning must survive loading")
+	var noon_offset_save := data.duplicate(true)
+	noon_offset_save.ui.clock_seconds = fposmod(clock_before + 43200.0, 86400.0)
+	check(Save.restore(loaded, noon_offset_save) and is_equal_approx(loaded.clock_seconds, clock_before), "An older noon-offset save must display the same time as its flight history")
 	check(loaded.time_scale_index == 3 and loaded.cabin_sleeping and loaded.cabin_sleep_progress_seconds == 777.0, "Time scale and continuous bed rest must survive loading")
 	check(loaded.economy.money == 347 and loaded.economy.hunger == 4 and loaded.economy.inventory[2].type == "food", "Money, needs and cargo must survive loading")
 	check(loaded.economy.visited_airports == game.economy.visited_airports, "Visited airports and learned price rankings must survive loading")
@@ -261,7 +270,7 @@ func _run() -> void:
 	var second_shell = load("res://scenes/game_shell.tscn").instantiate()
 	second_shell.save_path = slot
 	root.add_child(second_shell)
-	check(button_texts(second_shell) == ["Продолжить • seed 424242", "Новая игра", "Об игре", "Выход"], "Startup with a save must show its world seed on Continue")
+	check(button_texts(second_shell) == ["Продолжить • seed 424242", "Новая игра", "Об игре", "Авторы", "Выход"], "Startup with a save must show its world seed on Continue")
 	second_shell._continue_game()
 	check(second_shell.game != null and not second_shell.menu_open, "Startup Continue must load the slot")
 	second_shell.game.flight._crash("Проверка завершённого прохождения")
@@ -276,7 +285,7 @@ func _run() -> void:
 	var finished_shell = load("res://scenes/game_shell.tscn").instantiate()
 	finished_shell.save_path = slot
 	root.add_child(finished_shell)
-	check(button_texts(finished_shell) == ["Итоги • seed 424242", "Новая игра", "Об игре", "Выход"], "Startup must identify a finished run as Results instead of Continue")
+	check(button_texts(finished_shell) == ["Итоги • seed 424242", "Новая игра", "Об игре", "Авторы", "Выход"], "Startup must identify a finished run as Results instead of Continue")
 	finished_shell._continue_game()
 	check(finished_shell.game.flight.state == finished_shell.game.FlightModelScript.State.CRASHED, "Opening saved results must remain in the terminal crash state")
 	for path in [slot, slot + ".tmp", corrupt_path]:

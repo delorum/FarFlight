@@ -1,6 +1,7 @@
 extends SceneTree
 
 const Calculator = preload("res://scripts/flight_calculator.gd")
+const FlightPlanSolver = preload("res://scripts/flight_plan_solver.gd")
 const World = preload("res://scripts/world.gd")
 const Flight = preload("res://scripts/flight_model.gd")
 
@@ -24,6 +25,11 @@ func _run() -> void:
 	assert(Flight.ECONOMY_ALTITUDE_MIN_M < 425.0 and Flight.ECONOMY_ALTITUDE_MAX_M > 425.0)
 	assert(ThemeDB.fallback_font.get_string_size("40.0/40 л • запас 999 км", HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x <= 180.0, "Combined fuel and range caption must fit its extended text box")
 	var parameters := {"distance": 50.0, "time": 10.0, "speed": 150.0, "vertical": -2.0, "altitude": 500.0}
+	var complete_plan: Dictionary = parameters.duplicate(true)
+	complete_plan.merge({"track": 0.0, "heading": 0.0, "wind_from": 0.0, "wind_speed": 0.0})
+	var untouched_plan: Dictionary = complete_plan.duplicate(true)
+	var fixed_plan := FlightPlanSolver.solve(complete_plan, 3000.0, false, true, false)
+	assert(fixed_plan.valid and is_equal_approx(fixed_plan.values.distance, 50.0) and complete_plan == untouched_plan, "The pure planner must derive airspeed without mutating its input or route length")
 	var path := Calculator.calculate(parameters, "distance", 3000)
 	assert(path.valid and is_equal_approx(path.values.time, 20))
 	assert(is_equal_approx(path.values.altitude, 600))
@@ -217,6 +223,22 @@ func _run() -> void:
 	var b := Vector2(110, 100)
 	scene.measurement_lines.clear()
 	scene.measurement_lines.append({"a": a, "b": b, "max_height_m": 0.0})
+	var line_midpoint: Vector2 = scene.world_to_screen((a + b) * 0.5)
+	var hover_text: String = scene.navigation_map.measurement_line_description_at(line_midpoint)
+	assert(hover_text.contains("20.0 км") and hover_text.contains("мин") and hover_text.contains("090° / 270°") and hover_text.contains("0 м"), "Hovering a line must repeat its distance, time, bearings and terrain height")
+	assert(scene.navigation_map.measurement_line_description_at(line_midpoint + Vector2(0, 24)).is_empty(), "The map footer must not describe a line after the pointer leaves it")
+	var line_motion := InputEventMouseMotion.new()
+	line_motion.position = line_midpoint
+	scene._handle_mouse_motion(line_motion)
+	assert(scene.navigation_map.hovered_measurement_line_index == 0, "Moving onto a line must request its hover footer")
+	line_motion.position += Vector2(0, 24)
+	scene._handle_mouse_motion(line_motion)
+	assert(scene.navigation_map.hovered_measurement_line_index == -1, "Moving off a line must clear its hover footer")
+	var short_midpoint: Vector2 = scene.map_rect().get_center()
+	var short_text_size := ThemeDB.fallback_font.get_string_size(hover_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13)
+	var vertical_label: Vector2 = scene.navigation_map._horizontal_measurement_label_baseline(short_midpoint, Vector2(0, 12), short_text_size, scene.map_rect())
+	var horizontal_label: Vector2 = scene.navigation_map._horizontal_measurement_label_baseline(short_midpoint, Vector2(12, 0), short_text_size, scene.map_rect())
+	assert(vertical_label.x > short_midpoint.x and horizontal_label.y < short_midpoint.y, "Short-line labels must sit right of steep lines and above flat lines")
 	scene.pending_measure = null
 	var selection := InputEventMouseButton.new()
 	selection.button_index = MOUSE_BUTTON_LEFT
@@ -258,6 +280,7 @@ func _run() -> void:
 	assert(is_equal_approx(widget.values.heading, 90.0))
 	widget._set_value("wind_speed", 0.0)
 	widget._set_value("time", 10.0)
+	assert(widget.valid and is_equal_approx(widget.values.speed, 120.0) and is_equal_approx(widget.values.distance, 20.0), "Changing time on a linked route must derive airspeed without moving the line")
 	var distance_before_current_speed: float = widget.values.distance
 	var linked_line_before_current_speed: Dictionary = scene.measurement_lines[0].duplicate(true)
 	scene.flight.speed_kmh = 0.0

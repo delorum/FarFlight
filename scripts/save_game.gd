@@ -39,7 +39,7 @@ static func slot_exists(path: String = PATH) -> bool:
 const UI_FIELDS := [
 	"receiver_frequencies", "map_zoom", "map_center", "measurement_lines", "pending_measure",
 	"radar_measurement_lines", "radar_pending_measure", "radar_range_index", "large_weather_radar",
-	"clock_seconds", "status_timer", "trip_air_distance_km", "trip_elapsed_seconds",
+	"status_timer", "trip_air_distance_km", "trip_elapsed_seconds",
 	"flight_trajectory", "trajectory_finished", "trajectory_recording_started",
 	"trajectory_elapsed_seconds", "trajectory_distance_km", "trajectory_last_position",
 	"ils_airport_index", "simulation_paused", "wind_overlay_index", "view_mode",
@@ -298,6 +298,8 @@ static func restore(game, data: Dictionary) -> bool:
 			game.set(field, float(data.ui[field]))
 		else:
 			game.set(field, data.ui[field])
+	# A legacy ui.clock_seconds field is intentionally ignored. The displayed
+	# clock now derives solely from economy.elapsed_seconds, as does the journal.
 	if not data.has("flight_history") and new_flight.state in [game.FlightModelScript.State.FLYING, game.FlightModelScript.State.ROLLING] and game.trajectory_recording_started and not game.trajectory_finished:
 		# A pre-history save may already be airborne. Recover its current route
 		# from the recorded trajectory so that the first landing after updating is

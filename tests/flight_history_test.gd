@@ -60,7 +60,11 @@ func _run() -> void:
 	root.add_child(scene)
 	await process_frame
 	scene.set_process(false)
+	check(scene.side_scenes._format_history_timestamp(0.0) == "день 1 00:00:00", "The first history timestamp must match the initial midnight clock")
+	check(scene.side_scenes._format_history_timestamp(86399.9) == "день 1 23:59:59", "History must not roll over before the visible clock")
+	check(scene.side_scenes._format_history_timestamp(86400.0) == "день 2 00:00:00", "History day rollover must match the clock's day count")
 	scene.simulation.flight_history.records.assign(history.records.duplicate(true))
+	scene.simulation.flight_history.records.append({"origin": 1, "destination": 2, "distance_km": 31.0, "duration_seconds": 300.0, "start_seconds": 900.0, "end_seconds": 1200.0})
 	scene._set_view_mode(scene.ViewMode.OPERATIONS)
 	var click := InputEventMouseButton.new()
 	click.button_index = MOUSE_BUTTON_LEFT
@@ -68,6 +72,7 @@ func _run() -> void:
 	click.position = scene.get_operations_history_rect().get_center()
 	scene._handle_mouse_button(click)
 	check(scene.view_mode == scene.ViewMode.FLIGHT_HISTORY, "Every flight service must open the chronological history")
+	check(scene.side_scenes._history_record_at(0).end_seconds == 1200.0 and scene.side_scenes._history_record_at(1).end_seconds == 542.0, "The general journal must display the most recently completed flight first without reversing storage")
 	var history_list_rect: Rect2 = scene.side_scenes._history_list_rect()
 	var history_back_rect: Rect2 = scene.side_scenes.get_history_back_rect()
 	var clock_controls_right: float = scene.get_time_reset_button_rect(true).end.x
@@ -76,7 +81,10 @@ func _run() -> void:
 	check(is_equal_approx(scene.size.x - history_list_rect.end.x, 40.0), "Flight history must use the free width up to the normal right scene margin")
 	check(history_back_rect.position.y >= 108.0 and history_list_rect.position.y > history_back_rect.end.y, "History controls and list must remain below the top status indicators")
 	scene._interact_in_scene()
-	check(scene.view_mode == scene.ViewMode.ROUTE_HISTORY and scene.side_scenes._active_history_records()[0].duration_seconds == 42.0, "Enter on a repeated route must open its record-sorted detail screen")
+	check(scene.view_mode == scene.ViewMode.FLIGHT_HISTORY, "The newest one-off route must not open another route's records")
+	scene.side_scenes.history_selected = 1
+	scene._interact_in_scene()
+	check(scene.view_mode == scene.ViewMode.ROUTE_HISTORY and scene.side_scenes._active_history_records()[0].duration_seconds == 42.0, "Enter on an older repeated route must open its own record-sorted detail screen")
 	check(SaveGame.capture(scene).ui.view_mode == scene.ViewMode.OPERATIONS, "Saving from a transient history screen must resume in flight service")
 	click.position = scene.side_scenes.get_history_back_rect().get_center()
 	scene._handle_mouse_button(click)

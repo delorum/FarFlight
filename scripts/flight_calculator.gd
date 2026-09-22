@@ -1,4 +1,5 @@
 extends PanelContainer
+const FlightPlanSolver = preload("res://scripts/flight_plan_solver.gd")
 
 const MAP_PAPER := Color("d7d0ad")
 const HOVER_PAPER := Color("cec6a2")
@@ -381,7 +382,7 @@ func _field_input(event: InputEvent, key: String, step_value: float) -> void:
 func _set_value(key: String, number: float) -> void:
 	_change_value(key, number)
 
-func _change_value(key: String, number: float, editing_key: String = "", preserve: String = "") -> void:
+func _change_value(key: String, number: float, editing_key: String = "") -> void:
 	if key == "distance" and number < MIN_DISTANCE_KM:
 		# Never let a transient zero collapse a plan or a linked map vector. Keep
 		# the previous distance and show the rejected edit as an invalid state.
@@ -395,19 +396,8 @@ func _change_value(key: String, number: float, editing_key: String = "", preserv
 	if key in ["track", "heading"]:
 		heading_based = key == "heading"
 	_select_constraints(key)
-	if preserve in ["distance", "time", "altitude"]:
-		# Sampling a live instrument answers a question about the existing plan.
-		# In particular, "current speed" must calculate the duration of the
-		# current route rather than collapse its distance (and linked vector) when
-		# the aircraft is stopped or the previously edited constraint was time.
-		last_changed = preserve
-		derive_speed = false
-	if bound_line_id >= 0:
-		# A linked vector makes distance and duration geometric constraints. Do
-		# not silently solve them by replacing the chosen airspeed.
-		derive_speed = false
-		if key in ["distance", "time"]:
-			last_changed = key
+	# Legacy save fields are retained for compatibility, but never override the
+	# distance-owned solve mode, even when this profile is linked to a line.
 	edit_sequence += 1
 	edit_order[key] = edit_sequence
 	if key == "initial_altitude":
@@ -448,10 +438,7 @@ func _use_current(key: String) -> void:
 	var number: float = controller.flight.speed_kmh if key == "speed" else controller.flight.vertical_speed_mps
 	if key == "heading":
 		number = controller.flight.heading_deg
-	if key == "speed":
-		_change_value(key, number, "", "distance")
-	else:
-		_set_value(key, number)
+	_set_value(key, number)
 
 func _use_current_altitude() -> void:
 	_set_value("initial_altitude", controller.flight.altitude_m)
@@ -563,7 +550,7 @@ func measurement_line_changed(line: Dictionary) -> void:
 	state.last_changed = "distance"
 	state.derive_speed = false
 	state.derive_vertical = false
-	var prediction := calculate(state.values, "distance", float(state.initial_altitude), false)
+	var prediction := FlightPlanSolver.solve(state.values, float(state.initial_altitude), false, false, false)
 	if prediction.valid:
 		state.values = prediction.values
 	profile_states[profile_index] = state
@@ -642,49 +629,13 @@ func _sync_active_line_from_calculator() -> String:
 	return ""
 
 func _recalculate(editing_key: String = "") -> void:
-	var locked_distance := float(values.distance)
-	var speed_error := ""
-	if derive_speed:
-		if float(values.time) <= 0.0:
-			speed_error = "Для ненулевого расстояния задайте время больше нуля"
-		else:
-			var required_ground_speed := locked_distance / float(values.time) * 60.0
-			var wind_angle := deg_to_rad(float(values.wind_from))
-			var wind_vector := Vector2(-sin(wind_angle), cos(wind_angle)) * float(values.wind_speed)
-			var angle := deg_to_rad(float(values.heading if heading_based else values.track))
-			var forward := Vector2(sin(angle), -cos(angle))
-			if heading_based:
-				var along := wind_vector.dot(forward)
-				var discriminant := required_ground_speed * required_ground_speed - (wind_vector.length_squared() - along * along)
-				var speed := -along + sqrt(maxf(0.0, discriminant))
-				if discriminant < -0.000001 or speed < 0.0:
-					speed_error = "Такое время и расстояние недостижимы при заданных ветре и курсе"
-				else:
-					values.speed = speed
-			else:
-				values.speed = (forward * required_ground_speed - wind_vector).length()
-	var wind := navigation(values, heading_based)
-	if wind.valid:
-		values.heading = wind.heading
-		values.track = wind.track
-	var prediction := calculate(values, "distance", initial_altitude, heading_based)
-	if not speed_error.is_empty():
-		prediction = {"valid": false, "reason": speed_error}
-	if prediction.valid and derive_vertical:
-		values.time = prediction.values.time
-		_derive_vertical_speed()
-		prediction = calculate(values, "distance", initial_altitude, heading_based)
-	if prediction.valid and float(prediction.values.distance) < MIN_DISTANCE_KM:
-		prediction = {"valid": false, "reason": "Расстояние не может быть обнулено: измените время или скорость"}
+	var prediction := FlightPlanSolver.solve(values, initial_altitude, heading_based, derive_speed, derive_vertical)
 	valid = prediction.valid
 	if valid:
 		values = prediction.values
-		# Avoid even microscopic floating-point drift: the distance field is an
-		# exact user/line-owned value, never a derived result.
-		values.distance = locked_distance
 	_apply_validation_style("" if valid else prediction.reason)
 	_refresh_fields(editing_key)
-	if not wind.valid:
+	if not bool(prediction.get("navigation_valid", true)):
 		var derived := "track" if heading_based else "heading"
 		if derived != editing_key:
 			fields[derived].text = "—"
@@ -698,20 +649,6 @@ func _apply_validation_style(reason: String) -> void:
 	for key in fields:
 		fields[key].tooltip_text = reason
 		fields[key].add_theme_color_override("font_color", MAJOR_CONTOUR_COLOR if reason.is_empty() else Color("a3483f"))
-
-func _derive_vertical_speed() -> void:
-	var difference := float(values.altitude) - initial_altitude
-	if float(values.time) > 0.0:
-		values.vertical = difference / (float(values.time) * 60.0)
-	elif not is_zero_approx(difference):
-		if maxi(_recent("time"), _recent("distance")) > maxi(_recent("altitude"), _recent("initial_altitude")):
-			# A newly entered zero duration/distance wins over the old height.
-			values.altitude = initial_altitude
-			return
-		# No duration has been established yet. Start with a modest climb or
-		# descent and solve its duration, keeping the newly entered height.
-		values.vertical = signf(difference) * maxf(1.0, absf(float(values.vertical)))
-		values.time = difference / float(values.vertical) / 60.0
 
 func _refresh_fields(editing_key: String = "") -> void:
 	for key in fields:
@@ -748,63 +685,10 @@ func _process(_delta: float) -> void:
 	position = position.clamp(bounds.position, (bounds.end - size).max(bounds.position))
 
 static func calculate(input: Dictionary, changed: String, altitude: float, from_heading: bool = false) -> Dictionary:
-	var output := input.duplicate()
-	var wind := navigation(output, from_heading)
-	if not wind.valid:
-		return wind
-	var ground_speed: float = wind.speed
-	output.heading = wind.heading
-	output.track = wind.track
-	var minutes: float = output.time
-	if changed == "distance":
-		if ground_speed <= 0.0 and output.distance > 0.0:
-			return {"valid": false, "reason": "Для расчёта времени нужна скорость больше нуля"}
-		minutes = float(output.distance) / ground_speed * 60.0 if ground_speed > 0.0 else 0.0
-	elif changed == "altitude":
-		var height_difference: float = output.altitude - altitude
-		if is_zero_approx(height_difference):
-			minutes = 0.0
-		elif is_zero_approx(float(output.vertical)) or height_difference * float(output.vertical) < 0.0:
-			return {"valid": false, "reason": "Для этой высоты задайте набор (+) или снижение (−)"}
-		else:
-			minutes = height_difference / float(output.vertical) / 60.0
-	output.time = minutes
-	var calculated_distance := ground_speed * minutes / 60.0
-	if calculated_distance < MIN_DISTANCE_KM:
-		return {"valid": false, "reason": "Расстояние не может быть обнулено: измените время или скорость"}
-	output.distance = calculated_distance
-	output.altitude = altitude + float(output.vertical) * minutes * 60.0
-	for key in output:
-		if not is_finite(float(output[key])):
-			return {"valid": false, "reason": "Значения слишком велики для расчёта"}
-	return {"valid": true, "values": output}
+	return FlightPlanSolver.calculate(input, changed, altitude, from_heading)
 
 static func navigation(input: Dictionary, from_heading: bool) -> Dictionary:
-	if not from_heading:
-		var result := wind_triangle(float(input.speed), float(input.get("track", 0.0)), float(input.get("wind_from", 0.0)), float(input.get("wind_speed", 0.0)))
-		result["track"] = float(input.get("track", 0.0))
-		return result
-	var heading: float = input.get("heading", 0.0)
-	var angle := deg_to_rad(heading)
-	var wind_angle := deg_to_rad(float(input.get("wind_from", 0.0)))
-	var velocity := Vector2(sin(angle), -cos(angle)) * float(input.speed) + Vector2(-sin(wind_angle), cos(wind_angle)) * float(input.get("wind_speed", 0.0))
-	if velocity.length_squared() < 0.00000001:
-		return {"valid": false, "reason": "Нет движения над землёй: направление пути не определено"}
-	return {"valid": true, "heading": heading, "track": fposmod(rad_to_deg(atan2(velocity.x, -velocity.y)), 360.0), "speed": velocity.length()}
+	return FlightPlanSolver.navigation(input, from_heading)
 
 static func wind_triangle(airspeed: float, track: float, wind_from: float, wind_speed: float) -> Dictionary:
-	# Compass angles increase clockwise; wind direction means FROM.
-	var angle := deg_to_rad(track)
-	var forward := Vector2(sin(angle), -cos(angle))
-	var right := Vector2(cos(angle), sin(angle))
-	var wind_angle := deg_to_rad(wind_from)
-	var wind := Vector2(-sin(wind_angle), cos(wind_angle)) * wind_speed
-	var crosswind := wind.dot(right)
-	if absf(crosswind) > airspeed + 0.000001:
-		return {"valid": false, "reason": "Боковой ветер слишком силён: выбранный путь удержать невозможно"}
-	var along_air := sqrt(maxf(0.0, airspeed * airspeed - crosswind * crosswind))
-	var ground_speed := along_air + wind.dot(forward)
-	if ground_speed <= 0.000001 and (airspeed > 0.000001 or wind_speed > 0.000001):
-		return {"valid": false, "reason": "Ветер не позволяет продвигаться по выбранному пути"}
-	var correction := rad_to_deg(atan2(-crosswind, along_air)) if airspeed > 0.000001 else 0.0
-	return {"valid": true, "heading": fposmod(track + correction, 360.0), "speed": maxf(0.0, ground_speed)}
+	return FlightPlanSolver.wind_triangle(airspeed, track, wind_from, wind_speed)

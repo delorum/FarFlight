@@ -48,20 +48,36 @@ func _init() -> void:
 		assert(offer.route_distance_km >= offer.direct_distance_km)
 		assert(offer.distance_km == offer.route_distance_km)
 		assert(offer.poverty_bonus_percent == economy.poverty_bonus_percent(offer.destination))
-		var base_reward := Economy.BASE_REWARD_50_KM * pow(float(offer.route_distance_km) / 50.0, 1.12)
-		assert(offer.normal_reward == roundi(base_reward * economy.poverty_reward_multiplier(offer.destination)))
-		assert(offer.urgent_reward == offer.normal_reward * 2)
-		assert(is_equal_approx(float(offer.urgent_deadline), -1.0))
+		var base_reward := Economy.BASE_REWARD_50_KM * pow(float(offer.route_distance_km) / 50.0, Economy.DISTANCE_REWARD_EXPONENT)
+		assert(offer.reward == roundi(base_reward * economy.poverty_reward_multiplier(offer.destination)))
+		assert(not offer.has("urgent_deadline") and not offer.has("urgent_reward"))
 	var parcel: Dictionary = economy.accept_offer(0, 0)
-	assert(not parcel.is_empty() and parcel.urgent_deadline > economy.elapsed_seconds)
-	var expected_deadline: float = economy.elapsed_seconds + float(parcel.route_distance_km) / Economy.DEADLINE_SPEED_KMH * 3600.0 + Economy.DEADLINE_RESERVE_SECONDS
-	assert(is_equal_approx(parcel.urgent_deadline, expected_deadline))
+	assert(not parcel.is_empty() and not parcel.has("urgent_deadline"))
+	assert(economy.store_carried())
+	var second_parcel: Dictionary = economy.accept_offer(0, 0)
+	assert(not second_parcel.is_empty() and second_parcel.id != parcel.id, "Multiple orders must be available for one trip")
 	assert(economy.store_carried())
 	assert(economy.take_slot(0))
 	var destination := int(parcel.destination)
-	var expected := int(parcel.urgent_reward)
+	var expected := int(parcel.reward)
+	economy.elapsed_seconds += 24.0 * 3600.0
 	var delivery: Dictionary = economy.deliver_carried(destination)
-	assert(delivery.urgent and delivery.paid == expected)
+	assert(delivery.paid == expected and economy.money >= expected, "Delivery pay must not expire")
+	assert(economy.take_slot(1))
+	assert(economy.deliver_carried(int(second_parcel.destination)).paid == second_parcel.reward)
+	var legacy_parcel: Dictionary = parcel.duplicate(true)
+	legacy_parcel.erase("reward")
+	legacy_parcel["normal_reward"] = 1
+	legacy_parcel["urgent_reward"] = 2
+	legacy_parcel["urgent_deadline"] = 0.0
+	assert(economy.parcel_reward(legacy_parcel) == expected, "Saved orders from the old tariff must use the new unified price")
+	var legacy_mail_save: Dictionary = economy.snapshot()
+	legacy_mail_save.carried_item = legacy_parcel
+	legacy_mail_save.offers_by_airport[0] = [legacy_parcel]
+	var legacy_mail_restored = Economy.new()
+	assert(legacy_mail_restored.restore(legacy_mail_save, world))
+	assert(legacy_mail_restored.carried_item.reward == expected and not legacy_mail_restored.carried_item.has("urgent_deadline"))
+	assert(legacy_mail_restored.offers_at(0)[0].reward == expected and not legacy_mail_restored.offers_at(0)[0].has("urgent_reward"))
 	var old_offers: Array = economy.offers_at(0).duplicate(true)
 	economy.arrive_at_airport(0, world)
 	assert(economy.offers_at(0) == old_offers)
@@ -111,7 +127,13 @@ func _init() -> void:
 	var hotel_airport: int = needs.hotel_airports[2]
 	assert(needs.buy_hotel_rest(hotel_airport))
 	assert(needs.fatigue == 3 and needs.money == money_before_hotel - needs.hotel_rest_price(hotel_airport))
+	needs.fatigue = Economy.NEED_SEGMENTS
+	var full_rest_time: float = needs.elapsed_seconds
+	var full_rest_money: int = needs.money
+	assert(needs.buy_hotel_rest(hotel_airport), "A full-rest pilot must still be allowed to pay for hotel time")
+	assert(is_equal_approx(needs.elapsed_seconds - full_rest_time, Economy.HOTEL_REST_SECONDS))
+	assert(needs.fatigue == Economy.NEED_SEGMENTS and needs.money == full_rest_money - needs.hotel_rest_price(hotel_airport))
 	needs.advance_time(3600.0, true)
-	assert(needs.fatigue == 3 and needs.hunger == 4)
+	assert(needs.fatigue == Economy.NEED_SEGMENTS and needs.hunger == 4)
 	print("economy_test: OK")
 	quit()

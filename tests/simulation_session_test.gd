@@ -18,14 +18,16 @@ func _initialize() -> void:
 	var flight := Flight.new(world)
 	var economy := Economy.new(world)
 	var session := Session.new()
+	assert(is_zero_approx(Session.time_of_day(economy.elapsed_seconds)), "Game time starts at day 1 midnight")
+	assert(is_equal_approx(Session.time_of_day(86401.0), 1.0), "The single time source must wrap at midnight without losing the elapsed day")
 	var recorder := Recorder.new()
 	recorder.reset(flight)
 	session.time_scale_index = 4
 	var weather_before: float = world.weather_time_seconds
-	var clock_before: float = session.clock_seconds
+	var clock_before: float = Session.time_of_day(economy.elapsed_seconds)
 	var result := session.advance(1.0, flight, economy, recorder, false)
 	assert(is_equal_approx(result.elapsed, 16.0))
-	assert(is_equal_approx(session.clock_seconds - clock_before, result.elapsed))
+	assert(is_equal_approx(Session.time_of_day(economy.elapsed_seconds) - clock_before, result.elapsed))
 	assert(is_equal_approx(economy.elapsed_seconds, result.elapsed))
 	assert(is_equal_approx(world.weather_time_seconds - weather_before, result.elapsed))
 
@@ -43,11 +45,11 @@ func _initialize() -> void:
 	economy.need_accumulator_seconds = 3599.99
 	storm_flight.storm_roll_bias_deg = 0.0
 	weather_before = world.weather_time_seconds
-	clock_before = session.clock_seconds
+	clock_before = Session.time_of_day(economy.elapsed_seconds)
 	result = session.advance(1.0, storm_flight, economy, recorder, false)
 	assert(result.crashed and result.elapsed <= Session.MAX_STEP + 0.000001)
 	assert(recorder.trajectory_finished, "Fatal needs must finish the flight log, not bypass recording")
-	assert(is_equal_approx(session.clock_seconds - clock_before, world.weather_time_seconds - weather_before))
+	assert(is_equal_approx(Session.time_of_day(economy.elapsed_seconds) - clock_before, world.weather_time_seconds - weather_before))
 	assert(is_equal_approx(recorder.trajectory_elapsed_seconds, session.trip_elapsed_seconds))
 
 	var hotel_world := World.new(424242)
@@ -55,13 +57,21 @@ func _initialize() -> void:
 	var hotel_economy := Economy.new(hotel_world)
 	var hotel_session := Session.new()
 	hotel_economy.fatigue = 2
-	clock_before = hotel_session.clock_seconds
+	clock_before = Session.time_of_day(hotel_economy.elapsed_seconds)
 	weather_before = hotel_world.weather_time_seconds
 	assert(hotel_session.rest_at_hotel(hotel_flight, hotel_economy))
 	assert(hotel_economy.fatigue == 3)
-	assert(is_equal_approx(hotel_session.clock_seconds - clock_before, Economy.HOTEL_REST_SECONDS))
+	assert(is_equal_approx(Session.time_of_day(hotel_economy.elapsed_seconds) - clock_before, Economy.HOTEL_REST_SECONDS))
 	assert(is_equal_approx(hotel_world.weather_time_seconds - weather_before, Economy.HOTEL_REST_SECONDS))
 	assert(is_equal_approx(hotel_economy.elapsed_seconds, Economy.HOTEL_REST_SECONDS))
+	hotel_economy.fatigue = Economy.NEED_SEGMENTS
+	var full_rest_time: float = hotel_economy.elapsed_seconds
+	var full_rest_weather: float = hotel_world.weather_time_seconds
+	var full_rest_money: int = hotel_economy.money
+	assert(hotel_session.rest_at_hotel(hotel_flight, hotel_economy), "A full-rest hotel visit must still advance the session")
+	assert(is_equal_approx(hotel_economy.elapsed_seconds - full_rest_time, Economy.HOTEL_REST_SECONDS))
+	assert(is_equal_approx(hotel_world.weather_time_seconds - full_rest_weather, Economy.HOTEL_REST_SECONDS))
+	assert(hotel_economy.fatigue == Economy.NEED_SEGMENTS and hotel_economy.money == full_rest_money - hotel_economy.hotel_rest_price(hotel_flight.airport_index))
 
 	var arrival_world := World.new(99117)
 	var arrival_flight := Flight.new(arrival_world)

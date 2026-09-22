@@ -54,6 +54,7 @@ var large_weather_radar := false
 var radar_range_index := 0
 var hovered_airport_index := -1
 var hovered_wind_arrow := false
+var hovered_measurement_line_index := -1
 var hovered_weather_storm_index := -1
 var hovered_weather_storm_anchor := Vector2.INF
 var measurement_label_refresh_remaining := 0.0
@@ -344,20 +345,32 @@ func _draw_hovered_airport_services(rect: Rect2) -> void:
 	var mouse = host.get_local_mouse_position()
 	if not rect.has_point(mouse):
 		return
+	var text := measurement_line_description_at(mouse)
 	# A storm has its own local arrow and label, like the weather radar, so do
 	# not repeat the same information in the map-wide footer.
-	if weather_briefing_storm_at(mouse) >= 0:
+	if text.is_empty() and weather_briefing_storm_at(mouse) >= 0:
 		return
-	var index = _airport_hover_index(mouse)
-	var text = ""
-	if _wind_arrow_hovered(mouse):
-		text = "Ветер: " + _wind_arrow_description()
-	elif index >= 0:
-		var airport: Dictionary = host.world.airports[index]
-		text = "%s: %s" % [airport.name, ", ".join(host.economy.services_at(index))]
+	if text.is_empty():
+		var index := _airport_hover_index(mouse)
+		if _wind_arrow_hovered(mouse):
+			text = "Ветер: " + _wind_arrow_description()
+		elif index >= 0:
+			var airport: Dictionary = host.world.airports[index]
+			text = "%s: %s" % [airport.name, ", ".join(host.economy.services_at(index))]
 	if not text.is_empty():
 		map_canvas.draw_rect(Rect2(rect.position.x + 8, rect.end.y - 47, minf(520.0, rect.size.x - 16), 25), Color("d7d0ad"), true)
 		map_canvas.draw_string(ThemeDB.fallback_font, Vector2(rect.position.x + 14, rect.end.y - 29), text, HORIZONTAL_ALIGNMENT_LEFT, minf(508.0, rect.size.x - 28), 12, Color("35372e"))
+
+func measurement_line_description_at(screen_position: Vector2) -> String:
+	if large_weather_radar or not map_rect().has_point(screen_position):
+		return ""
+	var line_index := _measurement_line_index_at(screen_position)
+	if line_index < 0:
+		return ""
+	var line: Dictionary = measurement_lines[line_index]
+	var line_id := int(line.get("id", -1))
+	var directed: bool = host.flight_calculator.profile_for_line(line_id) >= 0
+	return _measurement_label_text(line.a, line.b, line.get("max_height_m", -1.0), directed, line_id)
 
 func weather_briefing_motion_text(storm: Dictionary) -> String:
 	var drift := Vector2(storm.drift_kmh)
@@ -839,18 +852,7 @@ func _draw_measurement(a_world: Vector2, b_world: Vector2, color := MEASUREMENT_
 		map_canvas.draw_circle(a, 3, color)
 	if map_rect().has_point(b):
 		map_canvas.draw_circle(b, 3, color)
-	var distance = a_world.distance_to(b_world)
-	var bearing: float = host.world.vector_heading(b_world - a_world)
-	var direct_course = int(round(bearing)) % 360
-	var reverse_course = (direct_course + 180) % 360
-	var max_height: float = cached_max_height if cached_max_height >= 0.0 else _maximum_terrain_height_on_line(a_world, b_world)
-	var linked_time: float = host.flight_calculator.line_time_minutes(line_id) if line_id >= 0 else -1.0
-	var time_text := "%.1f мин" % linked_time if linked_time >= 0.0 else measurement_time_text(distance)
-	# The label is rotated by 180 degrees when necessary to keep text upright.
-	# An arrow glyph inside it would then point against the actual vector, so
-	# direction is shown only by the geometry's independent arrowhead.
-	var course_text := "%03d°" % direct_course if directed else "%03d° / %03d°" % [direct_course, reverse_course]
-	var label = "%.1f км • %s  %s  %.0f м" % [distance, time_text, course_text, max_height]
+	var label := _measurement_label_text(a_world, b_world, cached_max_height, directed, line_id)
 	var visible_segment = _clip_line_to_rect(a, b, map_rect().grow(-3.0))
 	if visible_segment.size() == 2:
 		var visible_direction: Vector2 = visible_segment[1] - visible_segment[0]
@@ -860,12 +862,27 @@ func _draw_measurement(a_world: Vector2, b_world: Vector2, color := MEASUREMENT_
 			map_canvas.draw_line(arrow_tip, arrow_tip + backward.rotated(0.55) * 8.0, color, 2.0, true)
 			map_canvas.draw_line(arrow_tip, arrow_tip + backward.rotated(-0.55) * 8.0, color, 2.0, true)
 		var text_size = ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13)
-		# A label is useful only when the visible line is substantially longer
-		# than the text. Zooming in increases this length and reveals the label.
+		var midpoint: Vector2 = (visible_segment[0] + visible_segment[1]) * 0.5
 		if visible_direction.length() >= text_size.x * 1.35 + 20.0:
-			var midpoint: Vector2 = (visible_segment[0] + visible_segment[1]) * 0.5
 			if map_rect().grow(-24.0).has_point(midpoint):
 				_draw_rotated_map_label(midpoint, visible_direction, label, color)
+			else:
+				_draw_horizontal_measurement_label(midpoint, visible_direction, label, color)
+		else:
+			_draw_horizontal_measurement_label(midpoint, visible_direction, label, color)
+
+func _measurement_label_text(a_world: Vector2, b_world: Vector2, cached_max_height: float, directed: bool, line_id: int) -> String:
+	var distance := a_world.distance_to(b_world)
+	var bearing: float = host.world.vector_heading(b_world - a_world)
+	var direct_course := int(round(bearing)) % 360
+	var reverse_course := (direct_course + 180) % 360
+	var max_height: float = cached_max_height if cached_max_height >= 0.0 else _maximum_terrain_height_on_line(a_world, b_world)
+	var linked_time: float = host.flight_calculator.line_time_minutes(line_id) if line_id >= 0 else -1.0
+	var time_text := "%.1f мин" % linked_time if linked_time >= 0.0 else measurement_time_text(distance)
+	# The rotated label can flip to stay upright, so its arrow is represented
+	# by the directed line's geometry rather than by a glyph in this text.
+	var course_text := "%03d°" % direct_course if directed else "%03d° / %03d°" % [direct_course, reverse_course]
+	return "%.1f км • %s  %s  %.0f м" % [distance, time_text, course_text, max_height]
 
 func measurement_time_text(distance_km: float) -> String:
 	var ground_speed: float = host.flight.ground_speed_kmh()
@@ -922,6 +939,26 @@ func _draw_rotated_map_label(position: Vector2, line_direction: Vector2, label: 
 	map_canvas.draw_rect(Rect2(Vector2(-text_size.x * 0.5 - 3.0, -25.0), text_size + Vector2(6.0, 4.0)), Color("d7d0ad"), true)
 	map_canvas.draw_string(ThemeDB.fallback_font, Vector2(-text_size.x * 0.5, -13.0), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, color)
 	map_canvas.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+func _draw_horizontal_measurement_label(midpoint: Vector2, line_direction: Vector2, label: String, color: Color) -> void:
+	var text_size := ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13)
+	var chart := map_rect()
+	var baseline := _horizontal_measurement_label_baseline(midpoint, line_direction, text_size, chart)
+	map_canvas.draw_rect(Rect2(baseline - Vector2(3.0, text_size.y + 3.0), text_size + Vector2(6.0, 6.0)), Color("d7d0ad"), true)
+	map_canvas.draw_string(ThemeDB.fallback_font, baseline, label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, color)
+
+func _horizontal_measurement_label_baseline(midpoint: Vector2, line_direction: Vector2, text_size: Vector2, chart: Rect2) -> Vector2:
+	var mostly_horizontal := absf(line_direction.x) >= absf(line_direction.y)
+	var baseline_y := midpoint.y - 10.0 if mostly_horizontal else midpoint.y + text_size.y * 0.5
+	if mostly_horizontal and baseline_y - text_size.y - 3.0 < chart.position.y + 4.0:
+		baseline_y = midpoint.y + text_size.y + 10.0
+	var baseline_x := midpoint.x + 10.0
+	if not mostly_horizontal and baseline_x + text_size.x + 3.0 > chart.end.x - 4.0:
+		baseline_x = midpoint.x - text_size.x - 10.0
+	return Vector2(
+		clampf(baseline_x, chart.position.x + 4.0, chart.end.x - text_size.x - 4.0),
+		clampf(baseline_y, chart.position.y + text_size.y + 4.0, chart.end.y - 4.0)
+	)
 
 func _zoom_at(mouse: Vector2, factor: float) -> void:
 	update_weather_storm_hover(-1, Vector2.ZERO)

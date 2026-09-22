@@ -76,6 +76,7 @@ func _run() -> void:
 	scene._input(turn_key)
 	scene.time_scale_index = 4
 	var elapsed_before_day_test: float = scene.economy.elapsed_seconds
+	check(is_zero_approx(scene.clock_seconds), "A new game's clock must begin at midnight alongside flight history")
 	scene.economy.elapsed_seconds = 0.0
 	check(scene.instrument_panel.game_day_number() == 1, "Clock label must start on day 1")
 	scene.economy.elapsed_seconds = 86399.0
@@ -87,7 +88,7 @@ func _run() -> void:
 	var economy_before_scale: float = scene.economy.elapsed_seconds
 	scene._process(1.0)
 	check(is_equal_approx(scene.clock_seconds - clock_before_scale, 16.0), "16x must advance the game clock by sixteen seconds per real second")
-	check(is_equal_approx(scene.economy.elapsed_seconds - economy_before_scale, 16.0), "16x must advance economic deadlines and needs")
+	check(is_equal_approx(scene.economy.elapsed_seconds - economy_before_scale, 16.0), "16x must advance economic time and needs")
 	scene.time_scale_index = 0
 	scene.flight.state = scene.FlightModelScript.State.FLYING
 	scene.flight.speed_kmh = 150.0
@@ -131,35 +132,34 @@ func _run() -> void:
 	var offer: Dictionary = scene.economy.offers_at(0)[0]
 	scene._handle_economy_click(scene._economy_button_rect(0).get_center())
 	check(scene.economy.carried_item.get("id") == offer.id, "Clicking an offer must hand parcel to player")
-	var original_deadline: float = float(scene.economy.carried_item.urgent_deadline)
-	scene.economy.carried_item.urgent_deadline = scene.economy.elapsed_seconds + 42.0
 	var carried_caption: String = scene._carried_item_caption(scene.economy.carried_item)
 	check(carried_caption.contains(scene.world.airports[int(scene.economy.carried_item.destination)].name), "Carried parcel caption must show its destination")
-	check(carried_caption.contains("42 с"), "Carried parcel caption must switch to seconds during the final minute")
-	scene.economy.carried_item.urgent_deadline = scene.economy.elapsed_seconds - 1.0
-	check(not scene._carried_item_caption(scene.economy.carried_item).contains("срочно"), "Expired urgent time must disappear from the carried parcel caption")
-	scene.economy.carried_item.urgent_deadline = original_deadline
+	check(not carried_caption.contains("срочно"), "Carried parcel caption must have no deadline")
 	scene._enter_cabin()
 	check(scene._handle_inventory_click(scene._inventory_rect(0).get_center()), "Cabin cargo slot must be clickable")
 	check(scene.economy.carried_item.is_empty() and scene.economy.inventory[0].get("type") == "parcel", "Parcel must be stored physically")
 	var parcel_hover: String = scene._inventory_hover_description(scene._cabin_pose() * scene._inventory_rect(0).get_center())
 	check(parcel_hover.begins_with("Посылка • аэропорт"), "Hovering stored cargo must describe its type and destination below the scene")
-	check(parcel_hover.contains("оплата %d, срочно %d" % [offer.normal_reward, offer.urgent_reward]), "Parcel hover must show both delivery rewards")
-	check(parcel_hover.contains("срочный тариф ещё"), "Parcel hover must show the remaining urgent-rate time")
-	scene.economy.elapsed_seconds = float(scene.economy.inventory[0].urgent_deadline) + 1.0
-	parcel_hover = scene._inventory_hover_description(scene._cabin_pose() * scene._inventory_rect(0).get_center())
-	check(parcel_hover.contains("срочный срок истёк"), "Parcel hover must report an expired urgent deadline")
+	check(parcel_hover.contains("оплата %d монет" % offer.reward), "Parcel hover must show the single delivery reward")
+	check(not parcel_hover.contains("срочн"), "Stored parcel must have no delivery deadline")
 	check(scene._handle_inventory_click(scene._inventory_rect(0).get_center()), "Stored parcel must be retrievable")
 	check(scene.economy.carried_item.get("type") == "parcel", "Parcel must return to hands")
 	var destination_airport: int = int(scene.economy.carried_item.destination)
 	scene.flight.airport_index = destination_airport
-	scene.economy.elapsed_seconds = float(scene.economy.carried_item.urgent_deadline) - 1.0
-	var urgent_delivery_button: String = scene._delivery_button_text(scene.economy.carried_item)
-	check(urgent_delivery_button.contains("%d монет" % int(scene.economy.carried_item.urgent_reward)) and urgent_delivery_button.contains("срочный тариф"), "Delivery button must show urgent payout and tariff")
-	scene.economy.elapsed_seconds = float(scene.economy.carried_item.urgent_deadline) + 1.0
-	var normal_delivery_button: String = scene._delivery_button_text(scene.economy.carried_item)
-	check(normal_delivery_button.contains("%d монет" % int(scene.economy.carried_item.normal_reward)) and normal_delivery_button.contains("обычный тариф"), "Delivery button must show normal payout and tariff after the urgent deadline")
+	var mail_time_before_delay: float = scene.economy.elapsed_seconds
+	scene.economy.elapsed_seconds += 24.0 * 3600.0
+	var delivery_button: String = scene._delivery_button_text(scene.economy.carried_item)
+	check(delivery_button.contains("%d монет" % int(scene.economy.carried_item.reward)) and not delivery_button.contains("тариф"), "Delivery button must keep the same reward after any delay")
+	scene.economy.elapsed_seconds = mail_time_before_delay
 	scene.economy.carried_item = {}
+	scene.flight.airport_index = scene.economy.hotel_airports[0]
+	scene.economy.fatigue = scene.EconomyScript.NEED_SEGMENTS
+	var hotel_time_before: float = scene.economy.elapsed_seconds
+	var hotel_money_before: int = scene.economy.money
+	scene._set_view_mode(scene.ViewMode.HOTEL)
+	scene._handle_economy_click(scene._economy_button_rect(0).get_center())
+	check(is_equal_approx(scene.economy.elapsed_seconds - hotel_time_before, scene.EconomyScript.HOTEL_REST_SECONDS), "Hotel button must advance time at full fatigue")
+	check(scene.economy.fatigue == scene.EconomyScript.NEED_SEGMENTS and scene.economy.money == hotel_money_before - scene.economy.hotel_rest_price(scene.flight.airport_index), "Hotel visit at full fatigue must charge normally without overfilling")
 	var fuel_airport: int = scene.economy.fuel_airports[0]
 	scene.flight.airport_index = fuel_airport
 	scene._set_view_mode(scene.ViewMode.FUEL)

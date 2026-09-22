@@ -2,6 +2,7 @@ extends SceneTree
 
 const WorldScript = preload("res://scripts/world.gd")
 const FlightScript = preload("res://scripts/flight_model.gd")
+const InstrumentPanelScript = preload("res://scripts/instrument_panel.gd")
 var failed := false
 
 func check(condition: bool, message: String) -> void:
@@ -37,5 +38,9 @@ func _run() -> void:
 	check(flight.radio_height_m() >= 0.0, "Stopping the engine must not extinguish a powered radio altimeter")
 	flight.electrical_power = false
 	check(flight.radio_height_m() < 0.0, "Switching electrical power off must remove the reading")
+	var warning_color: Color = InstrumentPanelScript.radio_altimeter_text_color(99.9)
+	check(InstrumentPanelScript.radio_altimeter_text_color(0.0) == warning_color, "Low radio heights must use the red warning color")
+	check(InstrumentPanelScript.radio_altimeter_text_color(100.0) != warning_color, "At 100 m the radio altimeter must return to its normal color")
+	check(InstrumentPanelScript.radio_altimeter_text_color(-1.0) == InstrumentPanelScript.radio_altimeter_text_color(100.0), "An unavailable radio reading must not show a low-height warning")
 	print("Radio altimeter range, terrain tracking and power: ", "FAIL" if failed else "OK")
 	quit(1 if failed else 0)

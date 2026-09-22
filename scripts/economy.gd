@@ -13,10 +13,8 @@ const HOTEL_REST_PRICE := HOTEL_PRICE / 3
 const SERVICE_PRICE_MULTIPLIERS := [0.7, 1.0, 1.3]
 const REPAIR_PRICE_PER_POINT := 3.0
 const PARKING_PRICE := 12
-const BASE_REWARD_50_KM := 60
-const URGENT_MULTIPLIER := 2
-const DEADLINE_SPEED_KMH := 130.0
-const DEADLINE_RESERVE_SECONDS := 10.0 * 60.0
+const BASE_REWARD_50_KM := 80
+const DISTANCE_REWARD_EXPONENT := 1.12
 const POVERTY_REWARD_MULTIPLIERS := [1.35, 1.20, 1.10, 1.0, 1.0]
 const MAX_AIRPORTS_WITHOUT_OPTIONAL_SERVICES := 2
 
@@ -204,23 +202,38 @@ func _generate_offers(origin: int, world) -> Array[Dictionary]:
 		var direct_distance: float = Vector2(world.airports[origin].position).distance_to(Vector2(world.airports[destination].position))
 		var route_distance: float = world.planned_route_distance_km(origin, destination)
 		if not is_finite(route_distance):
-			# Explicitly seeded legacy worlds can predate the route rules. Avoid an
-			# impossible deadline while still allowing their old saves to continue.
+			# Explicitly seeded legacy worlds can predate the route rules. Keep
+			# their mail deliverable even without a planned route.
 			route_distance = direct_distance
-		var poverty_multiplier := poverty_reward_multiplier(destination)
-		var normal_reward := maxi(1, roundi(BASE_REWARD_50_KM * pow(route_distance / 50.0, 1.12) * poverty_multiplier))
 		offers.append({
 			"type": "parcel", "id": next_parcel_id, "origin": origin,
 			"destination": destination, "distance_km": route_distance,
 			"direct_distance_km": direct_distance, "route_distance_km": route_distance,
 			"destination_service_count": optional_service_count(destination),
 			"poverty_bonus_percent": poverty_bonus_percent(destination),
-			"normal_reward": normal_reward,
-			"urgent_reward": normal_reward * URGENT_MULTIPLIER,
-			"accepted_at": -1.0, "urgent_deadline": -1.0,
+			"reward": _reward_for_route(route_distance, destination),
 		})
 		next_parcel_id += 1
 	return offers
+
+func _reward_for_route(route_distance: float, destination: int) -> int:
+	return maxi(1, roundi(BASE_REWARD_50_KM * pow(route_distance / 50.0, DISTANCE_REWARD_EXPONENT) * poverty_reward_multiplier(destination)))
+
+func parcel_reward(parcel: Dictionary) -> int:
+	if parcel.has("reward"):
+		return int(parcel.reward)
+	# Old saves contain ordinary/urgent prices instead of a single tariff.
+	# Reprice them by their original planned distance under the new rules.
+	return _reward_for_route(float(parcel.get("route_distance_km", parcel.get("distance_km", 0.0))), int(parcel.get("destination", -1)))
+
+func _normalize_saved_parcel(item: Dictionary) -> Dictionary:
+	if item.get("type", "") != "parcel":
+		return item
+	var normalized := item.duplicate(true)
+	normalized["reward"] = parcel_reward(item)
+	for obsolete_key in ["normal_reward", "urgent_reward", "urgent_deadline", "accepted_at"]:
+		normalized.erase(obsolete_key)
+	return normalized
 
 func offers_at(airport_index: int) -> Array:
 	return offers_by_airport.get(airport_index, [])
@@ -232,9 +245,6 @@ func accept_offer(airport_index: int, offer_index: int) -> Dictionary:
 	if offer_index < 0 or offer_index >= offers.size():
 		return {}
 	var parcel: Dictionary = offers.pop_at(offer_index).duplicate(true)
-	parcel.accepted_at = elapsed_seconds
-	var route_distance := float(parcel.get("route_distance_km", parcel.distance_km))
-	parcel.urgent_deadline = elapsed_seconds + route_distance / DEADLINE_SPEED_KMH * 3600.0 + DEADLINE_RESERVE_SECONDS
 	carried_item = parcel
 	offers_by_airport[airport_index] = offers
 	return parcel
@@ -269,10 +279,8 @@ func discard_carried() -> void:
 func deliver_carried(airport_index: int) -> Dictionary:
 	if carried_item.get("type", "") != "parcel" or int(carried_item.get("destination", -1)) != airport_index:
 		return {}
-	var urgent: bool = elapsed_seconds <= float(carried_item.urgent_deadline)
-	var reward := int(carried_item.urgent_reward if urgent else carried_item.normal_reward)
+	var reward := parcel_reward(carried_item)
 	var result := carried_item.duplicate(true)
-	result["urgent"] = urgent
 	result["paid"] = reward
 	money += reward
 	carried_item = {}
@@ -344,7 +352,7 @@ func pay_parking() -> bool:
 
 func pay_hotel_rest(airport_index: int = -1) -> bool:
 	var price := hotel_rest_price(airport_index)
-	if money < price or fatigue >= NEED_SEGMENTS:
+	if money < price:
 		return false
 	money -= price
 	return true
@@ -457,4 +465,12 @@ func restore(data: Dictionary, world = null) -> bool:
 			visited_airports.append(last_landed_airport)
 	next_parcel_id = int(data.next_parcel_id)
 	game_over_reason = String(data.game_over_reason)
+	carried_item = _normalize_saved_parcel(carried_item)
+	for slot in inventory.size():
+		inventory[slot] = _normalize_saved_parcel(inventory[slot])
+	for origin in offers_by_airport.keys():
+		var offers: Array = offers_by_airport[origin]
+		for offer_index in offers.size():
+			if offers[offer_index] is Dictionary:
+				offers[offer_index] = _normalize_saved_parcel(offers[offer_index])
 	return true

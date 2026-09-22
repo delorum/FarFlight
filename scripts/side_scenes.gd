@@ -567,10 +567,6 @@ func _carried_item_caption(item: Dictionary) -> String:
 	match String(item.get("type", "")):
 		"parcel":
 			var destination: String = String(host.world.airports[int(item.destination)].name)
-			var remaining: float = float(item.get("urgent_deadline", 0.0)) - host.economy.elapsed_seconds
-			if remaining > 0.0:
-				var time_text: String = "%d с" % ceili(remaining) if remaining < 60.0 else host._format_short_time(remaining)
-				return "ПОЧТА → %s • срочно %s" % [destination, time_text]
 			return "ПОЧТА → %s" % destination
 		"food":
 			return "ЕДА"
@@ -621,9 +617,7 @@ func _inventory_hover_description(position: Vector2) -> String:
 		if not item.is_empty() and _inventory_rect(slot).grow(4.0).has_point(cabin_position):
 			match String(item.get("type", "")):
 				"parcel":
-					var remaining: float = float(item.get("urgent_deadline", 0.0)) - host.economy.elapsed_seconds
-					var deadline_text: String = "срочный тариф ещё %s" % host._format_short_time(remaining) if remaining >= 0.0 else "срочный срок истёк"
-					return "Посылка • аэропорт «%s» • оплата %d, срочно %d • %s" % [host.world.airports[int(item.destination)].name, int(item.get("normal_reward", 0)), int(item.get("urgent_reward", 0)), deadline_text]
+					return "Посылка • аэропорт «%s» • оплата %d монет" % [host.world.airports[int(item.destination)].name, host.economy.parcel_reward(item)]
 				"food":
 					return "Еда • восстанавливает 1 деление сытости"
 				"canister":
@@ -1207,6 +1201,14 @@ func _active_history_records() -> Array[Dictionary]:
 		return route_history_records_cache
 	return host.simulation.flight_history.records
 
+func _history_record_at(display_index: int) -> Dictionary:
+	var records := _active_history_records()
+	if view_mode == ViewMode.ROUTE_HISTORY:
+		return records[display_index]
+	# Storage remains append-only; translate the visible row instead of copying
+	# and reversing the full journal on every redraw or input event.
+	return records[records.size() - 1 - display_index]
+
 func _history_route_key(origin: int, destination: int) -> String:
 	return "%d:%d" % [origin, destination]
 
@@ -1310,10 +1312,10 @@ func _clamp_history_scroll(route_details: bool) -> void:
 		history_scroll = clampi(history_scroll, 0, maximum)
 
 func _open_selected_history_route() -> void:
-	var records: Array[Dictionary] = host.simulation.flight_history.records
+	var records := _active_history_records()
 	if records.is_empty() or history_selected < 0 or history_selected >= records.size():
 		return
-	var record: Dictionary = records[history_selected]
+	var record: Dictionary = _history_record_at(history_selected)
 	var count: int = _history_route_count(int(record.origin), int(record.destination))
 	if count < 2:
 		return
@@ -1329,7 +1331,7 @@ func _format_history_duration(seconds_value: float) -> String:
 	return "%02d:%02d:%02d" % [total / 3600, (total % 3600) / 60, total % 60]
 
 func _format_history_timestamp(seconds_value: float) -> String:
-	var total := maxi(0, roundi(seconds_value))
+	var total := maxi(0, floori(seconds_value))
 	var day := total / 86400 + 1
 	var within_day := total % 86400
 	return "день %d %02d:%02d:%02d" % [day, within_day / 3600, (within_day % 3600) / 60, within_day % 60]
@@ -1338,7 +1340,7 @@ func _draw_flight_history_scene() -> void:
 	var route_details := view_mode == ViewMode.ROUTE_HISTORY
 	_draw_scene_background("СТАТИСТИКА ПОЛЁТОВ")
 	var records := _active_history_records()
-	var title := "ИСТОРИЯ ПОЛЁТОВ • ХРОНОЛОГИЧЕСКИЙ ПОРЯДОК"
+	var title := "ИСТОРИЯ ПОЛЁТОВ • НОВЫЕ СВЕРХУ"
 	if route_details and route_history_origin in range(host.world.airports.size()) and route_history_destination in range(host.world.airports.size()):
 		title = "%s → %s • ВСЕГО ПОЛЁТОВ: %d • РЕКОРД СВЕРХУ" % [host.world.airports[route_history_origin].name, host.world.airports[route_history_destination].name, records.size()]
 	var back_rect := get_history_back_rect()
@@ -1356,7 +1358,7 @@ func _draw_flight_history_scene() -> void:
 	var selected := route_history_selected if route_details else history_selected
 	var end_index := mini(records.size(), scroll + _history_visible_rows())
 	for record_index in range(scroll, end_index):
-		var record: Dictionary = records[record_index]
+		var record: Dictionary = _history_record_at(record_index)
 		var row_rect := Rect2(list_rect.position + Vector2(5, (record_index - scroll) * 64.0 + 4), Vector2(list_rect.size.x - 10, 56))
 		if record_index == selected:
 			host.draw_rect(row_rect, Color("c4ba91"), true)
@@ -1382,10 +1384,7 @@ func _economy_button_rect(index: int) -> Rect2:
 	return Rect2(host.size.x * 0.48, 165.0 + index * 64.0, minf(520.0, host.size.x * 0.46), 48.0)
 
 func _delivery_button_text(parcel: Dictionary) -> String:
-	var urgent: bool = host.economy.elapsed_seconds <= float(parcel.get("urgent_deadline", -1.0))
-	var reward = int(parcel.get("urgent_reward", 0) if urgent else parcel.get("normal_reward", 0))
-	var tariff_status = "срочный тариф" if urgent else "обычный тариф"
-	return "СДАТЬ ПОСЫЛКУ • %d монет • %s" % [reward, tariff_status]
+	return "СДАТЬ ПОСЫЛКУ • %d монет" % host.economy.parcel_reward(parcel)
 
 func _draw_economy_scene() -> void:
 	var titles = {ViewMode.MAIL:"ПОЧТА", ViewMode.SHOP:"МАГАЗИН", ViewMode.HOTEL:"ГОСТИНИЦА", ViewMode.FUEL:"ЗАПРАВКА", ViewMode.REPAIR:"РЕМОНТНЫЙ АНГАР"}
@@ -1403,7 +1402,7 @@ func _draw_economy_scene() -> void:
 				var destination: String = host.world.airports[int(offer.destination)].name
 				var poverty_bonus := int(offer.get("poverty_bonus_percent", 0))
 				var bonus_text := " • надбавка +%d%%" % poverty_bonus if poverty_bonus > 0 else ""
-				_draw_menu_button(_economy_button_rect(row), "%s • маршрут %.0f км • %d / срочно %d%s" % [destination, offer.distance_km, offer.normal_reward, offer.urgent_reward, bonus_text])
+				_draw_menu_button(_economy_button_rect(row), "%s • маршрут %.0f км • %d монет%s" % [destination, offer.distance_km, host.economy.parcel_reward(offer), bonus_text])
 				row += 1
 		ViewMode.SHOP:
 			_draw_menu_button(_economy_button_rect(0), "КУПИТЬ ЕДУ • %d монет" % host.economy.food_price(host.flight.airport_index))

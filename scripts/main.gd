@@ -149,9 +149,7 @@ var status_timer: float:
 		simulation.status_timer = value
 var clock_seconds: float:
 	get:
-		return simulation.clock_seconds
-	set(value):
-		simulation.clock_seconds = value
+		return SimulationSession.time_of_day(economy.elapsed_seconds) if economy != null else 0.0
 var trip_air_distance_km: float:
 	get:
 		return simulation.trip_air_distance_km
@@ -559,7 +557,6 @@ func regenerate_world(requested_seed: int = 0) -> void:
 	radar_measurement_lines.clear()
 	radar_pending_measure = null
 	radar_range_index = 0
-	clock_seconds = 12.0 * 60.0 * 60.0
 	time_scale_index = 0
 	cabin_sleeping = false
 	cabin_sleep_progress_seconds = 0.0
@@ -851,7 +848,7 @@ func _handle_economy_click(position: Vector2) -> void:
 			if economy.carried_item.get("type", "") == "parcel" and int(economy.carried_item.get("destination", -1)) == flight.airport_index:
 				if _economy_button_rect(row).has_point(position):
 					var delivery: Dictionary = economy.deliver_carried(flight.airport_index)
-					scene_notice = "Доставлено: +%d монет%s" % [delivery.paid, " • срочно" if delivery.urgent else ""]
+					scene_notice = "Доставлено: +%d монет" % delivery.paid
 					return
 				row += 1
 			var offers: Array = economy.offers_at(flight.airport_index)
@@ -865,9 +862,7 @@ func _handle_economy_click(position: Vector2) -> void:
 				scene_notice = "Еда куплена — отнесите её в самолёт" if economy.buy_food(flight.airport_index) else "Не хватает денег или руки заняты"
 		ViewMode.HOTEL:
 			if _economy_button_rect(0).has_point(position):
-				if economy.fatigue >= EconomyScript.NEED_SEGMENTS:
-					scene_notice = "Вы уже полностью отдохнули"
-				elif simulation.rest_at_hotel(flight, economy):
+				if simulation.rest_at_hotel(flight, economy):
 					scene_notice = "Отдых 20 минут • бодрость %d/6" % economy.fatigue
 				else:
 					scene_notice = "Не хватает денег"
@@ -1557,13 +1552,15 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 		return
 	var next_hovered_airport := _airport_hover_index(event.position) if not large_weather_radar else -1
 	var next_hovered_wind := _wind_arrow_hovered(event.position)
+	var next_hovered_measurement_line := navigation_map._measurement_line_index_at(event.position) if not large_weather_radar and map_rect().has_point(event.position) else -1
 	# Hide the fixed annotation while panning: the chart moves underneath it.
 	# It will be placed again on the next ordinary pointer motion.
 	var next_hovered_storm := navigation_map.weather_briefing_storm_at(event.position) if not map_drag_candidate and not dragging_map else -1
 	var storm_hover_changed := navigation_map.update_weather_storm_hover(next_hovered_storm, event.position)
-	if next_hovered_airport != hovered_airport_index or next_hovered_wind != hovered_wind_arrow or storm_hover_changed:
+	if next_hovered_airport != hovered_airport_index or next_hovered_wind != hovered_wind_arrow or next_hovered_measurement_line != navigation_map.hovered_measurement_line_index or storm_hover_changed:
 		hovered_airport_index = next_hovered_airport
 		hovered_wind_arrow = next_hovered_wind
+		navigation_map.hovered_measurement_line_index = next_hovered_measurement_line
 		_queue_map_redraw()
 	if point_drag_candidate and not dragging_measure_point and event.position.distance_to(map_press_position) >= 4.0:
 		dragging_measure_point = true
