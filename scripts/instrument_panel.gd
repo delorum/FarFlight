@@ -41,7 +41,6 @@ func _draw_panel() -> void:
 		if host.flight.wheel_brakes_applied:
 			host.draw_string(ThemeDB.fallback_font, speed_center + Vector2(-INSTRUMENT_RADIUS, INSTRUMENT_RADIUS + 47), "ТОРМОЗ", HORIZONTAL_ALIGNMENT_CENTER, INSTRUMENT_RADIUS * 2.0, 11, Color("ef645e"))
 		_draw_altimeter(_instrument_center(1, gauge_y), INSTRUMENT_RADIUS)
-		_draw_radio_altimeter(_instrument_center(1, gauge_y))
 		_draw_variometer(_instrument_center(2, gauge_y), INSTRUMENT_RADIUS)
 		_draw_compass(_instrument_center(3, gauge_y), INSTRUMENT_RADIUS)
 		_draw_horizon(_instrument_center(4, gauge_y), INSTRUMENT_RADIUS)
@@ -78,12 +77,6 @@ func _flight_message_color() -> Color:
 	if host.flight.state == FlightModelScript.State.LANDED and host.flight.message.begins_with("Успешная посадка"):
 		return Color("65d48c")
 	return Color("e8d274")
-
-func _draw_radio_altimeter(center: Vector2) -> void:
-	var height_m: float = host.flight.radio_height_m()
-	# Truncate the displayed reading so 99.9 m cannot appear as a red "100 м".
-	var label = "РВ %d м" % floori(height_m) if height_m >= 0.0 else "РВ —"
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(-INSTRUMENT_RADIUS, INSTRUMENT_RADIUS + 34), label, HORIZONTAL_ALIGNMENT_CENTER, INSTRUMENT_RADIUS * 2.0, 11, radio_altimeter_text_color(height_m))
 
 static func radio_altimeter_text_color(height_m: float) -> Color:
 	return Color("ef645e") if height_m >= 0.0 and height_m < 100.0 else Color("73d6d0")
@@ -188,15 +181,51 @@ func _draw_altimeter(center: Vector2, radius: float) -> void:
 	# makes almost the entire scale look recommended.
 	if host.flight.state == FlightModelScript.State.FLYING:
 		var economy_range := optimal_altitude_range()
-		var economy_start := _scale_angle(economy_range.x, 0.0, FlightModelScript.ABSOLUTE_CEILING_M)
-		var economy_end := _scale_angle(economy_range.y, 0.0, FlightModelScript.ABSOLUTE_CEILING_M)
-		host.draw_arc(center, radius - 5, economy_start, economy_end, 12, Color("63b9d1"), 4.5)
+		if economy_range.x <= economy_range.y:
+			var economy_start := _scale_angle(economy_range.x, 0.0, FlightModelScript.ABSOLUTE_CEILING_M)
+			var economy_end := _scale_angle(economy_range.y, 0.0, FlightModelScript.ABSOLUTE_CEILING_M)
+			host.draw_arc(center, radius - 5, economy_start, economy_end, 12, Color("63b9d1"), 4.5)
 	_draw_tick_scale(center, radius, 0.0, FlightModelScript.ABSOLUTE_CEILING_M, 50.0, 100.0)
+	var ground_altitude := radio_ground_altitude_m()
+	if ground_altitude >= 0.0:
+		var ground_angle := _scale_angle(ground_altitude, 0.0, FlightModelScript.ABSOLUTE_CEILING_M)
+		var ground_direction := Vector2(cos(ground_angle), sin(ground_angle))
+		host.draw_line(center + ground_direction * (radius - 16), center + ground_direction * (radius - 4), Color("ef645e"), 3.0, true)
 	var needle_angle := _scale_angle(host.flight.altitude_m, 0.0, FlightModelScript.ABSOLUTE_CEILING_M)
 	host.draw_line(center, center + Vector2(cos(needle_angle), sin(needle_angle)) * (radius - 15), Color("ed775f"), 2)
 	host.draw_circle(center, 3, Color("d8dfe0"))
 	host.draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ВЫСОТА", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "%.0f м" % host.flight.altitude_m, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 14, Color.WHITE)
+	_draw_altimeter_readouts(center, radius)
+
+func altimeter_readout_texts() -> Dictionary:
+	var radio_height: float = host.flight.radio_height_m()
+	var ground_altitude := radio_ground_altitude_m()
+	return {
+		"barometric": "%d м" % roundi(host.flight.altitude_m),
+		# Truncate so 99.9 m cannot appear as a red "РВ 100 м".
+		"radio": "РВ %d м" % floori(radio_height) if radio_height >= 0.0 else "РВ —",
+		"ground": "ЗЕМ %d м" % roundi(ground_altitude) if ground_altitude >= 0.0 else "ЗЕМ —",
+		"radio_height": radio_height,
+		"ground_altitude": ground_altitude,
+	}
+
+func _draw_altimeter_readouts(center: Vector2, radius: float) -> void:
+	var readouts := altimeter_readout_texts()
+	var font := ThemeDB.fallback_font
+	var first_font_size := 14
+	host.draw_string(font, center + Vector2(-radius, radius + 17.0), readouts.barometric, HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0, first_font_size, Color.WHITE)
+	var second_font_size := 11
+	var separator := " • "
+	var radio_width: float = font.get_string_size(readouts.radio, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size).x
+	var separator_width: float = font.get_string_size(separator, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size).x
+	var ground_width: float = font.get_string_size(readouts.ground, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size).x
+	var x := center.x - (radio_width + separator_width + ground_width) * 0.5
+	var second_baseline := center.y + radius + 34.0
+	host.draw_string(font, Vector2(x, second_baseline), readouts.radio, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size, radio_altimeter_text_color(float(readouts.radio_height)))
+	x += radio_width
+	host.draw_string(font, Vector2(x, second_baseline), separator, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size, Color("7d8b91"))
+	x += separator_width
+	host.draw_string(font, Vector2(x, second_baseline), readouts.ground, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size, Color("73d6d0"))
 
 func optimal_altitude_range(force_refresh := false) -> Vector2:
 	_refresh_economy_range_cache(force_refresh)
@@ -204,15 +233,19 @@ func optimal_altitude_range(force_refresh := false) -> Vector2:
 
 func _calculate_optimal_altitude_range() -> Vector2:
 	const STEP_M := 10.0
+	var minimum_safe_altitude := recommended_altitude_floor_m()
+	var first_altitude := ceilf(minimum_safe_altitude / STEP_M) * STEP_M
+	if first_altitude > FlightModelScript.ABSOLUTE_CEILING_M:
+		return Vector2(INF, -INF)
 	var track_deg := _economy_track_deg()
 	var track_forward: Vector2 = host.world.heading_vector(track_deg)
 	var track_right := Vector2(track_forward.y, -track_forward.x)
 	var scores: PackedFloat32Array = []
 	var best_score := -INF
 	var best_index := 0
-	var sample_count := floori(FlightModelScript.ABSOLUTE_CEILING_M / STEP_M) + 1
+	var sample_count := floori((FlightModelScript.ABSOLUTE_CEILING_M - first_altitude) / STEP_M) + 1
 	for sample_index in sample_count:
-		var altitude := sample_index * STEP_M
+		var altitude := first_altitude + sample_index * STEP_M
 		var score := -INF
 		for airspeed in range(ceili(FlightModelScript.NOMINAL_STALL_SPEED_KMH + 15.0), floori(FlightModelScript.VNO_KMH) + 1):
 			score = maxf(score, _economy_range_score(airspeed, altitude, track_forward, track_right))
@@ -220,7 +253,17 @@ func _calculate_optimal_altitude_range() -> Vector2:
 		if score > best_score:
 			best_score = score
 			best_index = sample_index
-	return _near_optimal_range(scores, best_index, best_score, 0.0, STEP_M)
+	return _near_optimal_range(scores, best_index, best_score, first_altitude, STEP_M)
+
+func radio_ground_altitude_m() -> float:
+	var radio_height: float = host.flight.radio_height_m()
+	if radio_height < 0.0:
+		return -1.0
+	return clampf(host.flight.altitude_m - radio_height, 0.0, FlightModelScript.ABSOLUTE_CEILING_M)
+
+func recommended_altitude_floor_m() -> float:
+	var ground_altitude := radio_ground_altitude_m()
+	return ground_altitude + 50.0 if ground_altitude >= 0.0 else 0.0
 
 func optimal_speed_range(force_refresh := false) -> Vector2:
 	_refresh_economy_range_cache(force_refresh)
@@ -257,6 +300,7 @@ func _refresh_economy_range_cache(force_refresh := false) -> void:
 		roundi(host.flight.heading_deg / 2.0),
 		roundi(host.flight.speed_kmh / 2.0),
 		roundi(host.flight.altitude_m / 5.0),
+		roundi(recommended_altitude_floor_m() / 5.0),
 		host.world.wind_layers,
 	])
 	if _economy_cache_valid and not force_refresh and signature == _economy_cache_signature:

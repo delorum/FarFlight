@@ -102,6 +102,36 @@ func _run() -> void:
 	scene.flight.heading_deg = 180.0
 	var southbound_optimum: Vector2 = scene.instrument_panel.optimal_altitude_range(true)
 	assert((northbound_optimum.x + northbound_optimum.y) * 0.5 > (southbound_optimum.x + southbound_optimum.y) * 0.5 + 100.0, "Optimal-altitude band must move towards the layer with the favourable along-track wind")
+	var position_before_terrain_test: Vector2 = scene.flight.position_km
+	var power_before_terrain_test: bool = scene.flight.electrical_power
+	var terrain_point := Vector2.ZERO
+	var terrain_height := -1.0
+	for y in range(0, 201, 2):
+		for x in range(0, 201, 2):
+			var candidate_height: float = scene.world.height_at(Vector2(x, y))
+			if candidate_height >= 300.0 and candidate_height <= 600.0:
+				terrain_point = Vector2(x, y)
+				terrain_height = candidate_height
+				break
+		if terrain_height >= 0.0:
+			break
+	assert(terrain_height >= 0.0, "Test world must contain reachable elevated terrain")
+	scene.flight.electrical_power = true
+	scene.flight.position_km = terrain_point
+	scene.flight.altitude_m = terrain_height + 40.0
+	assert(is_equal_approx(scene.instrument_panel.radio_ground_altitude_m(), terrain_height), "Altimeter ground mark must convert radio height into absolute terrain altitude")
+	var altitude_readouts: Dictionary = scene.instrument_panel.altimeter_readout_texts()
+	assert(altitude_readouts.barometric == "%d м" % roundi(scene.flight.altitude_m), "The first altimeter line must show the uncluttered barometric altitude")
+	assert(altitude_readouts.radio == "РВ %d м" % floori(scene.flight.radio_height_m()), "The second altimeter line must include the abbreviated radio height")
+	assert(altitude_readouts.ground == "ЗЕМ %d м" % roundi(terrain_height), "The second altimeter line must include absolute terrain altitude")
+	var terrain_safe_optimum: Vector2 = scene.instrument_panel.optimal_altitude_range(true)
+	assert(terrain_safe_optimum.x > terrain_safe_optimum.y or terrain_safe_optimum.x >= terrain_height + 50.0, "Recommended altitude band must stay at least 50 m above the radio-altimeter ground mark")
+	scene.flight.electrical_power = false
+	assert(scene.instrument_panel.radio_ground_altitude_m() < 0.0 and is_zero_approx(scene.instrument_panel.recommended_altitude_floor_m()), "Unpowered radio altimeter must expose neither a ground mark nor a terrain floor")
+	altitude_readouts = scene.instrument_panel.altimeter_readout_texts()
+	assert(altitude_readouts.radio == "РВ —" and altitude_readouts.ground == "ЗЕМ —", "Unavailable radio data must not leave a stale height or terrain reading")
+	scene.flight.position_km = position_before_terrain_test
+	scene.flight.electrical_power = power_before_terrain_test
 	scene.flight.heading_deg = 0.0
 	scene.flight.altitude_m = 250.0
 	for layer in scene.world.wind_layers:

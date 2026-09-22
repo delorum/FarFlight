@@ -343,23 +343,30 @@ func _draw_map() -> void:
 
 func _draw_hovered_airport_services(rect: Rect2) -> void:
 	var mouse = host.get_local_mouse_position()
-	if not rect.has_point(mouse):
-		return
-	var text := measurement_line_description_at(mouse)
-	# A storm has its own local arrow and label, like the weather radar, so do
-	# not repeat the same information in the map-wide footer.
-	if text.is_empty() and weather_briefing_storm_at(mouse) >= 0:
-		return
-	if text.is_empty():
-		var index := _airport_hover_index(mouse)
-		if _wind_arrow_hovered(mouse):
-			text = "Ветер: " + _wind_arrow_description()
-		elif index >= 0:
-			var airport: Dictionary = host.world.airports[index]
-			text = "%s: %s" % [airport.name, ", ".join(host.economy.services_at(index))]
+	var text := map_footer_text_at(mouse)
 	if not text.is_empty():
 		map_canvas.draw_rect(Rect2(rect.position.x + 8, rect.end.y - 47, minf(520.0, rect.size.x - 16), 25), Color("d7d0ad"), true)
 		map_canvas.draw_string(ThemeDB.fallback_font, Vector2(rect.position.x + 14, rect.end.y - 29), text, HORIZONTAL_ALIGNMENT_LEFT, minf(508.0, rect.size.x - 28), 12, Color("35372e"))
+
+func map_footer_text_at(screen_position: Vector2) -> String:
+	if large_weather_radar or not map_rect().has_point(screen_position):
+		return ""
+	# Airports remain interactive through the translucent weather layer. Give
+	# them priority over storms and lines that happen to cross the same point.
+	var airport_index := _airport_hover_index(screen_position)
+	if airport_index >= 0:
+		var airport: Dictionary = host.world.airports[airport_index]
+		return "%s: %s" % [airport.name, ", ".join(host.economy.services_at(airport_index))]
+	var line_text := measurement_line_description_at(screen_position)
+	if not line_text.is_empty():
+		return line_text
+	# A storm already has its local arrow and label, so do not repeat it in the
+	# footer or let a wind arrow underneath replace that local annotation.
+	if weather_briefing_storm_at(screen_position) >= 0:
+		return ""
+	if _wind_arrow_hovered(screen_position):
+		return "Ветер: " + _wind_arrow_description()
+	return ""
 
 func measurement_line_description_at(screen_position: Vector2) -> String:
 	if large_weather_radar or not map_rect().has_point(screen_position):

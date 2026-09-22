@@ -60,6 +60,19 @@ func _run() -> void:
 	check(scene.navigation_map.weather_briefing_storm_at(storm_screen) == -1, "Hidden map storms must not retain hover interaction")
 	scene.navigation_map.toggle_weather_briefing()
 	var airport: Dictionary = scene.world.airports[0]
+	scene.map_center = Vector2(airport.position)
+	scene.map_zoom = 8.0
+	var airport_screen: Vector2 = scene.world_to_screen(airport.position)
+	scene.navigation_map.weather_briefing_storms.append({
+		"center": Vector2(airport.position),
+		"radius_km": 5.0,
+		"intensity": 1.0,
+		"drift_kmh": Vector2(12.0, 4.0),
+		"radar_lobes": [{"offset_km": Vector2.ZERO, "radius_scale": 1.0, "strength": 1.0}],
+	})
+	check(scene.navigation_map.weather_briefing_storm_at(airport_screen) >= 0, "Regression setup must cover the airport with a mapped storm")
+	var covered_airport_text: String = scene.navigation_map.map_footer_text_at(airport_screen)
+	check(covered_airport_text.begins_with(String(airport.name) + ":") and covered_airport_text.contains("почта"), "An airport covered by a storm must still show its name and services in the map footer")
 	var capture_boundary: Dictionary = scene.navigation_map.ils_capture_boundary(airport, 1.0)
 	var capture_arc: PackedVector2Array = capture_boundary.arc
 	var capture_forward: Vector2 = scene.world.heading_vector(airport.heading)
