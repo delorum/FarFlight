@@ -176,6 +176,7 @@ func _draw_speedometer(center: Vector2, radius: float) -> void:
 func _draw_altimeter(center: Vector2, radius: float) -> void:
 	host.draw_circle(center, radius, Color("0a0e10"))
 	host.draw_arc(center, radius - 2, 0, TAU, 48, Color("7d8b91"), 2)
+	var ground_altitude := radio_ground_altitude_m()
 	# A wind-optimal altitude only has meaning after takeoff, when there is an
 	# actual ground track. On the apron the broad near-equal range otherwise
 	# makes almost the entire scale look recommended.
@@ -185,8 +186,12 @@ func _draw_altimeter(center: Vector2, radius: float) -> void:
 			var economy_start := _scale_angle(economy_range.x, 0.0, FlightModelScript.ABSOLUTE_CEILING_M)
 			var economy_end := _scale_angle(economy_range.y, 0.0, FlightModelScript.ABSOLUTE_CEILING_M)
 			host.draw_arc(center, radius - 5, economy_start, economy_end, 12, Color("63b9d1"), 4.5)
+	var warning_range := low_altitude_warning_range()
+	if warning_range.x <= warning_range.y:
+		var warning_start := _scale_angle(warning_range.x, 0.0, FlightModelScript.ABSOLUTE_CEILING_M)
+		var warning_end := _scale_angle(warning_range.y, 0.0, FlightModelScript.ABSOLUTE_CEILING_M)
+		host.draw_arc(center, radius - 5, warning_start, warning_end, 12, Color("ef645e"), 4.5)
 	_draw_tick_scale(center, radius, 0.0, FlightModelScript.ABSOLUTE_CEILING_M, 50.0, 100.0)
-	var ground_altitude := radio_ground_altitude_m()
 	if ground_altitude >= 0.0:
 		var ground_angle := _scale_angle(ground_altitude, 0.0, FlightModelScript.ABSOLUTE_CEILING_M)
 		var ground_direction := Vector2(cos(ground_angle), sin(ground_angle))
@@ -209,6 +214,12 @@ func altimeter_readout_texts() -> Dictionary:
 		"ground_altitude": ground_altitude,
 	}
 
+func low_altitude_warning_range() -> Vector2:
+	var ground_altitude := radio_ground_altitude_m()
+	if ground_altitude < 0.0:
+		return Vector2(INF, -INF)
+	return Vector2(ground_altitude, minf(ground_altitude + 100.0, FlightModelScript.ABSOLUTE_CEILING_M))
+
 func _draw_altimeter_readouts(center: Vector2, radius: float) -> void:
 	var readouts := altimeter_readout_texts()
 	var font := ThemeDB.fallback_font
@@ -221,11 +232,12 @@ func _draw_altimeter_readouts(center: Vector2, radius: float) -> void:
 	var ground_width: float = font.get_string_size(readouts.ground, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size).x
 	var x := center.x - (radio_width + separator_width + ground_width) * 0.5
 	var second_baseline := center.y + radius + 34.0
-	host.draw_string(font, Vector2(x, second_baseline), readouts.radio, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size, radio_altimeter_text_color(float(readouts.radio_height)))
+	var second_line_color := radio_altimeter_text_color(float(readouts.radio_height))
+	host.draw_string(font, Vector2(x, second_baseline), readouts.radio, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size, second_line_color)
 	x += radio_width
-	host.draw_string(font, Vector2(x, second_baseline), separator, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size, Color("7d8b91"))
+	host.draw_string(font, Vector2(x, second_baseline), separator, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size, second_line_color)
 	x += separator_width
-	host.draw_string(font, Vector2(x, second_baseline), readouts.ground, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size, Color("73d6d0"))
+	host.draw_string(font, Vector2(x, second_baseline), readouts.ground, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size, second_line_color)
 
 func optimal_altitude_range(force_refresh := false) -> Vector2:
 	_refresh_economy_range_cache(force_refresh)

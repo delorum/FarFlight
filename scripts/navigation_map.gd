@@ -7,6 +7,8 @@ const MAP_MARGIN = UILayout.MAP_MARGIN
 const PANEL_HEIGHT = UILayout.PANEL_HEIGHT
 const RADAR_RANGES_KM := [30.0, 20.0, 10.0, 5.0]
 const RADAR_ANNOTATION_RETENTION_KM := 30.0
+const RADAR_COURSE_LINE_LENGTH_KM := 30.0
+const RADAR_AIRCRAFT_CLICK_RADIUS_PX := 16.0
 const WeatherRadarArt = preload("res://scripts/weather_radar_art.gd")
 const FlightWorldScript = preload("res://scripts/world.gd")
 const FlightModelScript = preload("res://scripts/flight_model.gd")
@@ -148,6 +150,7 @@ func _draw_map_on(canvas: Control) -> void:
 		WeatherRadarArt.draw_storm_motion(canvas, map_rect(), host.world, host.flight, host.get_local_mouse_position(), RADAR_RANGES_KM[radar_range_index])
 		if host.flight.electrical_power:
 			_draw_radar_measurements(canvas)
+			_draw_radar_course_guidance(canvas)
 		host._draw_economy_hud(canvas, false)
 	else:
 		_draw_map()
@@ -156,6 +159,8 @@ func _draw_map_on(canvas: Control) -> void:
 func _toggle_weather_radar() -> void:
 	host.weather_radar_cache.invalidate()
 	large_weather_radar = not large_weather_radar
+	if large_weather_radar:
+		_normalize_radar_course_line()
 	update_weather_storm_hover(-1, Vector2.ZERO)
 	# Preserve map camera, finished marks and a pending line, but stop gestures.
 	dragging_map = false
@@ -189,8 +194,83 @@ func _clamp_measurement_screen(point: Vector2) -> Vector2:
 func _draw_radar_measurements(canvas: CanvasItem) -> void:
 	for line in radar_measurement_lines:
 		_draw_radar_measurement(canvas, line.a, line.b, Color("e8d274"))
-	if radar_pending_measure != null:
-		_draw_radar_measurement(canvas, radar_pending_measure, _snap_map_point(_clamp_measurement_screen(host.get_local_mouse_position())), Color("b9c9ce"))
+
+func _draw_radar_course_guidance(canvas: CanvasItem) -> void:
+	var guidance := radar_course_guidance()
+	if guidance.is_empty():
+		return
+	var rect := map_rect()
+	var center := WeatherRadarArt.scope_center(rect)
+	var radius := WeatherRadarArt.scope_radius(rect)
+	var origin := Vector2(center.x + radius + 27.0, center.y - 10.0)
+	var lateral_text := "⊥ %s %.1f км" % [_signed_direction_symbol(float(guidance.lateral_km)), absf(float(guidance.lateral_km))]
+	var course_text := "ΔК %s %03d°" % [_signed_direction_symbol(float(guidance.course_error_deg)), roundi(absf(float(guidance.course_error_deg)))]
+	canvas.draw_string(ThemeDB.fallback_font, origin, lateral_text, HORIZONTAL_ALIGNMENT_LEFT, 190.0, 14, _guidance_color(absf(float(guidance.lateral_km)), 0.1, 1.0))
+	canvas.draw_string(ThemeDB.fallback_font, origin + Vector2(0.0, 23.0), course_text, HORIZONTAL_ALIGNMENT_LEFT, 190.0, 14, _guidance_color(absf(float(guidance.course_error_deg)), 1.0, 5.0))
+
+func _signed_direction_symbol(value: float) -> String:
+	if absf(value) < 0.05:
+		return "•"
+	return "→" if value > 0.0 else "←"
+
+func _guidance_color(value: float, precise_limit: float, caution_limit: float) -> Color:
+	if value <= precise_limit:
+		return Color("65d48c")
+	if value <= caution_limit:
+		return Color("e8d274")
+	return Color("ef645e")
+
+func radar_course_guidance() -> Dictionary:
+	if radar_measurement_lines.is_empty():
+		return {}
+	var line: Dictionary = radar_measurement_lines[0]
+	var direction := Vector2(line.b) - Vector2(line.a)
+	if direction.length_squared() < 0.000001:
+		return {}
+	direction = direction.normalized()
+	var right := Vector2(-direction.y, direction.x)
+	var lateral_km: float = (host.flight.position_km - Vector2(line.a)).dot(right)
+	var line_course_deg: float = host.world.vector_heading(direction)
+	var current_course_deg := _current_ground_track_deg()
+	return {
+		"lateral_km": lateral_km,
+		"course_error_deg": wrapf(current_course_deg - line_course_deg, -180.0, 180.0),
+		"line_course_deg": line_course_deg,
+		"current_course_deg": current_course_deg,
+	}
+
+func _current_ground_track_deg() -> float:
+	var ground_velocity: Vector2 = host.world.heading_vector(host.flight.heading_deg) * host.flight.speed_kmh + host.flight.current_wind_kmh
+	return host.world.vector_heading(ground_velocity) if ground_velocity.length_squared() > 0.0001 else host.flight.heading_deg
+
+func _create_radar_course_line() -> bool:
+	if not radar_measurement_lines.is_empty():
+		return false
+	var start: Vector2 = host.flight.position_km
+	var course_deg := _current_ground_track_deg()
+	var finish: Vector2 = start + host.world.heading_vector(course_deg) * RADAR_COURSE_LINE_LENGTH_KM
+	radar_measurement_lines.append({
+		"a": start,
+		"b": finish,
+		"max_height_m": -1.0,
+		"course_reference": true,
+	})
+	radar_pending_measure = null
+	_queue_map_redraw()
+	return true
+
+func _normalize_radar_course_line() -> void:
+	var changed := radar_pending_measure != null
+	radar_pending_measure = null
+	for index in range(radar_measurement_lines.size() - 1, -1, -1):
+		if not bool(radar_measurement_lines[index].get("course_reference", false)):
+			radar_measurement_lines.remove_at(index)
+			changed = true
+	while radar_measurement_lines.size() > 1:
+		radar_measurement_lines.remove_at(radar_measurement_lines.size() - 1)
+		changed = true
+	if changed:
+		_queue_map_redraw()
 
 func _draw_radar_measurement(canvas: CanvasItem, a_world: Vector2, b_world: Vector2, color: Color, center := Vector2.INF, radius := -1.0) -> void:
 	var range_km = WeatherRadarArt.RANGE_KM
@@ -208,6 +288,7 @@ func _draw_radar_measurement(canvas: CanvasItem, a_world: Vector2, b_world: Vect
 			canvas.draw_circle(point, 3.5 if radius > 50.0 else 1.3, color)
 
 func update_dynamic_annotations(delta: float) -> void:
+	_normalize_radar_course_line()
 	_prune_distant_radar_measurements()
 	var current_briefing_minute := floori(weather_briefing_age_seconds() / 60.0)
 	if current_briefing_minute != weather_briefing_age_minute:
@@ -245,31 +326,15 @@ func _handle_radar_mouse_button(event: InputEventMouseButton) -> void:
 		_queue_map_redraw()
 		return
 	if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed and inside:
-		if radar_pending_measure != null:
-			radar_pending_measure = null
-		else:
-			_erase_nearest_measurement(event.position)
-	elif event.button_index == MOUSE_BUTTON_LEFT:
-		if event.pressed and inside:
-			map_press_position = event.position
-			if radar_pending_measure == null:
-				dragged_measure_connections = _find_measure_connections(event.position)
-			else:
-				dragged_measure_connections.clear()
-			point_drag_candidate = not dragged_measure_connections.is_empty()
-			map_drag_candidate = not point_drag_candidate
-		elif not event.pressed:
-			if dragging_measure_point:
-				_snap_dragged_measure_point_to_endpoint(_clamp_measurement_screen(event.position))
-				_refresh_measurement_max_heights(dragged_measure_connections)
-			elif inside and (map_drag_candidate or point_drag_candidate):
-				_handle_map_click(event.position)
-			map_drag_candidate = false
-			point_drag_candidate = false
-			dragging_measure_point = false
-			dragged_measure_connections.clear()
-			host.dragging_throttle = false
-			host.dragging_yoke = false
+		_erase_nearest_measurement(event.position)
+	elif event.button_index == MOUSE_BUTTON_LEFT and event.pressed and inside:
+		var aircraft_center := WeatherRadarArt.scope_center(map_rect())
+		if event.position.distance_to(aircraft_center) <= RADAR_AIRCRAFT_CLICK_RADIUS_PX:
+			_create_radar_course_line()
+	map_drag_candidate = false
+	point_drag_candidate = false
+	dragging_measure_point = false
+	dragged_measure_connections.clear()
 	_queue_map_redraw()
 
 func _queue_map_redraw() -> void:

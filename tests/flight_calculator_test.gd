@@ -124,12 +124,16 @@ func _run() -> void:
 	assert(altitude_readouts.barometric == "%d м" % roundi(scene.flight.altitude_m), "The first altimeter line must show the uncluttered barometric altitude")
 	assert(altitude_readouts.radio == "РВ %d м" % floori(scene.flight.radio_height_m()), "The second altimeter line must include the abbreviated radio height")
 	assert(altitude_readouts.ground == "ЗЕМ %d м" % roundi(terrain_height), "The second altimeter line must include absolute terrain altitude")
+	var low_altitude_warning: Vector2 = scene.instrument_panel.low_altitude_warning_range()
+	assert(is_equal_approx(low_altitude_warning.x, terrain_height) and is_equal_approx(low_altitude_warning.y, terrain_height + 100.0), "The red altimeter band must cover the first 100 m above the moving terrain mark")
 	var terrain_safe_optimum: Vector2 = scene.instrument_panel.optimal_altitude_range(true)
 	assert(terrain_safe_optimum.x > terrain_safe_optimum.y or terrain_safe_optimum.x >= terrain_height + 50.0, "Recommended altitude band must stay at least 50 m above the radio-altimeter ground mark")
 	scene.flight.electrical_power = false
 	assert(scene.instrument_panel.radio_ground_altitude_m() < 0.0 and is_zero_approx(scene.instrument_panel.recommended_altitude_floor_m()), "Unpowered radio altimeter must expose neither a ground mark nor a terrain floor")
 	altitude_readouts = scene.instrument_panel.altimeter_readout_texts()
 	assert(altitude_readouts.radio == "РВ —" and altitude_readouts.ground == "ЗЕМ —", "Unavailable radio data must not leave a stale height or terrain reading")
+	low_altitude_warning = scene.instrument_panel.low_altitude_warning_range()
+	assert(low_altitude_warning.x > low_altitude_warning.y, "The low-altitude band must disappear when radio-altimeter data is unavailable")
 	scene.flight.position_km = position_before_terrain_test
 	scene.flight.electrical_power = power_before_terrain_test
 	scene.flight.heading_deg = 0.0

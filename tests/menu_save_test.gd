@@ -84,9 +84,9 @@ func _run() -> void:
 	game.cabin_sleeping = true
 	game.cabin_sleep_progress_seconds = 777.0
 	game.measurement_lines.append({"a":Vector2(20,30),"b":Vector2(40,50),"max_height_m":500.0})
-	game.radar_measurement_lines.append({"a":Vector2(50,50),"b":Vector2(52,48),"max_height_m":-1.0})
+	game.radar_measurement_lines.append({"a":Vector2(50,50),"b":Vector2(50,20),"max_height_m":-1.0,"course_reference":true})
 	game.pending_measure = Vector2(23,31)
-	game.radar_pending_measure = Vector2(49,51)
+	game.radar_pending_measure = null
 	game.radar_range_index = 2
 	game.final_trajectory_visible = false
 	game.navigation_map.weather_briefing_visible = false
@@ -167,7 +167,7 @@ func _run() -> void:
 	check(loaded.measurement_lines == game.measurement_lines and loaded.radar_measurement_lines == game.radar_measurement_lines, "Both independent annotation sets must survive loading")
 	check(not loaded.final_trajectory_visible, "The final-trajectory visibility choice must survive loading")
 	check(loaded.navigation_map.weather_briefing_snapshot() == briefing_before_save, "Weather briefing marks, age origin and visibility must survive loading")
-	check(loaded.pending_measure == game.pending_measure and loaded.radar_pending_measure == game.radar_pending_measure, "Unfinished annotations must survive loading")
+	check(loaded.pending_measure == game.pending_measure and loaded.radar_pending_measure == null, "The unfinished map annotation must survive while radar course lines remain complete")
 	check(loaded.view_mode == game.ViewMode.CABIN and loaded.cabin_terrain_zoom == 2, "Side scene and zoom must survive loading")
 	check(is_equal_approx(loaded.scene_player_x,game.scene_player_x), "Cabin character position must survive loading")
 	check(loaded.clock_seconds == clock_before and loaded.receiver_frequencies == [333,377], "Time and radio tuning must survive loading")
