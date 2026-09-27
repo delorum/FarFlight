@@ -1,5 +1,6 @@
 extends Control
 const UILayout = preload("res://scripts/ui_layout.gd")
+const Localization = preload("res://scripts/localization.gd")
 
 const SideScenes = preload("res://scripts/side_scenes.gd")
 var side_scenes := SideScenes.new(self)
@@ -309,6 +310,7 @@ var weather_radar_cache: Node
 var crash_overlay: PanelContainer
 var crash_description: Label
 var crash_title: Label
+var crash_map_button: Button
 var selected_inventory_slot: int:
 	get:
 		return side_scenes.selected_inventory_slot
@@ -714,7 +716,7 @@ func _build_crash_overlay() -> void:
 	layout.add_theme_constant_override("separation",16)
 	margin.add_child(layout)
 	crash_title = Label.new()
-	crash_title.text = "ПОЛЁТ ЗАВЕРШЁН — КРУШЕНИЕ"
+	crash_title.text = Localization.text("ПОЛЁТ ЗАВЕРШЁН — КРУШЕНИЕ")
 	crash_title.add_theme_color_override("font_color",Color("a83f38"))
 	crash_title.add_theme_font_size_override("font_size",22)
 	layout.add_child(crash_title)
@@ -723,10 +725,10 @@ func _build_crash_overlay() -> void:
 	crash_description.custom_minimum_size = Vector2(600,90)
 	crash_description.add_theme_color_override("font_color",Color("694b30"))
 	layout.add_child(crash_description)
-	var map_button := Button.new()
-	map_button.text = "ПОКАЗАТЬ ТРАЕКТОРИЮ [ENTER]"
-	map_button.pressed.connect(_show_crash_map)
-	layout.add_child(map_button)
+	crash_map_button = Button.new()
+	crash_map_button.text = Localization.text("ПОКАЗАТЬ ТРАЕКТОРИЮ [ENTER]")
+	crash_map_button.pressed.connect(_show_crash_map)
+	layout.add_child(crash_map_button)
 	resized.connect(_update_crash_overlay)
 
 func _update_crash_overlay() -> void:
@@ -737,9 +739,9 @@ func _update_crash_overlay() -> void:
 	if not crash_overlay.visible:
 		return
 	var overlay_width := minf(760,size.x-40)
-	crash_title.text = "ИГРА ОКОНЧЕНА" if needs_death else "ПОЛЁТ ЗАВЕРШЁН — КРУШЕНИЕ"
+	crash_title.text = Localization.text("ИГРА ОКОНЧЕНА" if needs_death else "ПОЛЁТ ЗАВЕРШЁН — КРУШЕНИЕ")
 	crash_description.custom_minimum_size.x = overlay_width-44
-	crash_description.text = ("Самолёт находился в сваливании.\n" if flight.stalled else "")+flight.message
+	crash_description.text = (Localization.text("Самолёт находился в сваливании.\n") if flight.stalled else "") + Localization.text(flight.message)
 	crash_overlay.size = Vector2(overlay_width,280)
 	crash_overlay.position = (size-crash_overlay.size)*0.5
 
@@ -857,9 +859,16 @@ func _handle_economy_click(position: Vector2) -> void:
 					var parcel: Dictionary = economy.accept_offer(flight.airport_index, index)
 					scene_notice = "Посылка получена — отнесите её в самолёт" if not parcel.is_empty() else "Сначала освободите руки"
 					return
-		ViewMode.SHOP:
+		ViewMode.CAFE:
 			if _economy_button_rect(0).has_point(position):
 				scene_notice = "Еда куплена — отнесите её в самолёт" if economy.buy_food(flight.airport_index) else "Не хватает денег или руки заняты"
+			elif _economy_button_rect(1).has_point(position):
+				if economy.hunger >= EconomyScript.NEED_SEGMENTS:
+					scene_notice = "Вы не голодны"
+				elif economy.buy_and_eat_at_cafe(flight.airport_index):
+					scene_notice = "Еда съедена • сытость %d/%d" % [economy.hunger, EconomyScript.NEED_SEGMENTS]
+				else:
+					scene_notice = "Не хватает денег"
 		ViewMode.HOTEL:
 			if _economy_button_rect(0).has_point(position):
 				if simulation.rest_at_hotel(flight, economy):
@@ -1170,7 +1179,7 @@ func _draw() -> void:
 			_draw_operations_scene()
 		ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY:
 			side_scenes._draw_flight_history_scene()
-		ViewMode.MAIL, ViewMode.SHOP, ViewMode.HOTEL, ViewMode.FUEL, ViewMode.REPAIR:
+		ViewMode.MAIL, ViewMode.CAFE, ViewMode.HOTEL, ViewMode.FUEL, ViewMode.REPAIR:
 			_draw_economy_scene()
 	if view_mode != ViewMode.COCKPIT:
 		_draw_economy_hud(self, false)
@@ -1181,7 +1190,22 @@ func _draw() -> void:
 func _draw_side_scene_pause_indicator() -> void:
 	if not simulation_paused:
 		return
-	draw_string(ThemeDB.fallback_font, Vector2(0, 44), "ПАУЗА", HORIZONTAL_ALIGNMENT_CENTER, size.x, 16, AircraftArt.INK)
+	draw_localized_string(ThemeDB.fallback_font, Vector2(0, 44), "ПАУЗА", HORIZONTAL_ALIGNMENT_CENTER, size.x, 16, AircraftArt.INK)
+
+func draw_localized_string(font: Font, position: Vector2, value: Variant,
+		alignment := HORIZONTAL_ALIGNMENT_LEFT, width := -1.0, font_size := 16,
+		modulate := Color.WHITE) -> void:
+	draw_string(font, position, Localization.text(value), alignment, width, font_size, modulate)
+
+func localization_changed() -> void:
+	if flight_calculator != null and flight_calculator.has_method("refresh_localization"):
+		flight_calculator.refresh_localization()
+	if crash_map_button != null:
+		crash_map_button.text = Localization.text("ПОКАЗАТЬ ТРАЕКТОРИЮ [ENTER]")
+	_update_crash_overlay()
+	weather_radar_cache.invalidate()
+	navigation_map._queue_map_redraw()
+	queue_redraw()
 
 func _draw_economy_hud(canvas: CanvasItem, dark: bool) -> void:
 	if economy == null:
@@ -1191,8 +1215,8 @@ func _draw_economy_hud(canvas: CanvasItem, dark: bool) -> void:
 	if view_mode != ViewMode.COCKPIT:
 		var label_width := 82.0
 		var value_x := x + 94.0
-		canvas.draw_string(ThemeDB.fallback_font, Vector2(x, 30), "Деньги", HORIZONTAL_ALIGNMENT_LEFT, label_width, 12, color)
-		canvas.draw_string(ThemeDB.fallback_font, Vector2(value_x, 30), str(economy.money), HORIZONTAL_ALIGNMENT_LEFT, 58, 12, color)
+		Localization.draw_string(canvas, ThemeDB.fallback_font, Vector2(x, 30), "Деньги", HORIZONTAL_ALIGNMENT_LEFT, label_width, 12, color)
+		Localization.draw_string(canvas, ThemeDB.fallback_font, Vector2(value_x, 30), str(economy.money), HORIZONTAL_ALIGNMENT_LEFT, 58, 12, color)
 		var rows := [
 			["Сытость", _need_bar(economy.hunger)],
 			["Бодрость", _need_bar(economy.fatigue)],
@@ -1200,8 +1224,8 @@ func _draw_economy_hud(canvas: CanvasItem, dark: bool) -> void:
 		]
 		for row_index in rows.size():
 			var baseline_y := 50.0 + row_index * 18.0
-			canvas.draw_string(ThemeDB.fallback_font, Vector2(x, baseline_y), rows[row_index][0], HORIZONTAL_ALIGNMENT_LEFT, label_width, 12, color)
-			canvas.draw_string(ThemeDB.fallback_font, Vector2(value_x, baseline_y), rows[row_index][1], HORIZONTAL_ALIGNMENT_LEFT, 126, 12, color)
+			Localization.draw_string(canvas, ThemeDB.fallback_font, Vector2(x, baseline_y), rows[row_index][0], HORIZONTAL_ALIGNMENT_LEFT, label_width, 12, color)
+			Localization.draw_string(canvas, ThemeDB.fallback_font, Vector2(value_x, baseline_y), rows[row_index][1], HORIZONTAL_ALIGNMENT_LEFT, 126, 12, color)
 
 func _airframe_condition_status() -> Dictionary:
 	if flight.airframe_condition >= 65.0:
@@ -1214,7 +1238,7 @@ func _draw_airframe_condition_indicator(canvas: CanvasItem, position: Vector2, d
 	var status: Dictionary = _airframe_condition_status()
 	var status_color: Color = status.color
 	var text_color: Color = status_color.lightened(0.2) if dark else status_color
-	canvas.draw_string(ThemeDB.fallback_font, position + Vector2(0, 11), _airframe_indicator_text(), HORIZONTAL_ALIGNMENT_LEFT, 410, 11, text_color)
+	Localization.draw_string(canvas, ThemeDB.fallback_font, position + Vector2(0, 11), _airframe_indicator_text(), HORIZONTAL_ALIGNMENT_LEFT, 410, 11, text_color)
 
 func _airframe_indicator_text() -> String:
 	var wear_per_minute: float = flight.airframe_wear_per_hour() / 60.0
@@ -1448,7 +1472,7 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		if event is InputEventMouseButton:
 			side_scenes.handle_history_mouse(event)
 		return
-	if view_mode in [ViewMode.MAIL, ViewMode.SHOP, ViewMode.HOTEL, ViewMode.FUEL, ViewMode.REPAIR]:
+	if view_mode in [ViewMode.MAIL, ViewMode.CAFE, ViewMode.HOTEL, ViewMode.FUEL, ViewMode.REPAIR]:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			_handle_economy_click(event.position)
 			queue_redraw()

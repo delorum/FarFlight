@@ -152,6 +152,21 @@ func _run() -> void:
 	check(delivery_button.contains("%d монет" % int(scene.economy.carried_item.reward)) and not delivery_button.contains("тариф"), "Delivery button must keep the same reward after any delay")
 	scene.economy.elapsed_seconds = mail_time_before_delay
 	scene.economy.carried_item = {}
+	var cafe_airport: int = scene.economy.food_airports[0]
+	scene.flight.airport_index = cafe_airport
+	scene.economy.hunger = scene.EconomyScript.NEED_SEGMENTS - 1
+	scene.economy.money = 160
+	scene.economy.carried_item = {"type": "parcel"}
+	var cafe_money_before: int = scene.economy.money
+	scene._set_view_mode(scene.ViewMode.CAFE)
+	scene._handle_economy_click(scene._economy_button_rect(1).get_center())
+	check(scene.economy.hunger == scene.EconomyScript.NEED_SEGMENTS, "Eating in the cafe must immediately restore one hunger segment")
+	check(scene.economy.money == cafe_money_before - scene.economy.cafe_meal_price(cafe_airport), "A cafe meal must cost twice the local takeaway-food price")
+	check(scene.economy.carried_item.get("type") == "parcel", "Eating in the cafe must work with occupied hands and leave the carried item untouched")
+	var money_when_full: int = scene.economy.money
+	scene._handle_economy_click(scene._economy_button_rect(1).get_center())
+	check(scene.economy.money == money_when_full, "The cafe must not charge a pilot whose hunger is already full")
+	scene.economy.carried_item = {}
 	scene.flight.airport_index = scene.economy.hotel_airports[0]
 	scene.economy.fatigue = scene.EconomyScript.NEED_SEGMENTS
 	var hotel_time_before: float = scene.economy.elapsed_seconds

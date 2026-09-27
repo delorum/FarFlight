@@ -1,275 +1,285 @@
 # Far Flight
 
-[![Far Flight / Почтовая авиация — самолёт над затерянным аэродромом](assets/title_screen.png)](https://delorum.github.io/FarFlight/)
-
-### [▶ Играть в браузере](https://delorum.github.io/FarFlight/)
-
-Игра, минималистичный симулятор полета на самолете по приборам.
-
-Вы — почтальон-пилот. Между затерянными аэродромами почтовая авиация связывает людей: посылки, письма и вести издалека должны добраться до адресата. Выбирайте заказы, загружайте самолёт и составляйте выгодные маршруты для нескольких доставок.
-
-Но здесь небо почти никогда не бывает ясным. Уже в ста метрах над землёй начинается сплошная облачность. Дальше — полёт по приборам: курс, высота, скорость, сигналы радиомаяков и ваши пометки на карте. После вылета положение самолёта на ней скрывается — его предстоит определять самостоятельно.
-
-Учитывайте ветер, обходите горы и грозы, планируйте посадки и остановки. Топливо, еда, гостиницы и ремонт есть не везде. Пилоту нужно есть и отдыхать, а самолёт постепенно изнашивается. Конечной денежной цели нет: летайте, доставляйте почту, улучшайте маршруты и собственные рекорды.
-
-## Содержание
-
-- [Быстрый старт](#быстрый-старт)
-- [Мир и начало игры](#мир-и-начало-игры)
-- [Управление](#управление)
-  - [Самолёт](#самолёт)
-  - [Карта и метеорадар](#карта-и-метеорадар)
-  - [Салон и аэропорт](#салон-и-аэропорт)
-  - [Время и пауза](#время-и-пауза)
-- [Полётная модель и приборы](#полётная-модель-и-приборы)
-  - [Высота, скорость и экономичный режим](#высота-скорость-и-экономичный-режим)
-  - [Питание, двигатель и планирование](#питание-двигатель-и-планирование)
-  - [Радиовысотомер](#радиовысотомер)
-  - [Износ планера](#износ-планера)
-- [Навигация](#навигация)
-  - [Навигационная карта](#навигационная-карта)
-  - [Расчёт полёта](#расчёт-полёта)
-  - [Радиомаяки](#радиомаяки)
-  - [ILS и посадка](#ils-и-посадка)
-- [Погода](#погода)
-  - [Ветер](#ветер)
-  - [Грозы и метеосводка](#грозы-и-метеосводка)
-  - [Метеорадар](#метеорадар)
-- [Аэропорты и экономика](#аэропорты-и-экономика)
-  - [Услуги и цены](#услуги-и-цены)
-  - [Почта](#почта)
-  - [Груз и заправка](#груз-и-заправка)
-  - [Сытость и бодрость](#сытость-и-бодрость)
-  - [Подготовка к вылету](#подготовка-к-вылету)
-- [Посадка, статистика и окончание полёта](#посадка-статистика-и-окончание-полёта)
-- [Сохранения](#сохранения)
-- [Запуск и разработка](#запуск-и-разработка)
-  - [Локальный запуск](#локальный-запуск)
-  - [Web и GitHub Pages](#web-и-github-pages)
-  - [Архитектура](#архитектура)
-- [Авторы](#авторы)
+[Русская версия](README_RU.md)
+
+[![Far Flight / Airmail — an aircraft over a remote airfield](assets/title_screen.png)](https://delorum.github.io/FarFlight/)
+
+### [▶ Play in your browser](https://delorum.github.io/FarFlight/)
+
+A game and a minimalist instrument-flight simulator.
+
+You are an airmail pilot. Between remote airfields, mail aviation keeps people connected: parcels, letters, and news from afar must reach their destinations. Take jobs, load the aircraft, and plan profitable routes with multiple deliveries.
+
+The sky here is almost never clear. A solid cloud layer begins only one hundred metres above the ground. Beyond it, you fly by instruments: heading, altitude, speed, radio beacon signals, and your own marks on the map. Your aircraft position disappears after departure, so you must determine it yourself.
+
+Account for the wind, avoid mountains and thunderstorms, and plan your landings and stops. Fuel, food, hotels, and repairs are not available everywhere. The pilot needs food and rest, while the aircraft gradually wears out. There is no final money target: fly, deliver mail, improve your routes, and beat your own records.
+
+## Contents
+
+- [Quick start](#quick-start)
+- [World and starting a game](#world-and-starting-a-game)
+- [Controls](#controls)
+  - [Aircraft](#aircraft)
+  - [Map and weather radar](#map-and-weather-radar)
+  - [Cabin and airport](#cabin-and-airport)
+  - [Time and pause](#time-and-pause)
+- [Flight model and instruments](#flight-model-and-instruments)
+  - [Altitude, speed, and economy](#altitude-speed-and-economy)
+  - [Electrical power, engine, and gliding](#electrical-power-engine-and-gliding)
+  - [Radio altimeter](#radio-altimeter)
+  - [Airframe wear](#airframe-wear)
+- [Navigation](#navigation)
+  - [Navigation map](#navigation-map)
+  - [Flight calculator](#flight-calculator)
+  - [Radio beacons](#radio-beacons)
+  - [ILS and landing](#ils-and-landing)
+- [Weather](#weather)
+  - [Wind](#wind)
+  - [Thunderstorms and weather report](#thunderstorms-and-weather-report)
+  - [Weather radar](#weather-radar)
+- [Airports and economy](#airports-and-economy)
+  - [Services and prices](#services-and-prices)
+  - [Mail](#mail)
+  - [Cargo and refuelling](#cargo-and-refuelling)
+  - [Hunger and energy](#hunger-and-energy)
+  - [Departure preparation](#departure-preparation)
+- [Landing, records, and the end of a flight](#landing-records-and-the-end-of-a-flight)
+- [Saves](#saves)
+- [Running and development](#running-and-development)
+  - [Versioning](#versioning)
+  - [Local launch](#local-launch)
+  - [Web and GitHub Pages](#web-and-github-pages)
+  - [Architecture](#architecture)
+- [Credits](#credits)
 
-## Быстрый старт
+## Quick start
 
-Первый вылет уже оплачен и подготовлен. Включите питание клавишей `P`, запустите двигатель клавишей `M`, увеличьте газ клавишей `W`. После разгона примерно до 70 км/ч возьмите штурвал на себя стрелкой вниз.
+The first departure is already paid for and prepared. Press `P` to turn on electrical power, `M` to start the engine, and `W` to increase the throttle. At approximately 70 km/h, pull the yoke back with the down arrow.
 
-Для горизонтального крейсерского полёта ориентируйтесь примерно на 87% газа и 200 км/ч. Точное положение зависит от высоты и ветра. Перед следующими вылетами потребуется посетить лётную службу, оплатить подготовку и выбрать направление полосы.
+For level cruise, use roughly 87% throttle and 200 km/h as a starting point. The exact setting depends on altitude and wind. Before later departures, visit flight service, pay for preparation, and choose a runway direction.
 
-## Мир и начало игры
+## World and starting a game
 
-Карта размером 200×200 км генерируется процедурно. В каждом из четырёх районов 100×100 км находятся два аэродрома и четыре маршрутных радиомаяка. Любые два аэродрома разделяет не менее 45 км.
+The 200×200 km map is procedurally generated. Each of its four 100×100 km regions contains two airfields and four en-route radio beacons. Any two airfields are separated by at least 45 km.
 
-Перед новой игрой можно ввести положительный `seed` от 1 до 2147483647 или оставить поле пустым. Один и тот же seed воспроизводит рельеф, аэродромы, маяки, услуги и последовательность погоды. Его можно передать другому игроку для сравнения рекордов в одинаковом мире. Seed указан на кнопке «Продолжить» в начальном меню и меню паузы.
+Before a new game, you may enter a positive `seed` from 1 to 2147483647 or leave the field blank. The same seed reproduces the terrain, airfields, beacons, services, and weather sequence. You can share it with another player to compare records in the same world. The seed appears on the Continue button in both the title and pause menus.
 
-На заставке доступны продолжение или итоги сохранённой игры, новая игра, «Об игре», «Авторы» и выход.
+The title screen offers continuation or results for the saved run, a new game, About, Language, Credits, and Quit. About links to this complete guide. The Language screen switches the entire interface between Russian and English and saves that choice independently of the current game.
 
-## Управление
+## Controls
 
-### Самолёт
+### Aircraft
 
-- `W` / `S` — увеличить / уменьшить газ;
-- `P` — включить или выключить питание приборов;
-- `M` — запустить или остановить двигатель;
-- стрелки вверх/вниз — штурвал по тангажу: вверх/от себя для снижения, вниз/на себя для набора;
-- стрелки влево/вправо — без задержки отклонить штурвал и изменить курс;
-- `Shift` + стрелка влево/вправо — поправить курс на 0,1°; удержание меняет его со скоростью 0,1° в секунду без отклонения штурвала;
-- мышь по рычагу газа или штурвалу — прямое управление;
-- `X` — выйти в салон или вернуться за штурвал из любой точки салона.
+- `W` / `S` — increase / decrease throttle;
+- `P` — turn instrument power on or off;
+- `M` — start or stop the engine;
+- up/down arrows — pitch control: up/forward to descend, down/back to climb;
+- left/right arrows — immediately deflect the yoke and turn;
+- `Shift` + left/right arrow — adjust heading by 0.1°; holding changes it at 0.1° per second without deflecting the yoke;
+- mouse over the throttle or yoke — direct control;
+- `X` — leave for the cabin or return to the cockpit from anywhere in the cabin.
 
-По горизонтали штурвал автоматически возвращается в центр. Установленное продольное положение сохраняется.
+The yoke automatically centres laterally. Its longitudinal position remains where you leave it.
 
-### Карта и метеорадар
+### Map and weather radar
 
-- колесо над картой — изменить масштаб;
-- ЛКМ с перемещением — двигать карту;
-- два коротких клика ЛКМ — провести измерительную линию;
-- перетаскивание конца — изменить линию; связанные общим концом линии движутся вместе;
-- ПКМ — отменить незавершённую линию или удалить ближайшую готовую;
-- колесо над радиоприёмником — изменить частоту на 1 кГц, с `Shift` — на 10 кГц;
-- `B` или клик по метеорадару — переключить карту и большой радар;
-- колесо над большим радаром — выбрать дальность 30, 20, 10 или 5 км;
-- клик по самолёту на большом радаре — провести единственную 30-километровую линию текущего путевого курса;
-- ПКМ по курсовой линии радара — удалить её;
-- кнопка траектории — показать или скрыть маршрут завершённого полёта.
+- wheel over the map — zoom;
+- LMB drag — pan the map;
+- two short LMB clicks — draw a measurement line;
+- drag an endpoint — change a line; lines sharing that endpoint move together;
+- RMB — cancel an unfinished line or delete the nearest completed one;
+- wheel over a radio receiver — change frequency by 1 kHz, or 10 kHz with `Shift`;
+- `B` or click the weather radar — switch between the map and large radar;
+- wheel over the large radar — choose a 30, 20, 10, or 5 km range;
+- click the aircraft on the large radar — draw the single 30 km current-ground-track line;
+- RMB over the radar track line — delete it;
+- track button — show or hide the completed flight track.
 
-### Салон и аэропорт
+### Cabin and airport
 
-- стрелки или ЛКМ — идти либо мгновенно переместиться в боковой сцене;
-- `Enter` или клик по активному объекту — взаимодействовать;
-- `X` — вернуться в кресло пилота;
-- колесо вниз в салоне — открыть отдалённый боковой вид; доступны три масштаба;
-- колесо вверх, `Enter` или `Esc` в отдалённом виде — вернуться в салон;
-- из здания можно выйти кнопкой или клавишей `Enter`; `Esc` открывает меню паузы.
+- arrows or LMB — walk or move instantly in a side scene;
+- `Enter` or click an active object — interact;
+- `X` — return to the pilot seat;
+- wheel down in the cabin — open the zoomed-out side view; three scales are available;
+- wheel up, `Enter`, or `Esc` in the zoomed-out view — return to the cabin;
+- leave a building with its button or `Enter`; `Esc` opens the pause menu.
 
-Клик по двери, креслу, столу или стулу сразу выполняет переход. Простое прохождение рядом не активирует объект.
+Clicking the door, seat, table, or chair performs the interaction immediately. Merely walking past an object does not activate it.
 
-### Время и пауза
+### Time and pause
 
-- `Shift+Z` — переключать 1×, 2×, 4×, 8× и 16×;
-- `Z` — немедленно вернуть 1×;
-- `Space` — поставить симуляцию на паузу или продолжить её в любой сцене;
-- `Esc` — открыть меню паузы.
+- `Shift+Z` — cycle through 1×, 2×, 4×, 8×, and 16×;
+- `Z` — immediately return to 1×;
+- `Space` — pause or resume the simulation in any scene;
+- `Esc` — open the pause menu.
 
-Управление самолётом или персонажем после ускорения возвращает время к 1×. Работа с картой и её линиями ускорение не сбрасывает. Возникшее в грозе вращение самолёта сбрасывает ускорение немедленно.
+Aircraft or character control after acceleration returns time to 1×. Using the map and its lines does not. Rotation caused by a newly encountered storm resets acceleration immediately.
 
-## Полётная модель и приборы
+## Flight model and instruments
 
-Панель содержит воздушную и путевую скорости, барометрическую и радиовысоту, вертикальную скорость, компас, авиагоризонт, часы, топливный прибор, два радиоприёмника, ILS и метеорадар. Часы начинают отсчёт в день 1 в 00:00:00 и используют то же время, что журнал полётов.
+The panel contains airspeed and ground speed, barometric and radio altitude, vertical speed, compass, attitude indicator, clock, fuel gauge, two radio receivers, ILS, and weather radar. The clock begins on day 1 at 00:00:00 and uses the same time as the flight log.
 
-Высотомер размечен через 50 и 100 м, спидометр — через 25 и 50 км/ч, вариометр — через 1 и 5 м/с. На компасе оставлены N/E/S/W. Точные значения выводятся под приборами.
+The altimeter is marked every 50 and 100 m, the airspeed indicator every 25 and 50 km/h, and the vertical-speed indicator every 1 and 5 m/s. The compass retains N/E/S/W. Exact readings appear below the instruments.
 
-### Высота, скорость и экономичный режим
+### Altitude, speed, and economy
 
-Расход снижается до оптимума около 425 м, затем снова растёт. После 450 м двигатель быстро теряет избыточную мощность, набор практически прекращается к 600 м, абсолютный предел модели — 700 м. Высокие хребты приходится обходить по долинам и перевалам.
+Fuel consumption falls to an optimum near 425 m and then rises again. Above 450 m the engine rapidly loses excess power, climb becomes negligible near 600 m, and the model's absolute ceiling is 700 m. High ridges must be bypassed through valleys and passes.
 
-Голубые полосы спидометра и высотомера показывают диапазоны не хуже 95% от максимальной расчётной дальности для текущего направления и ветра. Для каждой высоты отдельно подбирается выгодная скорость. Когда радиовысотомер видит землю, красная риска на высотомере отмечает её абсолютную высоту, а голубая рекомендация пересчитывается только среди эшелонов не ниже 50 м над этой отметкой. На земле рекомендации не показываются; расчёт обновляется не чаще раза в реальную секунду.
+The cyan bands on the airspeed indicator and altimeter show ranges that achieve at least 95% of the maximum calculated range for the current direction and wind. An economical speed is selected separately at each altitude. When the radio altimeter can see the ground, a red mark on the altimeter shows its absolute elevation, while the cyan recommendation only considers levels at least 50 m above that mark. Recommendations are hidden on the ground and recalculated no more than once per real second.
 
-Запас хода рассчитывается по путевой скорости. Счётчик под часами накапливает фактически пройденный над землёй путь. Топливный прибор показывает экономию или штраф расхода относительно уровня моря.
+Range is calculated from ground speed. The counter under the clock accumulates the actual distance travelled over the ground. The fuel gauge shows the saving or penalty relative to sea-level consumption.
 
-### Питание, двигатель и планирование
+### Electrical power, engine, and gliding
 
-Питание можно включить без двигателя и расхода топлива. Отключение питания останавливает двигатель; повторное включение запускает только приборы. Для запуска двигателя нужны питание и разрешение на вылет.
+Electrical power can be enabled without the engine and consumes no fuel. Turning power off also stops the engine; turning it back on starts only the instruments. Starting the engine requires both electrical power and departure clearance.
 
-Без питания работают механические указатели скорости, высоты, вертикальной скорости и часы. Электрические приборы и метеорадар гаснут.
+Without power, the mechanical airspeed, altitude, vertical-speed indicators, and clock continue to work. Electrical instruments and weather radar go dark.
 
-В штиль с нейтральным штурвалом самолёт без двигателя планирует примерно на 100 км/ч со снижением около 3,6 м/с. Сильное взятие штурвала на себя расходует скорость и может вызвать сваливание; отдача от себя позволяет восстановиться. Планирование плавно начинается ниже 10% газа.
+In calm air with a neutral yoke, the unpowered aircraft glides at roughly 100 km/h and descends at about 3.6 m/s. Pulling too hard consumes speed and may cause a stall; pushing forward allows recovery. Gliding blends in smoothly below 10% throttle.
 
-### Радиовысотомер
+### Radio altimeter
 
-Под циферблатом первая крупная строка показывает барометрическую высоту: `… м`. На второй строке рядом выводятся `РВ … м • ЗЕМ … м`: радиовысота и абсолютная высота земли непосредственно под самолётом. Значение `ЗЕМ` соответствует красной риске на шкале. Красная полоса после риски отмечает первые 100 м над текущим рельефом; ниже этой высоты вся нижняя строка становится красной, а выше рисуется голубым.
+The first large line below the dial shows barometric altitude: `… m`. The second line shows `RA … m • GND … m`: radio altitude and the absolute elevation directly below the aircraft. `GND` corresponds to the red mark on the scale. A red band after the mark shows the first 100 m above the current terrain; below that height the entire second line turns red, and above it the line is cyan.
 
-Радиовысотомер работает при включённом питании до 750 м включительно. Вне его диапазона или без питания вместо `РВ` и `ЗЕМ` выводятся прочерки. Прибор показывает рельеф только под самолётом, но не впереди него.
+The radio altimeter works with power on up to and including 750 m. Outside its range or without power, dashes replace both `RA` and `GND`. It shows terrain only directly below the aircraft, not ahead.
 
-### Износ планера
+### Airframe wear
 
-Планер начинает со 100 единиц состояния и медленно изнашивается в полёте. Выше безопасной скорости износ растёт квадратично; в грозе он увеличивается к ядру. Нулевое состояние приводит к разрушению самолёта.
+The airframe begins with 100 condition points and slowly wears during flight. Above safe speed, wear grows quadratically; inside a storm it increases toward the core. Reaching zero condition destroys the aircraft.
 
-На панели показаны целостность и износ за игровую минуту. В боковых сценах используется компактный индикатор. Ремонт доступен в специальных ангарах.
+The panel shows integrity and wear per game minute. Side scenes use a compact indicator. Repairs are available in dedicated hangars.
 
-## Навигация
+## Navigation
 
-### Навигационная карта
+### Navigation map
 
-До начала движения карта показывает самолёт на аэродроме вылета. После вылета положение скрывается. Итоговая траектория также скрыта в полёте; после завершения её можно включать и выключать, оставляя символ конечного положения.
+Before movement begins, the map shows the aircraft at its departure airfield. After departure its position is hidden. The completed track is also hidden in flight; after a flight ends, it can be shown or hidden while the final-position symbol remains visible.
 
-Измерительная линия показывает расстояние, время, прямой и обратный курсы и максимальную высоту рельефа. Для короткой линии подпись размещается рядом горизонтально; при наведении те же сведения появляются слева внизу. Точки прилипают только к маякам и концам существующих линий, но не к середине отрезка.
+A measurement line shows distance, time, direct and reciprocal courses, and maximum terrain elevation. A short line places its label horizontally nearby; hovering displays the same information in the lower-left corner. Points snap only to beacons and endpoints of existing lines, not to the middle of a segment.
 
-### Расчёт полёта
+### Flight calculator
 
-На карте расположен сворачиваемый и перемещаемый калькулятор с четырьмя вкладками. Значения вводятся без `Enter` с точкой или запятой либо меняются колесом.
+The map contains a collapsible, draggable calculator with four tabs. Values accept either a decimal point or comma without requiring `Enter`, and the mouse wheel also changes them.
 
-Он связывает расстояние, время, воздушную и вертикальную скорости, начальную и конечную высоты, направление пути, курс носа и ветер. Расстояние — неизменный якорь вкладки: оно меняется только вручную или при изменении связанной линии. Остальные параметры пересчитывают друг друга. Невозможный расчёт подсвечивается красным, но не обнуляет маршрут.
+It relates distance, time, airspeed and vertical speed, initial and final altitude, ground track, heading, and wind. Distance is the fixed anchor of a tab: it changes only when edited manually or when its linked line changes. Other parameters recalculate one another. An impossible calculation turns red without erasing the route.
 
-Кнопки «Текущая» подставляют параметры самолёта. Обновление «Высоты 1» подставляет ветер на этой высоте; затем его можно изменить вручную. Расчёт предполагает постоянный режим и не учитывает грозовые порывы.
+Current buttons insert aircraft data. Updating Altitude 1 inserts the wind at that altitude, after which it can be edited manually. The calculation assumes a constant regime and ignores storm gusts.
 
-«Привязать к линии» связывает вкладку с отрезком. Перемещение концов обновляет расчёт, а изменение расстояния или направления двигает конечную точку. Активная линия красная, прочие связанные — оранжевые. «Обратно» разворачивает направление на 180°.
+Link to Line binds a tab to a segment. Moving endpoints updates the calculation, while changing distance or direction moves the endpoint. The active linked line is red and other linked lines are orange. Reverse turns the direction by 180°.
 
-### Радиомаяки
+### Radio beacons
 
-Маршрутные NDB действуют в радиусе 30 км, посадочные маяки — 15 км. NDB генерируются на низких открытых участках. Рельеф высотой от 250 м между самолётом и антенной может блокировать сигнал; прибор различает выход за дальность и закрытие рельефом. Это упрощённая модель средневолнового сигнала в горах.
+En-route NDBs have a 30 km range; approach beacons have a 15 km range. NDBs are generated in low, open terrain. Terrain at least 250 m high between the aircraft and antenna may block the signal; the instrument distinguishes being out of range from terrain masking. This is a simplified model of medium-wave propagation in mountains.
 
-### ILS и посадка
+### ILS and landing
 
-ILS использует приёмник 1. Настройте частоту посадочного маяка: прибор включится в пределах 15 км, внутри переднего сектора и при подходящем курсе носа. Вертикальная метка показывает отклонение от створа, горизонтальная — от глиссады 3,3°. Зелёный цвет означает попадание в допуск.
+ILS uses receiver 1. Tune an approach beacon: the instrument activates within 15 km, inside the forward sector, and with a suitable aircraft heading. The vertical needle shows localizer deviation and the horizontal needle shows deviation from the 3.3° glideslope. Green indicates capture within tolerance.
 
-На двух подробных масштабах карты пунктиром показан сектор захвата: боковые границы идут от дальнего торца ВПП, дальняя дуга находится в 15 км от маяка. Для каждого аэродрома отмечена точка входа в заход с требуемыми высотой и вертикальной скоростью.
+At the two most detailed map scales, dashed lines show the capture sector: side boundaries begin at the far runway end and the outer arc lies 15 km from the beacon. Each airfield has an approach-entry marker with the required altitude and vertical speed.
 
-Ориентир для захода газом: выйти на продолжение полосы в 6 км от дальнего маяка на высоте около 230 м и скорости 100 км/ч, поставить нейтральный тангаж и 30% газа. Примерно в 2,05 км от маяка убрать газ до 10%. Устойчивый участок проходит на 90–92 км/ч по глиссаде около 3°.
+As a throttle reference, join the runway extension 6 km from the far beacon at about 230 m and 100 km/h, set neutral pitch and 30% throttle. Reduce to 10% about 2.05 km from the beacon. The stable segment runs at 90–92 km/h on a roughly 3° glide path.
 
-## Погода
+## Weather
 
-### Ветер
+### Wind
 
-Ветер задан на высотах 0, 250, 500 и 700 м и интерполируется между ними. Он влияет на путевую скорость, снос, запас хода и экономичные режимы. Новая погода генерируется после завершённой посадки; уход на второй круг её не меняет.
+Wind is defined at 0, 250, 500, and 700 m and interpolated between them. It affects ground speed, drift, range, and economical regimes. New weather is generated after a completed landing; a touch-and-go does not change it.
 
-### Грозы и метеосводка
+### Thunderstorms and weather report
 
-Грозы могут возникать над аэродромами и подходами. Они движутся, вызывают турбулентность и ускоряют износ.
+Thunderstorms may appear over airfields and approaches. They move, cause turbulence, and accelerate wear.
 
-На карте показан статичный снимок гроз: бледные жёлтые, оранжевые и красные зоны повторяют метеорадар, а контур фиксирует положение в момент сводки. Её возраст указан слева сверху. При наведении показываются приблизительные направление и скорость грозы.
+The map shows a static storm snapshot: pale yellow, orange, and red areas mirror the weather radar, while the contour records the position at report time. Its age is displayed at the upper left. Hovering shows the storm's approximate direction and speed.
 
-«Обновить метеосводку» в лётной службе бесплатно снимает текущие положения гроз, не меняя физическую погоду. Отображение отключается кнопкой слева от ILS. Последовательность погодных циклов определяется seed и числом завершённых посадок.
+Update Weather Report at flight service records current storm positions for free without changing the physical weather. A button to the left of ILS toggles this overlay. The sequence of weather cycles depends on the seed and number of completed landings.
 
-### Метеорадар
+### Weather radar
 
-Большой радар центрирован на самолёте и имеет масштабы 30, 20, 10 и 5 км. Изображение гроз обновляется раз в секунду и плавно вращается с курсом; скрытый радар и радар на паузе не обновляются. При наведении показываются движение, направление и скорость грозы.
+The large radar is centred on the aircraft and has 30, 20, 10, and 5 km ranges. Storm imagery updates once per second and rotates smoothly with heading; a hidden or paused radar does not update. Hovering shows storm motion, direction, and speed.
 
-Клик по самолёту проводит от его текущего положения единственную 30-километровую линию по текущему путевому курсу с учётом ветра. Она привязана к местности и не переносится на карту. Пока линия существует, новую провести нельзя; ПКМ по ней удаляет её. Если оба конца оказываются дальше 30 км от самолёта, линия удаляется автоматически.
+Clicking the aircraft draws a single 30 km line from its current position along its current ground track, including wind drift. It remains fixed to the ground and does not transfer to the map. A second line cannot be created until the first is deleted with RMB. If both endpoints move farther than 30 km from the aircraft, the line is removed automatically.
 
-Справа от окружности краткая индикация показывает боковое отклонение `⊥` от линии и разницу путевых курсов `ΔК`. Стрелка указывает, вправо или влево отклонился самолёт либо его текущий курс; зелёный цвет означает почти точное совпадение, жёлтый — небольшую ошибку, красный — заметную.
+To the right of the scope, compact indications show lateral deviation `⊥` from the line and ground-track difference `ΔC`. An arrow indicates whether the aircraft or its current track is to the right or left; green means nearly exact alignment, yellow a small error, and red a significant one.
 
-## Аэропорты и экономика
+## Airports and economy
 
-### Услуги и цены
+### Services and prices
 
-В каждом аэропорту есть почта и лётная служба. Заправка, магазин, гостиница и ремонт находятся только в трёх аэропортах каждого типа; без дополнительных услуг остаётся не более двух аэродромов.
+Every airfield has a post office and flight service. Fuel, a cafe, a hotel, and repairs are each available at only three airfields; no more than two airfields have no optional services.
 
-Для каждой услуги один аэропорт на 30% дешевле базовой цены, один имеет базовую цену, один на 30% дороже.
+For every service, one airfield is 30% below the base price, one uses the base price, and one is 30% above it.
 
-| Услуга | Базовая цена |
+| Service | Base price |
 | --- | ---: |
-| Топливо | 2 монеты/л |
-| Пустая канистра | 15 монет |
-| Еда | 20 монет |
-| 20 минут гостиницы | 10 монет |
-| Ремонт | 3 монеты за единицу |
-| Подготовка к вылету | 12 монет |
+| Fuel | 2 coins/L |
+| Empty fuel can | 15 coins |
+| Takeaway food | 20 coins |
+| Cafe meal | twice the local takeaway price |
+| 20 hotel minutes | 10 coins |
+| Repair | 3 coins per point |
+| Departure preparation | 12 coins |
 
-Стартовый капитал — 160 монет. После посещения хотя бы двух магазинов одного типа карта показывает рейтинг известных цен: `(+)` — дешевле, затем `(++)` и `(+++)`. Непосещённые цены не раскрываются.
+Starting money is 160 coins. After visiting at least two buildings of one type, the map shows the known price ranking: `(+)` is cheapest, followed by `(++)` and `(+++)`. Inside buildings, the same ranking is written as `(cheap)` and `(expensive)` for two known prices, with `(average)` added when all three are known. Unvisited prices remain hidden.
 
-### Почта
+### Mail
 
-Почта предлагает три посылки в разные аэропорты и обновляет ассортимент после посадки в другом аэропорту. Расстояние заказа строится по кратчайшему проходимому пути при пределе 700 м и запасе 150 м над рельефом.
+The post office offers three parcels for different airfields and refreshes them after a landing at another airfield. Job distance follows the shortest passable route under the 700 m ceiling with 150 m terrain clearance.
 
-Оплата растёт немного быстрее расстояния и учитывает бедность назначения: без дополнительных услуг +35%, с одной +20%, с двумя +10%. Фактические километры выплату не увеличивают. Сроков нет: можно брать несколько посылок и строить многоэтапный маршрут.
+Payment grows slightly faster than distance and accounts for a destination's lack of services: no optional services add 35%, one adds 20%, and two add 10%. Actual flown distance does not increase the reward. There are no deadlines, so several parcels can be taken on a multi-stop route.
 
-### Груз и заправка
+### Cargo and refuelling
 
-Посылки, еду и двадцатилитровые канистры нужно перенести в самолёт. В салоне шесть грузовых ячеек: клик по пустой кладёт предмет, по занятой — берёт. Предмет можно уложить или выбросить.
+Parcels, food, and 20-litre fuel cans must be carried into the aircraft. The cabin has six cargo slots: clicking an empty slot stores an item, while clicking an occupied one retrieves it. A carried item can be stored or discarded.
 
-На заправке отдельно покупаются канистра и топливо. Ползунки работают с шагом 0,1 л. В техническом отсеке канистру можно перелить в бак; последний неполный шаг точно заполняет его. В отсек ведут стрелка вниз у подъёма в кабину и клик по заправочному устройству.
+The fuel station sells the can and fuel separately. Sliders use 0.1 L increments. In the technical bay, fuel can be transferred to the tank; the last partial increment fills it exactly. Enter the bay with the down arrow near the cockpit ladder or by clicking the refuelling device.
 
-### Сытость и бодрость
+### Hunger and energy
 
-Сытость и бодрость имеют по шесть делений и уменьшаются раз в игровой час. Нулевое значение завершает игру.
+Hunger and energy each have six segments and fall once per game hour. Reaching zero ends the game.
 
-Еда восстанавливает одно деление. Есть можно только за столом: возьмите еду, сядьте кликом или `Enter`, затем нажмите `Enter` или «Съесть». Само усаживание еду не расходует.
+Food restores one hunger segment. At a cafe, it can be bought as takeaway at the regular local price or eaten immediately for twice that amount; eating there does not occupy your hands or a cargo slot. Takeaway food can only be eaten at the aircraft table: pick it up, sit down with a click or `Enter`, then press `Enter` or Eat. Sitting down alone does not consume it.
 
-На кровати каждые 20 непрерывных минут возвращают бодрость, но только до двух. Гостиница восстанавливает её до шести платными периодами по 20 минут. Спать там можно и при полной бодрости, чтобы промотать время.
+In the bed, every 20 uninterrupted minutes restores one energy segment, but only up to two. A hotel restores it up to six in paid 20-minute periods. You may stay there even at full energy to advance time.
 
-### Подготовка к вылету
+### Departure preparation
 
-Первый вылет подготовлен бесплатно. После завершённой посадки и полной остановки разрешение снимается: нужно оплатить подготовку и выбрать направление ВПП. Повторный выбор оплаченной полосы бесплатен; деньги списываются снова только при смене направления.
+The first departure is prepared for free. After a completed landing and full stop, clearance is revoked: pay for preparation and select a runway direction. Selecting the already paid runway again is free; changing direction charges again.
 
-Выход в салон на земле останавливает двигатель, но не отменяет подготовку до взлёта. Ручная остановка и запуск также сохраняют разрешение. Без подготовки двигатель не запускается; причина выводится красным.
+Entering the cabin on the ground stops the engine but does not cancel preparation before takeoff. Manually stopping and restarting it also retains clearance. The engine cannot start without preparation, and the reason appears in red.
 
-## Посадка, статистика и окончание полёта
+## Landing, records, and the end of a flight
 
-Касание не завершает рейс. До полной остановки можно добавить газ и уйти на второй круг; погода и разрешение при этом не меняются.
+Touchdown does not complete a flight. Until the aircraft stops, you may add power and perform a touch-and-go; weather and clearance remain unchanged.
 
-Лётная служба хранит статистику рейсов. Общий журнал показывает последние сверху: аэродромы, фактическое расстояние, длительность и время начала и конца. Для повторённых направлений есть список от самого быстрого результата к медленному.
+Flight service keeps flight records. The main log shows the newest flights first, with airfields, actual distance, duration, start time, and end time. Repeated routes have a fastest-to-slowest record list.
 
-Во время прогулки по салону полёт продолжается. При большом угле атаки или сваливании появляется предупреждение. После крушения открывается карта с причиной, расстоянием, временем и траекторией. Слот заменяется сохранением завершённого прохождения: историю, seed и маршрут можно посмотреть, но продолжить полёт нельзя.
+Flight continues while you walk through the cabin. A warning appears at a high angle of attack or during a stall. After a crash, the map opens with the cause, distance, time, and track. The slot is replaced by a completed-run save: its history, seed, and route remain viewable, but the flight cannot continue.
 
-## Сохранения
+## Saves
 
-В настольной версии слот находится по адресу `user://flight_save.dat`. «Сохранить и выйти» сначала записывает его и только затем закрывает игру. При ошибке игра остаётся открытой, прежний слот сохраняется. Новая игра не удаляет старый слот до успешного сохранения.
+The desktop slot is stored at `user://flight_save.dat`. Save and Quit writes it before closing the game. On failure, the game remains open and the previous slot is preserved. Starting a new game does not delete the old slot until a successful save.
 
-Сохраняются мир, погода и сводка, самолёт и пилот, экономика, почта, груз, приборы, карта, линии карты и радара, вкладки калькулятора, рейс, траектория, журнал, сцена и персонаж. Повреждённый или несовместимый файл не загружается.
+The world, weather and report, aircraft and pilot, economy, mail, cargo, instruments, map, map and radar lines, calculator tabs, active flight, track, log, scene, and character are saved. A corrupted or incompatible file is not loaded.
 
-В браузере слот хранится в `localStorage` под ключом `farflight.save.v5`. Он принадлежит браузеру и адресу сайта, не синхронизируется с настольной версией и может исчезнуть после очистки данных или приватного сеанса. Закрытие вкладки само игру не сохраняет.
+In the browser, the slot is stored in `localStorage` under `farflight.save.v5`. It belongs to that browser and site address, does not synchronise with the desktop version, and may disappear after clearing data or using a private session. Closing the tab does not save the game by itself.
 
-## Запуск и разработка
+## Running and development
 
-Игра создана на Godot 4.7.
+The game is built with Godot 4.7.
 
-### Локальный запуск
+### Versioning
 
-Откройте `project.godot` в Godot 4.7 и запустите проект (`F5`). Главный экран — `scenes/game_shell.tscn`; запуск `scenes/main.tscn` через `F6` пропускает меню и предназначен для разработки и тестов.
+The current version is stored in `application/config/version` in `project.godot` and appears in the lower-right corner of the title and pause menus. The format is `0.MINOR.PATCH`: the first number remains zero until a stable release, the second increases for significant changes, and the third for small changes and fixes. Every commit must increase one of them; increasing `MINOR` resets `PATCH` to zero.
 
-### Web и GitHub Pages
+When a debug build is launched from a working tree with uncommitted changes, `-dev` is appended automatically. Exported builds always display the version recorded in the project.
 
-Профиль `Web` использует Compatibility/WebGL 2 без потоков и service worker. Для локальной сборки нужны Godot 4.7 и export templates:
+### Local launch
+
+Open `project.godot` in Godot 4.7 and run the project (`F5`). The main screen is `scenes/game_shell.tscn`; running `scenes/main.tscn` with `F6` skips the menu and is intended for development and tests.
+
+### Web and GitHub Pages
+
+The `Web` preset uses Compatibility/WebGL 2 without threads or a service worker. Godot 4.7 and export templates are required for a local build:
 
 ```sh
 mkdir -p build/web
@@ -278,28 +288,28 @@ godot --headless --path . --export-release Web build/web/index.html
 python3 -m http.server 8000 --directory build/web
 ```
 
-Откройте `http://localhost:8000`, а не `index.html` через `file://`.
+Open `http://localhost:8000`, not `index.html` through `file://`.
 
-Workflow `.github/workflows/web-pages.yml` при push в `main` и вручную запускает тесты, собирает Web-версию и публикует GitHub Pages. Для pull request выполняется сборка без публикации. Архив доступен как `FarFlight-Web`.
+On pushes to `main` and manual runs, `.github/workflows/web-pages.yml` runs tests, builds the Web version, and publishes GitHub Pages. Pull requests are built without publication. The downloadable artifact is named `FarFlight-Web`.
 
-Ссылки: [веб-экспорт Godot](https://docs.godotengine.org/en/stable/tutorials/export/exporting_for_web.html), [GitHub Pages через Actions](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages).
+References: [Godot Web export](https://docs.godotengine.org/en/stable/tutorials/export/exporting_for_web.html), [GitHub Pages with Actions](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages).
 
-### Архитектура
+### Architecture
 
-- `FlightWorld` отвечает за seed, рельеф, аэродромы, коридоры, погоду и маяки;
-- `FlightModel` хранит состояние самолёта и динамику независимо от интерфейса;
-- `FlightPlanSolver` выполняет чистый расчёт маршрута;
-- `EconomyModel` хранит деньги, потребности, услуги, почту и груз;
-- `main.gd` координирует модели, сцены и ввод;
-- карта, приборная панель и боковые сцены вынесены в модули;
-- `aircraft_art.gd` рисует самолёт снаружи и в разрезе.
+- `FlightWorld` owns the seed, terrain, airfields, corridors, weather, and beacons;
+- `FlightModel` stores aircraft state and dynamics independently from the interface;
+- `FlightPlanSolver` performs pure route calculations;
+- `EconomyModel` stores money, needs, services, mail, and cargo;
+- `main.gd` coordinates models, scenes, and input;
+- the map, instrument panel, and side scenes live in separate modules;
+- `aircraft_art.gd` draws the aircraft externally and in cutaway view.
 
-Подробности описаны в [ARCHITECTURE.md](ARCHITECTURE.md).
+More detail is available in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-Рендеринг ограничен 60 FPS с VSync. Карта кэшируется и перерисовывается при генерации, изменении размера, масштаба, положения или линий. Приборы обновляются отдельно. Профиль рельефа обновляется 10 раз в секунду, метеорадар — раз в секунду.
+Rendering is limited to 60 FPS with VSync. The map is cached and redrawn after generation, resize, zoom, pan, or line changes. Instruments update separately. The terrain profile refreshes ten times per second and weather radar once per second.
 
-Арт заставки: `assets/title_screen.png`; исходное описание: `assets/title_screen_prompt.md`.
+Title artwork: `assets/title_screen.png`; original prompt: `assets/title_screen_prompt.md`.
 
-## Авторы
+## Credits
 
 [github.com/delorum](https://github.com/delorum)

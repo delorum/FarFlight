@@ -48,7 +48,7 @@ func _run() -> void:
 	var pause_key := InputEventKey.new()
 	pause_key.keycode = KEY_SPACE
 	pause_key.pressed = true
-	for mode in [scene.ViewMode.COCKPIT, scene.ViewMode.CABIN, scene.ViewMode.APRON, scene.ViewMode.AIRPORT, scene.ViewMode.OPERATIONS, scene.ViewMode.MAIL, scene.ViewMode.SHOP, scene.ViewMode.HOTEL, scene.ViewMode.FUEL, scene.ViewMode.REPAIR, scene.ViewMode.FLIGHT_HISTORY, scene.ViewMode.ROUTE_HISTORY]:
+	for mode in [scene.ViewMode.COCKPIT, scene.ViewMode.CABIN, scene.ViewMode.APRON, scene.ViewMode.AIRPORT, scene.ViewMode.OPERATIONS, scene.ViewMode.MAIL, scene.ViewMode.CAFE, scene.ViewMode.HOTEL, scene.ViewMode.FUEL, scene.ViewMode.REPAIR, scene.ViewMode.FLIGHT_HISTORY, scene.ViewMode.ROUTE_HISTORY]:
 		scene._set_view_mode(mode)
 		scene.simulation_paused = false
 		scene._input(pause_key)

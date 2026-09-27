@@ -1,5 +1,6 @@
 extends PanelContainer
 const FlightPlanSolver = preload("res://scripts/flight_plan_solver.gd")
+const Localization = preload("res://scripts/localization.gd")
 
 const MAP_PAPER := Color("d7d0ad")
 const HOVER_PAPER := Color("cec6a2")
@@ -34,6 +35,7 @@ var edit_order: Dictionary = {}
 var edit_sequence := 0
 var derive_speed := false
 var derive_vertical := false
+var validation_reason := ""
 const NONNEGATIVE := ["distance", "time", "speed", "wind_speed"]
 const ANGLES := ["track", "heading", "wind_from"]
 const VALUE_KEYS := ["distance", "time", "speed", "vertical", "altitude", "track", "heading", "wind_from", "wind_speed"]
@@ -48,6 +50,24 @@ const ROWS := [
 	["wind_from", "Ветер откуда", "°", 1.0],
 	["wind_speed", "Скорость ветра", "км/ч", 1.0],
 ]
+
+func _set_localized_property(control: Object, property: String, source: String) -> void:
+	control.set_meta("localization_" + property, source)
+	control.set(property, Localization.text(source))
+
+func refresh_localization() -> void:
+	_refresh_localized_controls(self)
+	_set_localized_property(toggle, "text", "Свернуть" if expanded else "Развернуть")
+	_refresh_line_link_button()
+	_apply_validation_style(validation_reason)
+
+func _refresh_localized_controls(node: Node) -> void:
+	for property in ["text", "tooltip_text"]:
+		var metadata: String = "localization_" + property
+		if node.has_meta(metadata):
+			node.set(property, Localization.text(node.get_meta(metadata)))
+	for child in node.get_children():
+		_refresh_localized_controls(child)
 
 func _ready() -> void:
 	values.merge({"track": 0.0, "heading": 0.0, "wind_from": 0.0, "wind_speed": 0.0})
@@ -83,7 +103,7 @@ func _ready() -> void:
 	var header := HBoxContainer.new()
 	column.add_child(header)
 	var handle := Label.new()
-	handle.text = "РАСЧЁТ ПОЛЁТА  ⋮⋮"
+	_set_localized_property(handle, "text", "РАСЧЁТ ПОЛЁТА  ⋮⋮")
 	handle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	handle.mouse_filter = Control.MOUSE_FILTER_STOP
 	handle.mouse_default_cursor_shape = Control.CURSOR_MOVE
@@ -93,7 +113,7 @@ func _ready() -> void:
 	for profile_index in 4:
 		var profile_button := Button.new()
 		profile_button.text = str(profile_index + 1)
-		profile_button.tooltip_text = "Набор расчёта %d" % (profile_index + 1)
+		_set_localized_property(profile_button, "tooltip_text", "Набор расчёта %d" % (profile_index + 1))
 		profile_button.custom_minimum_size = Vector2(30, 0)
 		profile_button.focus_mode = Control.FOCUS_NONE
 		profile_button.toggle_mode = true
@@ -103,14 +123,14 @@ func _ready() -> void:
 		profile_buttons.append(profile_button)
 		header.add_child(profile_button)
 	toggle = Button.new()
-	toggle.text = "Развернуть"
+	_set_localized_property(toggle, "text", "Развернуть")
 	toggle.focus_mode = Control.FOCUS_NONE
 	toggle.pressed.connect(func():
 		expanded = not expanded
 		if not expanded:
 			selecting_line = false
 		body.visible = expanded
-		toggle.text = "Свернуть" if expanded else "Развернуть"
+		_set_localized_property(toggle, "text", "Свернуть" if expanded else "Развернуть")
 		_refresh_line_link_button()
 		controller.navigation_map._queue_map_redraw()
 		size = Vector2.ZERO
@@ -128,7 +148,7 @@ func _ready() -> void:
 		var key: String = definition[0]
 		if key == "altitude":
 			var initial_label := Label.new()
-			initial_label.text = "Высота 1"
+			_set_localized_property(initial_label, "text", "Высота 1")
 			grid.add_child(initial_label)
 			var initial_field := LineEdit.new()
 			initial_field.custom_minimum_size.x = 105
@@ -140,17 +160,17 @@ func _ready() -> void:
 			fields["initial_altitude"] = initial_field
 			grid.add_child(initial_field)
 			var initial_unit := Label.new()
-			initial_unit.text = "м"
+			_set_localized_property(initial_unit, "text", "м")
 			grid.add_child(initial_unit)
 			var current_altitude := Button.new()
-			current_altitude.text = "Текущая"
+			_set_localized_property(current_altitude, "text", "Текущая")
 			current_altitude.focus_mode = Control.FOCUS_NONE
-			current_altitude.tooltip_text = "Обновить исходную высоту по высоте самолёта"
+			_set_localized_property(current_altitude, "tooltip_text", "Обновить исходную высоту по высоте самолёта")
 			current_altitude.pressed.connect(_use_current_altitude)
 			current_buttons["initial_altitude"] = current_altitude
 			grid.add_child(current_altitude)
 		var label := Label.new()
-		label.text = definition[1]
+		_set_localized_property(label, "text", definition[1])
 		grid.add_child(label)
 		var field := LineEdit.new()
 		field.custom_minimum_size.x = 105
@@ -162,21 +182,21 @@ func _ready() -> void:
 		fields[key] = field
 		grid.add_child(field)
 		var unit := Label.new()
-		unit.text = definition[2]
+		_set_localized_property(unit, "text", definition[2])
 		grid.add_child(unit)
 		if key in ["speed", "vertical", "heading"]:
 			var current := Button.new()
-			current.text = "Текущий" if key == "heading" else "Текущая"
+			_set_localized_property(current, "text", "Текущий" if key == "heading" else "Текущая")
 			current.focus_mode = Control.FOCUS_NONE
-			current.tooltip_text = "Подставить воздушную скорость самолёта" if key == "speed" else "Подставить вертикальную скорость самолёта"
+			_set_localized_property(current, "tooltip_text", "Подставить воздушную скорость самолёта" if key == "speed" else "Подставить вертикальную скорость самолёта")
 			if key == "heading":
-				current.tooltip_text = "Подставить текущий курс носа самолёта"
+				_set_localized_property(current, "tooltip_text", "Подставить текущий курс носа самолёта")
 			current.pressed.connect(_use_current.bind(key))
 			current_buttons[key] = current
 			grid.add_child(current)
 		elif key == "track":
 			var reverse := Button.new()
-			reverse.text = "Обратно"
+			_set_localized_property(reverse, "text", "Обратно")
 			reverse.focus_mode = Control.FOCUS_NONE
 			reverse.pressed.connect(_reverse_track)
 			grid.add_child(reverse)
@@ -317,7 +337,7 @@ func restore_snapshot(data: Dictionary) -> bool:
 		profile_buttons[profile_index].button_pressed = profile_index == active_profile
 	expanded = data.expanded
 	body.visible = expanded
-	toggle.text = "Свернуть" if expanded else "Развернуть"
+	_set_localized_property(toggle, "text", "Свернуть" if expanded else "Развернуть")
 	position = data.position
 	size = Vector2.ZERO
 	return true
@@ -475,11 +495,11 @@ func _refresh_line_link_button() -> void:
 	if line_link_button == null:
 		return
 	if bound_line_id >= 0:
-		line_link_button.text = "ОТВЯЗАТЬ ОТ ЛИНИИ"
+		_set_localized_property(line_link_button, "text", "ОТВЯЗАТЬ ОТ ЛИНИИ")
 	elif selecting_line:
-		line_link_button.text = "ОТМЕНИТЬ ВЫБОР ЛИНИИ"
+		_set_localized_property(line_link_button, "text", "ОТМЕНИТЬ ВЫБОР ЛИНИИ")
 	else:
-		line_link_button.text = "ПРИВЯЗАТЬ К ЛИНИИ"
+		_set_localized_property(line_link_button, "text", "ПРИВЯЗАТЬ К ЛИНИИ")
 
 func awaiting_line_binding() -> bool:
 	return visible and expanded and selecting_line and bound_line_id < 0
@@ -646,8 +666,9 @@ func _show_error(reason: String, editing_key: String = "") -> void:
 	_refresh_fields(editing_key)
 
 func _apply_validation_style(reason: String) -> void:
+	validation_reason = reason
 	for key in fields:
-		fields[key].tooltip_text = reason
+		fields[key].tooltip_text = Localization.text(reason)
 		fields[key].add_theme_color_override("font_color", MAJOR_CONTOUR_COLOR if reason.is_empty() else Color("a3483f"))
 
 func _refresh_fields(editing_key: String = "") -> void:

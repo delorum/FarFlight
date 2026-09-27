@@ -28,12 +28,19 @@ func _init() -> void:
 	var regular_food_airport: int = price_memory.food_airports[1]
 	var expensive_food_airport: int = price_memory.food_airports[2]
 	price_memory.arrive_at_airport(cheap_food_airport, world)
+	assert(price_memory.known_price_description(price_memory.food_airports, cheap_food_airport).is_empty(), "One known shop must not claim a relative price")
 	price_memory.arrive_at_airport(regular_food_airport, world)
-	assert("еда (+)" in price_memory.services_at(cheap_food_airport))
-	assert("еда (++)" in price_memory.services_at(regular_food_airport))
-	assert("еда" in price_memory.services_at(expensive_food_airport) and "еда (+++)" not in price_memory.services_at(expensive_food_airport), "Unvisited airport prices must remain unknown")
+	assert("кафе (+)" in price_memory.services_at(cheap_food_airport))
+	assert("кафе (++)" in price_memory.services_at(regular_food_airport))
+	assert(price_memory.known_price_description(price_memory.food_airports, cheap_food_airport) == "дешево")
+	assert(price_memory.known_price_description(price_memory.food_airports, regular_food_airport) == "дорого")
+	assert(price_memory.known_price_description(price_memory.food_airports, expensive_food_airport).is_empty(), "An unvisited shop must not reveal its price rank")
+	assert("кафе" in price_memory.services_at(expensive_food_airport) and "кафе (+++)" not in price_memory.services_at(expensive_food_airport), "Unvisited cafe prices must remain unknown")
 	price_memory.arrive_at_airport(expensive_food_airport, world)
-	assert("еда (+++)" in price_memory.services_at(expensive_food_airport))
+	assert("кафе (+++)" in price_memory.services_at(expensive_food_airport))
+	assert(price_memory.known_price_description(price_memory.food_airports, cheap_food_airport) == "дешево")
+	assert(price_memory.known_price_description(price_memory.food_airports, regular_food_airport) == "средне")
+	assert(price_memory.known_price_description(price_memory.food_airports, expensive_food_airport) == "дорого")
 	var empty_airports := 0
 	for airport_index in world.airports.size():
 		if economy.optional_service_count(airport_index) == 0:
@@ -116,6 +123,11 @@ func _init() -> void:
 	var food_money_before: int = shopper.money
 	assert(shopper.buy_food(shopper.food_airports[0]))
 	assert(shopper.money == food_money_before - shopper.food_price(shopper.food_airports[0]))
+	shopper.hunger = Economy.NEED_SEGMENTS - 1
+	var cafe_money_before: int = shopper.money
+	assert(shopper.buy_and_eat_at_cafe(shopper.food_airports[0]))
+	assert(shopper.hunger == Economy.NEED_SEGMENTS and shopper.money == cafe_money_before - shopper.food_price(shopper.food_airports[0]) * 2)
+	assert(not shopper.buy_and_eat_at_cafe(shopper.food_airports[0]), "A full pilot must not be charged for another cafe meal")
 	var needs = Economy.new(world)
 	needs.advance_time(3600.0)
 	assert(needs.hunger == 5 and needs.fatigue == 5)

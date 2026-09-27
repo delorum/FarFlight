@@ -1,6 +1,7 @@
 extends SceneTree
 
 const Save = preload("res://scripts/save_game.gd")
+const GameVersion = preload("res://scripts/game_version.gd")
 var failed := false
 var slot := "user://test_menu_save_%d.dat" % Time.get_ticks_usec()
 
@@ -39,12 +40,17 @@ func generated_world_signature(world) -> Dictionary:
 func _run() -> void:
 	var shell = load("res://scenes/game_shell.tscn").instantiate()
 	shell.save_path = slot
+	shell.settings_path = slot + ".settings"
 	root.add_child(shell)
 	await process_frame
+	check(GameVersion.is_valid(GameVersion.base_version()), "Project version must use the supported 0.MINOR.PATCH format")
+	check(shell.version_label != null and shell.version_label.text.begins_with("v" + GameVersion.base_version()), "Title and pause shell must display the configured game version")
 	check(shell.menu_open and shell.game == null, "Startup must show title menu without running a flight")
-	check(button_texts(shell) == ["Новая игра", "Об игре", "Авторы", "Выход"], "Startup without a save must hide Continue and keep the requested order")
+	check(button_texts(shell) == ["Новая игра", "Об игре", "Язык", "Авторы", "Выход"], "Startup without a save must hide Continue and keep the requested order")
 	shell._open_about()
 	check(shell.about_open, "About page must open")
+	var about_links: Array[Node] = shell.content.find_children("*", "LinkButton", true, false)
+	check(about_links.size() == 1 and about_links[0].text == "README — подробная справка" and about_links[0].uri == shell.README_URL_RU, "Russian About page must link to the Russian README guide")
 	shell._close_about()
 	shell._open_authors()
 	check(shell.authors_open, "Authors page must open")
@@ -122,7 +128,11 @@ func _run() -> void:
 	Input.parse_input_event(escape)
 	await process_frame
 	check(shell.menu_open and not game.is_processing() and not game.visible, "Escape must pause and cover cabin with title menu")
-	check(button_texts(shell) == ["Продолжить • seed 424242", "Статистика полётов", "Новая игра", "Сохранить и выйти"], "Pause menu must expose flight statistics and keep the requested button order")
+	check(button_texts(shell) == ["Продолжить • seed 424242", "Статистика полётов", "Об игре", "Язык", "Новая игра", "Сохранить и выйти"], "Pause menu must expose flight statistics, About, and Language while keeping the requested button order")
+	shell._open_about()
+	check(shell.about_open and shell.content.get_node_or_null("AboutScroll") != null, "Pause-menu About must open the shared scrollable game description")
+	shell._close_about()
+	check(shell.menu_open and button_texts(shell) == ["Продолжить • seed 424242", "Статистика полётов", "Об игре", "Язык", "Новая игра", "Сохранить и выйти"], "Leaving pause-menu About must return to the pause menu")
 	check(not game.throttle_down_held, "Pause must release held throttle input")
 	shell._open_pause_flight_history()
 	check(not shell.menu_open and game.view_mode == game.ViewMode.FLIGHT_HISTORY and game.simulation_paused, "Pause-menu statistics must open without resuming simulation")
@@ -269,8 +279,9 @@ func _run() -> void:
 	# Startup Continue uses the same complete restoration path.
 	var second_shell = load("res://scenes/game_shell.tscn").instantiate()
 	second_shell.save_path = slot
+	second_shell.settings_path = slot + ".settings.second"
 	root.add_child(second_shell)
-	check(button_texts(second_shell) == ["Продолжить • seed 424242", "Новая игра", "Об игре", "Авторы", "Выход"], "Startup with a save must show its world seed on Continue")
+	check(button_texts(second_shell) == ["Продолжить • seed 424242", "Новая игра", "Об игре", "Язык", "Авторы", "Выход"], "Startup with a save must show its world seed on Continue")
 	second_shell._continue_game()
 	check(second_shell.game != null and not second_shell.menu_open, "Startup Continue must load the slot")
 	second_shell.game.flight._crash("Проверка завершённого прохождения")
@@ -278,17 +289,18 @@ func _run() -> void:
 	var finished_data := Save.read_slot(slot)
 	check(Save.is_finished_run(finished_data) and bool(finished_data.run_finished), "A crash must automatically replace the slot with a finished-run snapshot")
 	second_shell._pause_game()
-	check(button_texts(second_shell) == ["Вернуться к итогам • seed 424242", "Статистика полётов", "Новая игра", "Выйти"], "A finished run must not offer Save and Exit or continued flight")
+	check(button_texts(second_shell) == ["Вернуться к итогам • seed 424242", "Статистика полётов", "Об игре", "Язык", "Новая игра", "Выйти"], "A finished run must expose About and Language without offering Save and Exit or continued flight")
 	second_shell._open_pause_flight_history()
 	check(second_shell.game.view_mode == second_shell.game.ViewMode.FLIGHT_HISTORY and not second_shell.game.crash_overlay.visible, "A crashed run must allow unobstructed flight-history viewing")
 	second_shell.game.return_to_pause_menu_from_history()
 	var finished_shell = load("res://scenes/game_shell.tscn").instantiate()
 	finished_shell.save_path = slot
+	finished_shell.settings_path = slot + ".settings.finished"
 	root.add_child(finished_shell)
-	check(button_texts(finished_shell) == ["Итоги • seed 424242", "Новая игра", "Об игре", "Авторы", "Выход"], "Startup must identify a finished run as Results instead of Continue")
+	check(button_texts(finished_shell) == ["Итоги • seed 424242", "Новая игра", "Об игре", "Язык", "Авторы", "Выход"], "Startup must identify a finished run as Results instead of Continue")
 	finished_shell._continue_game()
 	check(finished_shell.game.flight.state == finished_shell.game.FlightModelScript.State.CRASHED, "Opening saved results must remain in the terminal crash state")
-	for path in [slot, slot + ".tmp", corrupt_path]:
+	for path in [slot, slot + ".tmp", corrupt_path, slot + ".settings", slot + ".settings.second", slot + ".settings.finished"]:
 		if FileAccess.file_exists(path):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 	print("Title/pause menu, atomic save, full load, continued physics and invalid saves: ", "FAIL" if failed else "OK")

@@ -1,25 +1,34 @@
 extends Control
 
 const SaveGame = preload("res://scripts/save_game.gd")
+const GameVersion = preload("res://scripts/game_version.gd")
+const Localization = preload("res://scripts/localization.gd")
 const GAME_SCENE = preload("res://scenes/main.tscn")
 const INK := Color("513e2c")
+const README_URL_EN := "https://github.com/delorum/FarFlight/blob/main/README.md"
+const README_URL_RU := "https://github.com/delorum/FarFlight/blob/main/README_RU.md"
 const ABOUT := "Вы — почтальон-пилот. Между затерянными аэродромами почтовая авиация связывает людей: посылки, письма и вести издалека должны добраться до адресата. Выбирайте заказы на почте, загружайте самолёт и составляйте выгодные маршруты для нескольких доставок. Дальние заказы оплачиваются лучше.\n\nНо здесь небо почти никогда не бывает ясным. Уже в ста метрах над землёй начинается сплошная облачность. Дальше — полёт по приборам: курс, высота, скорость, сигналы радиомаяков и ваши пометки на карте. Положение самолёта на ней не отмечено — его предстоит определить самому.\n\nУчитывайте ветер, обходите грозы и планируйте остановки: топливо, еда, гостиницы и ремонтные ангары есть не на каждом аэродроме. Канистры и грузы занимают место, пилоту нужно есть и отдыхать, а самолёт постепенно изнашивается — особенно в грозах и при превышении безопасной скорости. Летайте между аэродромами, доставляйте почту и зарабатывайте деньги на новые рейсы."
 
 var game: Control
 var menu_root: Control
 var content: VBoxContainer
+var version_label: Label
 var about_open := false
 var authors_open := false
+var language_open := false
 var new_game_setup_open := false
 var menu_open := true
 var error_text := ""
 var save_path := SaveGame.PATH
+var settings_path := Localization.DEFAULT_SETTINGS_PATH
 var new_game_seed_text := ""
 var new_game_seed_field: LineEdit
 
 func _ready() -> void:
+	Localization.initialize(settings_path)
 	Engine.max_fps = 60
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
+	DisplayServer.window_set_title(Localization.text("Far Flight — Почтовая авиация"))
 	if not OS.has_feature("web"):
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 	_build_background()
@@ -49,17 +58,26 @@ func _build_background() -> void:
 	veil.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	veil.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	menu_root.add_child(veil)
+	version_label = _label(GameVersion.display_version(), 16)
+	version_label.name = "GameVersion"
+	version_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	version_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	version_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	version_label.position = Vector2(-224, -48)
+	version_label.size = Vector2(200, 28)
+	version_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	menu_root.add_child(version_label)
 
 func _label(text: String, font_size: int) -> Label:
 	var label := Label.new()
-	label.text = text
+	label.text = Localization.text(text)
 	label.add_theme_color_override("font_color", INK)
 	label.add_theme_font_size_override("font_size", font_size)
 	return label
 
 func _button(text: String, action: Callable, disabled := false) -> Button:
 	var button := Button.new()
-	button.text = text
+	button.text = Localization.text(text)
 	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	button.custom_minimum_size.y = 49
 	button.disabled = disabled
@@ -78,14 +96,14 @@ func _button(text: String, action: Callable, disabled := false) -> Button:
 	content.add_child(button)
 	return button
 
-func _link(text: String, url: String) -> LinkButton:
+func _link(text: String, url: String, parent: Node = null) -> LinkButton:
 	var link := LinkButton.new()
-	link.text = text
+	link.text = Localization.text(text)
 	link.uri = url
 	link.add_theme_color_override("font_color", INK)
 	link.add_theme_color_override("font_hover_color", Color("8a552f"))
 	link.add_theme_font_size_override("font_size", 20)
-	content.add_child(link)
+	(parent if parent != null else content).add_child(link)
 	return link
 
 func _rebuild_menu() -> void:
@@ -107,15 +125,26 @@ func _rebuild_menu() -> void:
 		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 		scroll.custom_minimum_size.y = clampf(size.y - 365.0, 160.0, 480.0)
 		content.add_child(scroll)
+		var about_body := VBoxContainer.new()
+		about_body.add_theme_constant_override("separation", 12)
+		about_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		scroll.add_child(about_body)
 		var description := _label(ABOUT, 18)
 		description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		description.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		scroll.add_child(description)
+		about_body.add_child(description)
+		about_body.add_child(_label("Подробнее обо всех приборах, механиках и управлении:", 16))
+		_link("README — подробная справка", README_URL_EN if Localization.is_english() else README_URL_RU, about_body)
 		_button("Назад", _close_about)
 	elif authors_open:
 		content.add_child(_label("Авторы", 22))
 		_link("github.com/delorum", "https://github.com/delorum")
 		_button("Назад", _close_authors)
+	elif language_open:
+		content.add_child(_label("ЯЗЫК", 22))
+		_button(("✓ " if Localization.language == Localization.RUSSIAN else "") + Localization.text("Русский"), _select_language.bind(Localization.RUSSIAN))
+		_button(("✓ " if Localization.language == Localization.ENGLISH else "") + Localization.text("Английский"), _select_language.bind(Localization.ENGLISH))
+		_button("Назад", _close_language)
 	elif new_game_setup_open:
 		content.add_child(_label("НОВАЯ ИГРА", 22))
 		var seed_help := _label("Введите seed от 1 до 2147483647, чтобы воспроизвести тот же мир. Оставьте поле пустым для случайного seed.", 16)
@@ -123,7 +152,7 @@ func _rebuild_menu() -> void:
 		content.add_child(seed_help)
 		new_game_seed_field = LineEdit.new()
 		new_game_seed_field.name = "WorldSeed"
-		new_game_seed_field.placeholder_text = "Seed мира — пусто: случайный"
+		new_game_seed_field.placeholder_text = Localization.text("Seed мира — пусто: случайный")
 		new_game_seed_field.text = new_game_seed_text
 		new_game_seed_field.max_length = 10
 		new_game_seed_field.custom_minimum_size.y = 48
@@ -149,6 +178,8 @@ func _rebuild_menu() -> void:
 		content.add_child(_label("ИТОГИ ПРОХОЖДЕНИЯ" if run_finished else "ПАУЗА", 14))
 		_button(("Вернуться к итогам" if run_finished else "Продолжить") + " • seed %d" % game.world.seed_value, _resume_game)
 		_button("Статистика полётов", _open_pause_flight_history)
+		_button("Об игре", _open_about)
+		_button("Язык", _open_language)
 		_button("Новая игра", _open_new_game_setup)
 		if run_finished:
 			_button("Выйти", _exit_game)
@@ -161,6 +192,7 @@ func _rebuild_menu() -> void:
 			_button("%s • seed %d" % [saved_action, int(slot.world.seed)], _continue_game)
 		_button("Новая игра", _open_new_game_setup)
 		_button("Об игре", _open_about)
+		_button("Язык", _open_language)
 		_button("Авторы", _open_authors)
 		_button("Выход", _exit_game)
 		if SaveGame.slot_exists(save_path) and slot.is_empty():
@@ -202,6 +234,7 @@ func _open_new_game_setup() -> void:
 	new_game_setup_open = true
 	about_open = false
 	authors_open = false
+	language_open = false
 	error_text = ""
 	new_game_seed_text = ""
 	_rebuild_menu()
@@ -261,6 +294,7 @@ func _pause_game() -> void:
 	menu_open = true
 	about_open = false
 	authors_open = false
+	language_open = false
 	game.set_process(false)
 	game.set_process_input(false)
 	game.hide()
@@ -331,6 +365,7 @@ func _exit_game() -> void:
 	menu_open = true
 	about_open = false
 	authors_open = false
+	language_open = false
 	error_text = "Можно закрыть вкладку. Сохранения хранятся в этом браузере."
 	menu_root.show()
 	_rebuild_menu()
@@ -338,6 +373,7 @@ func _exit_game() -> void:
 func _open_about() -> void:
 	about_open = true
 	authors_open = false
+	language_open = false
 	new_game_setup_open = false
 	error_text = ""
 	_rebuild_menu()
@@ -349,12 +385,32 @@ func _close_about() -> void:
 func _open_authors() -> void:
 	authors_open = true
 	about_open = false
+	language_open = false
 	new_game_setup_open = false
 	error_text = ""
 	_rebuild_menu()
 
 func _close_authors() -> void:
 	authors_open = false
+	_rebuild_menu()
+
+func _open_language() -> void:
+	language_open = true
+	about_open = false
+	authors_open = false
+	new_game_setup_open = false
+	error_text = ""
+	_rebuild_menu()
+
+func _close_language() -> void:
+	language_open = false
+	_rebuild_menu()
+
+func _select_language(selected: String) -> void:
+	Localization.set_language(selected)
+	DisplayServer.window_set_title(Localization.text("Far Flight — Почтовая авиация"))
+	if game != null and game.has_method("localization_changed"):
+		game.localization_changed()
 	_rebuild_menu()
 
 func _input(event: InputEvent) -> void:
@@ -366,6 +422,8 @@ func _input(event: InputEvent) -> void:
 			_close_about()
 		elif authors_open:
 			_close_authors()
+		elif language_open:
+			_close_language()
 		elif new_game_setup_open:
 			_close_new_game_setup()
 		elif game != null:

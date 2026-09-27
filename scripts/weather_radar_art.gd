@@ -1,4 +1,5 @@
 extends RefCounted
+const Localization = preload("res://scripts/localization.gd")
 ## Shared echoes: enlarging the scope reveals the same weather, not extra data.
 const RANGE_KM := 30.0
 const ECHO_ZONES := [
@@ -67,7 +68,7 @@ static func draw_large(canvas: CanvasItem, rect: Rect2, world, flight, echoes: T
 	var text_color := Color("b8c5c8")
 	canvas.draw_rect(rect,Color("071012"))
 	canvas.draw_rect(rect,Color("6f7f85"),false,2)
-	canvas.draw_string(font,rect.position+Vector2(20,29),"МЕТЕОРАДАР [B]",HORIZONTAL_ALIGNMENT_LEFT,rect.size.x-40,19,text_color)
+	Localization.draw_string(canvas,font,rect.position+Vector2(20,29),"МЕТЕОРАДАР [B]",HORIZONTAL_ALIGNMENT_LEFT,rect.size.x-40,19,text_color)
 	if not flight.electrical_power:
 		return
 	var radius := scope_radius(rect)
@@ -84,18 +85,18 @@ static func draw_large(canvas: CanvasItem, rect: Rect2, world, flight, echoes: T
 		var direction := Vector2(sin(deg_to_rad(angle_deg)),-cos(deg_to_rad(angle_deg)))
 		canvas.draw_line(center+direction*14,center+direction*radius,Color(0.28,0.43,0.43,0.4),1,true)
 		var mark := center+direction*(radius+17)
-		canvas.draw_string(font,mark+Vector2(-18,4),"%03d°" % angle_deg,HORIZONTAL_ALIGNMENT_CENTER,36,11,text_color)
+		Localization.draw_string(canvas,font,mark+Vector2(-18,4),"%03d°" % angle_deg,HORIZONTAL_ALIGNMENT_CENTER,36,11,text_color)
 	var ring_step := 5 if range_km >= 20.0 else (2 if range_km >= 10.0 else 1)
 	for ring_km in range(ring_step,int(range_km)+1,ring_step):
 		var ring_radius := radius*ring_km/range_km
 		canvas.draw_arc(center,ring_radius,0,TAU,120,grid,1,true)
-		canvas.draw_string(font,center+Vector2(6,-ring_radius+13),"%d км" % ring_km,HORIZONTAL_ALIGNMENT_LEFT,55,11,text_color)
+		Localization.draw_string(canvas,font,center+Vector2(6,-ring_radius+13),"%d км" % ring_km,HORIZONTAL_ALIGNMENT_LEFT,55,11,text_color)
 	canvas.draw_colored_polygon(PackedVector2Array([center+Vector2(0,-11),center+Vector2(3,-2),center+Vector2(10,3),center+Vector2(2,3),center+Vector2(2,8),center+Vector2(0,6),center+Vector2(-2,8),center+Vector2(-2,3),center+Vector2(-10,3),center+Vector2(-3,-2)]),Color("dfcd84"))
 	var legend := Vector2(rect.end.x-204,rect.position.y+198)
 	for index in 3:
 		canvas.draw_rect(Rect2(legend+Vector2(0,index*27-10),Vector2(10,10)),ECHO_ZONES[index].color)
-		canvas.draw_string(font,legend+Vector2(18,index*27),["Слабые осадки","Сильные осадки","Грозовое ядро"][index],HORIZONTAL_ALIGNMENT_LEFT,169,12,text_color)
-	canvas.draw_string(font,Vector2(rect.position.x+20,rect.end.y-16),"ЛКМ: точка / линия • тянуть точку: изменить • ПКМ: отменить / стереть • [B]: карта",HORIZONTAL_ALIGNMENT_LEFT,rect.size.x-40,12,text_color)
+		Localization.draw_string(canvas,font,legend+Vector2(18,index*27),["Слабые осадки","Сильные осадки","Грозовое ядро"][index],HORIZONTAL_ALIGNMENT_LEFT,169,12,text_color)
+	Localization.draw_string(canvas,font,Vector2(rect.position.x+20,rect.end.y-16),"ЛКМ: точка / линия • тянуть точку: изменить • ПКМ: отменить / стереть • [B]: карта",HORIZONTAL_ALIGNMENT_LEFT,rect.size.x-40,12,text_color)
 
 static func draw_storm_motion(canvas: CanvasItem, rect: Rect2, world, flight, mouse: Vector2, range_km: float) -> void:
 	if not flight.electrical_power:
@@ -132,12 +133,12 @@ static func draw_storm_motion(canvas: CanvasItem, rect: Rect2, world, flight, mo
 		canvas.draw_line(origin, tip, color, 2.0, true)
 		for angle in [-0.55, 0.55]:
 			canvas.draw_line(tip, tip - direction.rotated(angle) * 8.0, color, 2.0, true)
-	var label := "%03d° • %.0f км/ч" % [roundi(world.vector_heading(velocity)) % 360, velocity.length()]
+	var label := Localization.text("%03d° • %.0f км/ч" % [roundi(world.vector_heading(velocity)) % 360, velocity.length()])
 	var label_size := ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12)
 	var label_rect := storm_motion_label_rect(rect, origin, tip, label_size)
 	if label_rect.has_area():
 		canvas.draw_rect(label_rect, Color("091a1b"))
-		canvas.draw_string(ThemeDB.fallback_font, label_rect.position + Vector2(4, 13), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, color)
+		Localization.draw_string(canvas,ThemeDB.fallback_font, label_rect.position + Vector2(4, 13), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, color)
 
 static func storm_motion_label_rect(rect: Rect2, origin: Vector2, tip: Vector2, label_size: Vector2) -> Rect2:
 	var box_size := Vector2(label_size.x + 8.0, 19.0)
@@ -170,4 +171,4 @@ static func draw_map_button(canvas: CanvasItem, rect: Rect2) -> void:
 			var u := step/23.0
 			points.append(rect.position+Vector2(5+u*(rect.size.x-10),28+row*10+sin(u*TAU+row*0.7)*4))
 		canvas.draw_polyline(points,Color("968260"),1,true)
-	canvas.draw_string(ThemeDB.fallback_font,rect.position+Vector2(7,13),"КАРТА [B]",HORIZONTAL_ALIGNMENT_LEFT,rect.size.x-14,10,Color("5c5138"))
+	Localization.draw_string(canvas,ThemeDB.fallback_font,rect.position+Vector2(7,13),"КАРТА [B]",HORIZONTAL_ALIGNMENT_LEFT,rect.size.x-14,10,Color("5c5138"))

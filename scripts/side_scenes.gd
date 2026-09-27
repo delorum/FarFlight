@@ -1,6 +1,7 @@
 extends RefCounted
 const UILayout = preload("res://scripts/ui_layout.gd")
 const ViewMode = preload("res://scripts/scene_modes.gd").ViewMode
+const Localization = preload("res://scripts/localization.gd")
 ## Cabin, apron and airport scenes: player state, item presentation and scene geometry.
 
 const AircraftArt = preload("res://scripts/aircraft_art.gd")
@@ -155,11 +156,11 @@ func _draw_scene_hotspots() -> void:
 		var rect: Rect2 = spot.rect
 		var active = host.cabin_interactions.active(spot.id) if spot.has("id") else (rect.has_point(mouse_position) or _scene_hotspot_is_near(spot))
 		var color = Color("#785022") if active else AircraftArt.INK
-		var label: String = spot.label
+		var label: String = Localization.text(spot.label)
 		var width = ThemeDB.fallback_font.get_string_size(label,HORIZONTAL_ALIGNMENT_LEFT,-1,12).x+20
 		var x = clampf(float(spot.get("label_x", spot.x))-width*0.5,12,host.size.x-width-12)
 		var y: float = spot.get("label_y", rect.end.y + 12)
-		host.draw_string(ThemeDB.fallback_font,Vector2(x+10,y),label,HORIZONTAL_ALIGNMENT_CENTER,width-20,12,color)
+		host.draw_localized_string(ThemeDB.fallback_font,Vector2(x+10,y),label,HORIZONTAL_ALIGNMENT_CENTER,width-20,12,color)
 		if active:
 			host.draw_line(Vector2(x+10,y+5),Vector2(x+width-10,y+5),color,1,true)
 	host.draw_set_transform_matrix(Transform2D.IDENTITY)
@@ -266,7 +267,7 @@ func _interact_in_scene() -> void:
 			_open_selected_history_route()
 		ViewMode.ROUTE_HISTORY:
 			pass
-		ViewMode.MAIL, ViewMode.SHOP, ViewMode.HOTEL, ViewMode.FUEL, ViewMode.REPAIR:
+		ViewMode.MAIL, ViewMode.CAFE, ViewMode.HOTEL, ViewMode.FUEL, ViewMode.REPAIR:
 			_set_view_mode(ViewMode.AIRPORT)
 func _leave_current_scene() -> void:
 	match view_mode:
@@ -279,7 +280,7 @@ func _leave_current_scene() -> void:
 				_set_view_mode(ViewMode.OPERATIONS)
 		ViewMode.OPERATIONS:
 			_set_view_mode(ViewMode.AIRPORT)
-		ViewMode.MAIL, ViewMode.SHOP, ViewMode.HOTEL, ViewMode.FUEL, ViewMode.REPAIR:
+		ViewMode.MAIL, ViewMode.CAFE, ViewMode.HOTEL, ViewMode.FUEL, ViewMode.REPAIR:
 			_set_view_mode(ViewMode.AIRPORT)
 		ViewMode.AIRPORT:
 			_enter_apron()
@@ -292,11 +293,11 @@ func _scene_prompt(text: String) -> void:
 	if host.flight.state == FlightModelScript.State.CRASHED:
 		text = "Enter: траектория полёта • Esc: меню"
 	host.draw_line(Vector2(36, host.size.y - 69), Vector2(host.size.x - 36, host.size.y - 69), AircraftArt.LIGHT, 1.0, true)
-	host.draw_string(ThemeDB.fallback_font, Vector2(36, host.size.y - 39), text, HORIZONTAL_ALIGNMENT_CENTER, host.size.x - 72, 15, AircraftArt.INK)
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(36, host.size.y - 39), text, HORIZONTAL_ALIGNMENT_CENTER, host.size.x - 72, 15, AircraftArt.INK)
 	var controls_text = "Esc: меню" if host.flight.state == FlightModelScript.State.CRASHED else "ЛКМ: переместиться • клик по двери: перейти • стрелки: идти • Enter: действие • Esc: меню"
 	if view_mode == ViewMode.CABIN and host.flight.state != FlightModelScript.State.CRASHED:
 		controls_text = "ЛКМ / стрелки: идти • Enter: действие • X: за штурвал • Esc: меню"
-	host.draw_string(ThemeDB.fallback_font, Vector2(36, host.size.y - 17), controls_text, HORIZONTAL_ALIGNMENT_CENTER, host.size.x - 72, 11, Color("#ad9271"))
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(36, host.size.y - 17), controls_text, HORIZONTAL_ALIGNMENT_CENTER, host.size.x - 72, 11, Color("#ad9271"))
 func _draw_pilot(position: Vector2, rotation: float = 0.0) -> void:
 	var stride = sin(scene_walk_phase) * 6.0 if scene_is_walking else 0.0
 	var seated = _at_cabin_table() and not scene_is_walking
@@ -346,7 +347,7 @@ func _draw_item_icon(rect: Rect2, item: Dictionary, faint: bool = false, show_la
 		host.draw_rect(Rect2(rect.position + Vector2(rect.size.x * 0.58, -3), Vector2(rect.size.x * 0.25, 5)), fill, true)
 		host.draw_rect(Rect2(rect.position + Vector2(rect.size.x * 0.58, -3), Vector2(rect.size.x * 0.25, 5)), ink, false, 1.0)
 	if show_label and not faint and not type.is_empty():
-		host.draw_string(ThemeDB.fallback_font, rect.end + Vector2(4, -4), _item_label(item), HORIZONTAL_ALIGNMENT_LEFT, 95, 8, ink)
+		host.draw_localized_string(ThemeDB.fallback_font, rect.end + Vector2(4, -4), _item_label(item), HORIZONTAL_ALIGNMENT_LEFT, 95, 8, ink)
 
 func _canister_liquid_rect(rect: Rect2, fuel_l: float) -> Rect2:
 	return _liquid_level_rect(rect.grow(-3.0), fuel_l, float(EconomyScript.CANISTER_CAPACITY_L))
@@ -423,7 +424,7 @@ func _draw_cabin_table() -> void:
 	host.draw_line(Vector2(28,-12), Vector2(67,-12), AircraftArt.LIGHT, 1, true)
 	var active = host.cabin_interactions.active("table")
 	var color = Color("785022") if active else ink
-	host.draw_string(ThemeDB.fallback_font, Vector2(21,17), "СТОЛ", HORIZONTAL_ALIGNMENT_CENTER, 42, 8, color)
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(21,17), "СТОЛ", HORIZONTAL_ALIGNMENT_CENTER, 42, 8, color)
 	if active:
 		host.draw_line(Vector2(31,21), Vector2(53,21), color, 1, true)
 	host.draw_set_transform_matrix(Transform2D.IDENTITY)
@@ -463,7 +464,7 @@ func _draw_cabin_bed() -> void:
 	AircraftArt.box(host, Rect2(71, -4, 18, 5), Color("e1d6b8"), AircraftArt.LIGHT, 2)
 	var active = cabin_sleeping or host.cabin_interactions.active("bed")
 	var label_color = Color("#785022") if active else AircraftArt.INK
-	host.draw_string(ThemeDB.fallback_font, Vector2(0, 39), "КРОВАТЬ", HORIZONTAL_ALIGNMENT_CENTER, 96, 8, label_color)
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(0, 39), "КРОВАТЬ", HORIZONTAL_ALIGNMENT_CENTER, 96, 8, label_color)
 	if active:
 		host.draw_line(Vector2(25, 42), Vector2(71, 42), label_color, 1.0, true)
 
@@ -512,7 +513,7 @@ func _draw_cabin_fuel_device() -> void:
 	host.draw_line(Vector2(34,45),Vector2(34,50),ink,2,true)
 	var active = in_fuel_bay or host.cabin_interactions.active("fuel")
 	var label_color = Color("#785022") if active else ink
-	host.draw_string(ThemeDB.fallback_font, Vector2(-10,64), "ЗАПРАВКА", HORIZONTAL_ALIGNMENT_CENTER, 65, 8, label_color)
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(-10,64), "ЗАПРАВКА", HORIZONTAL_ALIGNMENT_CENTER, 65, 8, label_color)
 	if active:
 		host.draw_line(Vector2(2, 67), Vector2(43, 67), label_color, 1.0, true)
 
@@ -541,11 +542,11 @@ func _draw_carried_item(pilot_position: Vector2) -> void:
 		host.draw_set_transform_matrix(_cabin_pose())
 	else:
 		_draw_item_icon(item_rect, host.economy.carried_item, false, false)
-	var caption = _carried_item_caption(host.economy.carried_item)
+	var caption = Localization.text(_carried_item_caption(host.economy.carried_item))
 	var text_width = clampf(ThemeDB.fallback_font.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 9).x + 16.0, 64.0, 280.0)
 	var text_x = clampf(item_rect.get_center().x - text_width * 0.5, 12.0, host.size.x - text_width - 12.0)
 	# Keep the caption clear of both the carried object and the pilot's head.
-	host.draw_string(ThemeDB.fallback_font, Vector2(text_x, pilot_position.y - 82.0), caption, HORIZONTAL_ALIGNMENT_CENTER, text_width, 9, AircraftArt.INK)
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(text_x, pilot_position.y - 82.0), caption, HORIZONTAL_ALIGNMENT_CENTER, text_width, 9, AircraftArt.INK)
 	host.draw_set_transform_matrix(Transform2D.IDENTITY)
 
 func _draw_table_food() -> void:
@@ -655,7 +656,7 @@ func _draw_fuel_amount_slider(origin: Vector2 = Vector2.INF) -> void:
 		var canister_after = maxf(0.0, float(host.economy.carried_item.get("fuel_l", 0.0)) - fuel_amount_litres)
 		var tank_after = minf(host.flight.fuel_capacity_l, host.flight.fuel_l + fuel_amount_litres)
 		label = "Заправить %.1f л • останется %.1f л • бак %.1f/%.0f л" % [fuel_amount_litres, canister_after, tank_after, host.flight.fuel_capacity_l]
-	host.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, 16), label, HORIZONTAL_ALIGNMENT_CENTER, rect.size.x - 20, 11, AircraftArt.INK)
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(10, 16), label, HORIZONTAL_ALIGNMENT_CENTER, rect.size.x - 20, 11, AircraftArt.INK)
 
 func _set_fuel_amount_from_mouse(position: Vector2, origin: Vector2 = Vector2.INF, allow_outside: bool = false) -> bool:
 	var rect = _fuel_slider_rect(origin)
@@ -689,8 +690,8 @@ func _fuel_slider_is_active() -> bool:
 func _draw_scene_background(title: String) -> float:
 	host.draw_rect(Rect2(Vector2.ZERO, host.size), AircraftArt.PAPER, true)
 	var ground_y = host.size.y * 0.76
-	host.draw_string(ThemeDB.fallback_font, Vector2(38, 44), "FAR FLIGHT   /   ПОЧТОВАЯ АВИАЦИЯ", HORIZONTAL_ALIGNMENT_LEFT, host.size.x - 76, 11, Color("#b29a78"))
-	host.draw_string(ThemeDB.fallback_font, Vector2(36, 79), title, HORIZONTAL_ALIGNMENT_LEFT, host.size.x - 72, 24, AircraftArt.INK)
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(38, 44), "FAR FLIGHT   /   ПОЧТОВАЯ АВИАЦИЯ", HORIZONTAL_ALIGNMENT_LEFT, host.size.x - 76, 11, Color("#b29a78"))
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(36, 79), title, HORIZONTAL_ALIGNMENT_LEFT, host.size.x - 72, 24, AircraftArt.INK)
 	host.draw_line(Vector2(36, 98), Vector2(host.size.x-36,98), AircraftArt.LIGHT, 1, true)
 	# Faint horizon, grass and broken ground lines echo the architectural reference.
 	if view_mode != ViewMode.CABIN:
@@ -809,8 +810,8 @@ func _draw_cabin_terrain() -> void:
 	var prompt = "Колесо: масштаб • Enter / Esc: в салон • X: за штурвал"
 	if host.flight.stall_warning_active():
 		prompt = "СВАЛИВАНИЕ — ВЕРНИТЕСЬ ЗА ШТУРВАЛ" if host.flight.stalled else "БОЛЬШОЙ УГОЛ АТАКИ — ВЕРНИТЕСЬ ЗА ШТУРВАЛ"
-	host.draw_string(ThemeDB.fallback_font, Vector2(36, host.size.y - 39), prompt, HORIZONTAL_ALIGNMENT_CENTER, host.size.x - 72, 15, AircraftArt.INK)
-	host.draw_string(ThemeDB.fallback_font, Vector2(36, host.size.y - 17), "Вид вниз вдоль пути • полёт продолжается • Esc: меню", HORIZONTAL_ALIGNMENT_CENTER, host.size.x - 72, 11, AircraftArt.INK)
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(36, host.size.y - 39), prompt, HORIZONTAL_ALIGNMENT_CENTER, host.size.x - 72, 15, AircraftArt.INK)
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(36, host.size.y - 17), "Вид вниз вдоль пути • полёт продолжается • Esc: меню", HORIZONTAL_ALIGNMENT_CENTER, host.size.x - 72, 11, AircraftArt.INK)
 
 func _draw_cabin_airport_close_view() -> void:
 	if not _cabin_ground_visible():
@@ -1109,7 +1110,7 @@ func _draw_building(center_x: float, floor_y: float, building_size: Vector2, lab
 	host.draw_circle(Vector2(center_x+14,floor_y-29),2,AircraftArt.INK)
 	for i in 3:
 		host.draw_line(Vector2(center_x-28-i*6,floor_y+i*5),Vector2(center_x+28+i*6,floor_y+i*5),AircraftArt.INK,1.5,true)
-	host.draw_string(ThemeDB.fallback_font,Vector2(r.position.x,r.position.y+29),label,HORIZONTAL_ALIGNMENT_CENTER,r.size.x,13,AircraftArt.INK)
+	host.draw_localized_string(ThemeDB.fallback_font,Vector2(r.position.x,r.position.y+29),label,HORIZONTAL_ALIGNMENT_CENTER,r.size.x,13,AircraftArt.INK)
 func _draw_airport_scene() -> void:
 	var floor_y = _draw_scene_background("АЭРОПОРТ «%s»" % host.world.airports[host.flight.airport_index].name)
 	var buildings = _airport_buildings()
@@ -1135,7 +1136,7 @@ func _airport_buildings() -> Array[Dictionary]:
 	if host.flight.airport_index in host.economy.fuel_airports:
 		buildings.append({"label":"Заправка", "kind":ViewMode.FUEL})
 	if host.flight.airport_index in host.economy.food_airports:
-		buildings.append({"label":"Магазин", "kind":ViewMode.SHOP})
+		buildings.append({"label":"Кафе", "kind":ViewMode.CAFE})
 	if host.flight.airport_index in host.economy.hotel_airports:
 		buildings.append({"label":"Гостиница", "kind":ViewMode.HOTEL})
 	if host.flight.airport_index in host.economy.repair_airports:
@@ -1163,11 +1164,11 @@ func _draw_menu_button(rect: Rect2, text: String, font_size: int = 14) -> void:
 func _draw_operations_scene() -> void:
 	var floor_y = _draw_scene_background("ЛЁТНАЯ СЛУЖБА")
 	_draw_building(host.size.x * 0.25, floor_y, Vector2(host.size.x * 0.35, minf(SERVICE_BUILDING_HEIGHT, floor_y - 200.0)), "ЛЁТНАЯ СЛУЖБА", AircraftArt.PAPER)
-	host.draw_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.52, 120), "ОБСЛУЖИВАНИЕ САМОЛЁТА", HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.44, 18, Color("34372f"))
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.52, 120), "ОБСЛУЖИВАНИЕ САМОЛЁТА", HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.44, 18, Color("34372f"))
 	var status_color = Color("567044") if host.flight.departure_authorized else Color("a3483f")
-	host.draw_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.54, host.size.y * 0.22), host._operations_status_text(), HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.40, 15, status_color)
-	host.draw_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.54, host.size.y * 0.27), "Топливо: %.1f / %.0f л" % [host.flight.fuel_l, host.flight.fuel_capacity_l], HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.40, 16, Color("34372f"))
-	host.draw_string(ThemeDB.fallback_font, get_operations_refuel_rect().position + Vector2(0, 30), "Подготовка или смена ВПП: %d монет" % EconomyScript.PARKING_PRICE, HORIZONTAL_ALIGNMENT_CENTER, get_operations_refuel_rect().size.x, 15, AircraftArt.INK)
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.54, host.size.y * 0.22), host._operations_status_text(), HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.40, 15, status_color)
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.54, host.size.y * 0.27), "Топливо: %.1f / %.0f л" % [host.flight.fuel_l, host.flight.fuel_capacity_l], HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.40, 16, Color("34372f"))
+	host.draw_localized_string(ThemeDB.fallback_font, get_operations_refuel_rect().position + Vector2(0, 30), "Подготовка или смена ВПП: %d монет" % EconomyScript.PARKING_PRICE, HORIZONTAL_ALIGNMENT_CENTER, get_operations_refuel_rect().size.x, 15, AircraftArt.INK)
 	_draw_menu_button(get_operations_weather_rect(), "ОБНОВИТЬ МЕТЕОСВОДКУ • %s" % host.navigation_map.weather_briefing_age_text())
 	_draw_menu_button(get_operations_runway_rect(false), host._operations_runway_button_text(false))
 	_draw_menu_button(get_operations_runway_rect(true), host._operations_runway_button_text(true))
@@ -1344,13 +1345,13 @@ func _draw_flight_history_scene() -> void:
 	if route_details and route_history_origin in range(host.world.airports.size()) and route_history_destination in range(host.world.airports.size()):
 		title = "%s → %s • ВСЕГО ПОЛЁТОВ: %d • РЕКОРД СВЕРХУ" % [host.world.airports[route_history_origin].name, host.world.airports[route_history_destination].name, records.size()]
 	var back_rect := get_history_back_rect()
-	host.draw_string(ThemeDB.fallback_font, Vector2(_history_left_margin(), 139), title, HORIZONTAL_ALIGNMENT_LEFT, maxf(100.0, back_rect.position.x - _history_left_margin() - 18.0), 17, AircraftArt.INK)
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(_history_left_margin(), 139), title, HORIZONTAL_ALIGNMENT_LEFT, maxf(100.0, back_rect.position.x - _history_left_margin() - 18.0), 17, AircraftArt.INK)
 	_draw_menu_button(get_history_back_rect(), "НАЗАД")
 	var list_rect := _history_list_rect()
 	host.draw_rect(list_rect, Color("d7d0ad"), true)
 	host.draw_rect(list_rect, AircraftArt.INK, false, 1.0)
 	if records.is_empty():
-		host.draw_string(ThemeDB.fallback_font, list_rect.position + Vector2(0, 42), "Завершённых полётов пока нет", HORIZONTAL_ALIGNMENT_CENTER, list_rect.size.x, 17, AircraftArt.INK)
+		host.draw_localized_string(ThemeDB.fallback_font, list_rect.position + Vector2(0, 42), "Завершённых полётов пока нет", HORIZONTAL_ALIGNMENT_CENTER, list_rect.size.x, 17, AircraftArt.INK)
 		_scene_prompt("Колесо / ↑↓: прокрутка • Enter: открыть рекорды маршрута • кнопка «Назад»: вернуться")
 		return
 	_clamp_history_selection(route_details)
@@ -1369,9 +1370,9 @@ func _draw_flight_history_scene() -> void:
 		var rank_text := "%d. " % (record_index + 1) if route_details else ""
 		if route_details and record_index == 0:
 			rank_text += "РЕКОРД • "
-		host.draw_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 21), "%s%s → %s%s" % [rank_text, origin_name, destination_name, count_text], HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 15, AircraftArt.INK)
+		host.draw_localized_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 21), "%s%s → %s%s" % [rank_text, origin_name, destination_name, count_text], HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 15, AircraftArt.INK)
 		var details := "%.1f км • %s • %s → %s" % [float(record.distance_km), _format_history_duration(float(record.duration_seconds)), _format_history_timestamp(float(record.start_seconds)), _format_history_timestamp(float(record.end_seconds))]
-		host.draw_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 43), details, HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 13, Color("6f5b3e"))
+		host.draw_localized_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 43), details, HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 13, Color("6f5b3e"))
 	if records.size() > _history_visible_rows():
 		var bar := Rect2(list_rect.end.x - 7, list_rect.position.y + 4, 3, list_rect.size.y - 8)
 		host.draw_rect(bar, Color("aa9c72"), true)
@@ -1387,11 +1388,11 @@ func _delivery_button_text(parcel: Dictionary) -> String:
 	return "СДАТЬ ПОСЫЛКУ • %d монет" % host.economy.parcel_reward(parcel)
 
 func _draw_economy_scene() -> void:
-	var titles = {ViewMode.MAIL:"ПОЧТА", ViewMode.SHOP:"МАГАЗИН", ViewMode.HOTEL:"ГОСТИНИЦА", ViewMode.FUEL:"ЗАПРАВКА", ViewMode.REPAIR:"РЕМОНТНЫЙ АНГАР"}
+	var titles = {ViewMode.MAIL:"ПОЧТА", ViewMode.CAFE:"КАФЕ", ViewMode.HOTEL:"ГОСТИНИЦА", ViewMode.FUEL:"ЗАПРАВКА", ViewMode.REPAIR:"РЕМОНТНЫЙ АНГАР"}
 	var title: String = titles.get(view_mode, "СЛУЖБА")
 	var floor_y = _draw_scene_background(title)
 	_draw_building(host.size.x * 0.23, floor_y, Vector2(host.size.x * 0.32, minf(SERVICE_BUILDING_HEIGHT, floor_y - 190.0)), title, AircraftArt.PAPER)
-	host.draw_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.48, 120), "%s • %d монет" % [host.world.airports[host.flight.airport_index].name, host.economy.money], HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.46, 18, AircraftArt.INK)
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.48, 120), "%s • %d монет" % [host.world.airports[host.flight.airport_index].name, host.economy.money], HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.46, 18, AircraftArt.INK)
 	match view_mode:
 		ViewMode.MAIL:
 			var row = 0
@@ -1404,19 +1405,24 @@ func _draw_economy_scene() -> void:
 				var bonus_text := " • надбавка +%d%%" % poverty_bonus if poverty_bonus > 0 else ""
 				_draw_menu_button(_economy_button_rect(row), "%s • маршрут %.0f км • %d монет%s" % [destination, offer.distance_km, host.economy.parcel_reward(offer), bonus_text])
 				row += 1
-		ViewMode.SHOP:
-			_draw_menu_button(_economy_button_rect(0), "КУПИТЬ ЕДУ • %d монет" % host.economy.food_price(host.flight.airport_index))
+		ViewMode.CAFE:
+			var food_price_suffix: String = host.economy.known_price_suffix(host.economy.food_airports, host.flight.airport_index)
+			_draw_menu_button(_economy_button_rect(0), "КУПИТЬ ЕДУ С СОБОЙ • %d монет%s" % [host.economy.food_price(host.flight.airport_index), food_price_suffix])
+			_draw_menu_button(_economy_button_rect(1), "ПОЕСТЬ В КАФЕ • %d монет%s" % [host.economy.cafe_meal_price(host.flight.airport_index), food_price_suffix])
 		ViewMode.HOTEL:
-			_draw_menu_button(_economy_button_rect(0), "ОТДОХНУТЬ 20 МИНУТ • %d монет" % host.economy.hotel_rest_price(host.flight.airport_index))
+			var hotel_price_suffix: String = host.economy.known_price_suffix(host.economy.hotel_airports, host.flight.airport_index)
+			_draw_menu_button(_economy_button_rect(0), "ОТДОХНУТЬ 20 МИНУТ • %d монет%s" % [host.economy.hotel_rest_price(host.flight.airport_index), hotel_price_suffix])
 		ViewMode.FUEL:
+			var fuel_price_suffix: String = host.economy.known_price_suffix(host.economy.fuel_airports, host.flight.airport_index)
 			_draw_menu_button(_economy_button_rect(0), "КУПИТЬ ПУСТУЮ КАНИСТРУ • %d" % EconomyScript.CANISTER_PRICE)
 			_draw_fuel_amount_slider()
-			_draw_menu_button(_economy_button_rect(2), "КУПИТЬ %.1f Л • %d монет" % [fuel_amount_litres, host.economy.fuel_purchase_cost(fuel_amount_litres, host.flight.airport_index)])
+			_draw_menu_button(_economy_button_rect(2), "КУПИТЬ %.1f Л • %d монет%s" % [fuel_amount_litres, host.economy.fuel_purchase_cost(fuel_amount_litres, host.flight.airport_index), fuel_price_suffix])
 			_draw_menu_button(_economy_button_rect(3), "ПРОДАТЬ КАНИСТРУ И ТОПЛИВО")
 		ViewMode.REPAIR:
 			var missing: float = maxf(0.0, FlightModelScript.MAX_AIRFRAME_CONDITION - float(host.flight.airframe_condition))
 			var full_cost: int = host.economy.repair_cost(missing, host.flight.airport_index)
-			host.draw_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.48, 148), "Точное состояние: %.1f/100 • %.1f мон./ед." % [host.flight.airframe_condition, host.economy.repair_price_per_point(host.flight.airport_index)], HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.46, 14, AircraftArt.INK)
-			_draw_menu_button(_economy_button_rect(0), "РЕМОНТ ДО 100 • %d монет" % full_cost)
+			var repair_price_suffix: String = host.economy.known_price_suffix(host.economy.repair_airports, host.flight.airport_index)
+			host.draw_localized_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.48, 148), "Точное состояние: %.1f/100 • %.1f мон./ед." % [host.flight.airframe_condition, host.economy.repair_price_per_point(host.flight.airport_index)], HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.46, 14, AircraftArt.INK)
+			_draw_menu_button(_economy_button_rect(0), "РЕМОНТ ДО 100 • %d монет%s" % [full_cost, repair_price_suffix])
 	_draw_menu_button(_economy_button_rect(5), "ВЫЙТИ В АЭРОПОРТ [ENTER]")
 	_scene_prompt(scene_notice if not scene_notice.is_empty() else "Клик: действие • Enter: выйти • Esc: меню")

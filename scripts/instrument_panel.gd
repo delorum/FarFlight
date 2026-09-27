@@ -1,4 +1,5 @@
 extends RefCounted
+const Localization = preload("res://scripts/localization.gd")
 const UILayout = preload("res://scripts/ui_layout.gd")
 const ViewMode = preload("res://scripts/scene_modes.gd").ViewMode
 ## Cockpit instrument rendering and layout. All drawing uses the owning canvas.
@@ -39,7 +40,7 @@ func _draw_panel() -> void:
 	if host.flight.electrical_power:
 		_draw_speedometer(speed_center, INSTRUMENT_RADIUS)
 		if host.flight.wheel_brakes_applied:
-			host.draw_string(ThemeDB.fallback_font, speed_center + Vector2(-INSTRUMENT_RADIUS, INSTRUMENT_RADIUS + 47), "ТОРМОЗ", HORIZONTAL_ALIGNMENT_CENTER, INSTRUMENT_RADIUS * 2.0, 11, Color("ef645e"))
+			host.draw_localized_string(ThemeDB.fallback_font, speed_center + Vector2(-INSTRUMENT_RADIUS, INSTRUMENT_RADIUS + 47), "ТОРМОЗ", HORIZONTAL_ALIGNMENT_CENTER, INSTRUMENT_RADIUS * 2.0, 11, Color("ef645e"))
 		_draw_altimeter(_instrument_center(1, gauge_y), INSTRUMENT_RADIUS)
 		_draw_variometer(_instrument_center(2, gauge_y), INSTRUMENT_RADIUS)
 		_draw_compass(_instrument_center(3, gauge_y), INSTRUMENT_RADIUS)
@@ -68,8 +69,8 @@ func _draw_panel() -> void:
 	elif not host.simulation_paused and host.flight.state == FlightModelScript.State.FLYING and host.flight.overspeed_warning_active():
 		status_text = "ВЫСОКАЯ СКОРОСТЬ — ИЗБЕГАТЬ РЕЗКИХ МАНЁВРОВ"
 		state_color = Color("e8d274")
-	host.draw_string(ThemeDB.fallback_font, rect.position + Vector2(10, rect.size.y - 10), status_text, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 330, 15, state_color)
-	host.draw_string(ThemeDB.fallback_font, Vector2(rect.end.x - 470, rect.end.y - 10), "W/S: газ  •  стрелки: штурвал  •  Esc: меню", HORIZONTAL_ALIGNMENT_RIGHT, 446, 12, Color("aebbc1"))
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(10, rect.size.y - 10), status_text, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 330, 15, state_color)
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(rect.end.x - 470, rect.end.y - 10), "W/S: газ  •  стрелки: штурвал  •  Esc: меню", HORIZONTAL_ALIGNMENT_RIGHT, 446, 12, Color("aebbc1"))
 
 func _flight_message_color() -> Color:
 	if host.flight.state == FlightModelScript.State.CRASHED or host.flight.message_is_error:
@@ -94,7 +95,7 @@ func _draw_unpowered_instruments(gauge_y: float) -> void:
 		var center = _instrument_center(index, gauge_y)
 		host.draw_circle(center, INSTRUMENT_RADIUS, Color("0a0e10"))
 		host.draw_arc(center, INSTRUMENT_RADIUS - 2, 0, TAU, 48, Color("7d8b91"), 2)
-		host.draw_string(ThemeDB.fallback_font, center - Vector2(INSTRUMENT_RADIUS, INSTRUMENT_RADIUS + 10.0), titles[index], HORIZONTAL_ALIGNMENT_CENTER, INSTRUMENT_RADIUS * 2, 11, Color("b8c5c8"))
+		host.draw_localized_string(ThemeDB.fallback_font, center - Vector2(INSTRUMENT_RADIUS, INSTRUMENT_RADIUS + 10.0), titles[index], HORIZONTAL_ALIGNMENT_CENTER, INSTRUMENT_RADIUS * 2, 11, Color("b8c5c8"))
 	_draw_unpowered_display(get_ils_rect(), "ILS")
 	var radar_rect = get_weather_radar_rect()
 	if radar_rect.size.x >= 150.0:
@@ -106,7 +107,7 @@ func _draw_unpowered_instruments(gauge_y: float) -> void:
 func _draw_unpowered_display(rect: Rect2, title: String) -> void:
 	host.draw_rect(rect, Color("0a0e10"), true)
 	host.draw_rect(rect, Color("6f7f85"), false, 1.5)
-	host.draw_string(ThemeDB.fallback_font, rect.position + Vector2(6, 12), title, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 12, 10, Color("b8c5c8"))
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(6, 12), title, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 12, 10, Color("b8c5c8"))
 
 func _draw_weather_radar() -> void:
 	var rect = get_weather_radar_rect()
@@ -117,7 +118,7 @@ func _draw_weather_radar() -> void:
 		return
 	host.draw_rect(rect, Color("071012"), true)
 	host.draw_rect(rect, Color("6f7f85"), false, 1.5)
-	host.draw_string(ThemeDB.fallback_font, rect.position + Vector2(6, 12), "МЕТЕОРАДАР 30 км [B]", HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 12, 9, Color("b8c5c8"))
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(6, 12), "МЕТЕОРАДАР 30 км [B]", HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 12, 9, Color("b8c5c8"))
 	var center = rect.position + Vector2(37, 41)
 	var radius = 23.0
 	host.draw_arc(center, radius, 0, TAU, 40, Color("557176"), 1.0)
@@ -130,7 +131,7 @@ func _draw_weather_radar() -> void:
 	var info_x = rect.position.x + 68.0
 	var danger_color = Color("ef645e") if host.flight.storm_intensity > 0.65 else Color("e8d274")
 	if host.flight.storm_intensity > 0.05:
-		host.draw_string(ThemeDB.fallback_font, Vector2(info_x, rect.position.y + 42), "ТУРБУЛЕНТНОСТЬ", HORIZONTAL_ALIGNMENT_LEFT, rect.end.x - info_x - 4, 9, danger_color)
+		host.draw_localized_string(ThemeDB.fallback_font, Vector2(info_x, rect.position.y + 42), "ТУРБУЛЕНТНОСТЬ", HORIZONTAL_ALIGNMENT_LEFT, rect.end.x - info_x - 4, 9, danger_color)
 
 func _instrument_center(index: int, gauge_y: float) -> Vector2:
 	var step = INSTRUMENT_RADIUS * 2.0 + INSTRUMENT_GAP
@@ -155,7 +156,7 @@ func _draw_speedometer(center: Vector2, radius: float) -> void:
 	var rotation_direction = Vector2(cos(rotation_angle), sin(rotation_angle))
 	host.draw_line(center + rotation_direction * (radius - 16), center + rotation_direction * (radius - 4), Color("73d6d0"), 2.5)
 	var rotation_label_position = center + rotation_direction * (radius - 25) - Vector2(9.0, -3.0)
-	host.draw_string(ThemeDB.fallback_font, rotation_label_position, "VR", HORIZONTAL_ALIGNMENT_CENTER, 18.0, 8, Color("73d6d0"))
+	host.draw_localized_string(ThemeDB.fallback_font, rotation_label_position, "VR", HORIZONTAL_ALIGNMENT_CENTER, 18.0, 8, Color("73d6d0"))
 	# With the current simplified climb polar, best angle and best rate of climb
 	# coincide at about 130 km/h. Keep one honest combined mark until the flight
 	# model has distinct Vx and Vy optima.
@@ -163,15 +164,15 @@ func _draw_speedometer(center: Vector2, radius: float) -> void:
 	var climb_direction = Vector2(cos(climb_angle), sin(climb_angle))
 	host.draw_line(center + climb_direction * (radius - 16), center + climb_direction * (radius - 4), Color("65d48c"), 2.5)
 	var climb_label_position = center + climb_direction * (radius - 27) - Vector2(15.0, -3.0)
-	host.draw_string(ThemeDB.fallback_font, climb_label_position, "VX/VY", HORIZONTAL_ALIGNMENT_CENTER, 30.0, 7, Color("65d48c"))
+	host.draw_localized_string(ThemeDB.fallback_font, climb_label_position, "VX/VY", HORIZONTAL_ALIGNMENT_CENTER, 30.0, 7, Color("65d48c"))
 	_draw_tick_scale(center, radius, 0.0, 300.0, 25.0, 50.0)
 	var needle_angle: float = speed_to_angle.call(host.flight.speed_kmh)
 	host.draw_line(center, center + Vector2(cos(needle_angle), sin(needle_angle)) * (radius - 15), Color("ed775f"), 2)
 	host.draw_circle(center, 3, Color("d8dfe0"))
-	host.draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "СКОРОСТЬ", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
+	host.draw_localized_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "СКОРОСТЬ", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
 	var value_color = Color("ef645e") if host.flight.speed_kmh > FlightModelScript.VNE_KMH else (Color("e8d274") if host.flight.speed_kmh > FlightModelScript.VNO_KMH else Color.WHITE)
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "%.0f км/ч" % host.flight.speed_kmh, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 14, value_color)
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 7, radius + 32), "По земле %.0f км/ч" % host.flight.ground_speed_kmh(), HORIZONTAL_ALIGNMENT_CENTER, radius * 2 + 14, 10, Color("73d6d0"))
+	host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "%.0f км/ч" % host.flight.speed_kmh, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 14, value_color)
+	host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(-radius - 7, radius + 32), "По земле %.0f км/ч" % host.flight.ground_speed_kmh(), HORIZONTAL_ALIGNMENT_CENTER, radius * 2 + 14, 10, Color("73d6d0"))
 
 func _draw_altimeter(center: Vector2, radius: float) -> void:
 	host.draw_circle(center, radius, Color("0a0e10"))
@@ -199,7 +200,7 @@ func _draw_altimeter(center: Vector2, radius: float) -> void:
 	var needle_angle := _scale_angle(host.flight.altitude_m, 0.0, FlightModelScript.ABSOLUTE_CEILING_M)
 	host.draw_line(center, center + Vector2(cos(needle_angle), sin(needle_angle)) * (radius - 15), Color("ed775f"), 2)
 	host.draw_circle(center, 3, Color("d8dfe0"))
-	host.draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ВЫСОТА", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
+	host.draw_localized_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ВЫСОТА", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
 	_draw_altimeter_readouts(center, radius)
 
 func altimeter_readout_texts() -> Dictionary:
@@ -224,20 +225,22 @@ func _draw_altimeter_readouts(center: Vector2, radius: float) -> void:
 	var readouts := altimeter_readout_texts()
 	var font := ThemeDB.fallback_font
 	var first_font_size := 14
-	host.draw_string(font, center + Vector2(-radius, radius + 17.0), readouts.barometric, HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0, first_font_size, Color.WHITE)
+	host.draw_localized_string(font, center + Vector2(-radius, radius + 17.0), readouts.barometric, HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0, first_font_size, Color.WHITE)
 	var second_font_size := 11
 	var separator := " • "
+	readouts.radio = Localization.text(readouts.radio)
+	readouts.ground = Localization.text(readouts.ground)
 	var radio_width: float = font.get_string_size(readouts.radio, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size).x
 	var separator_width: float = font.get_string_size(separator, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size).x
 	var ground_width: float = font.get_string_size(readouts.ground, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size).x
 	var x := center.x - (radio_width + separator_width + ground_width) * 0.5
 	var second_baseline := center.y + radius + 34.0
 	var second_line_color := radio_altimeter_text_color(float(readouts.radio_height))
-	host.draw_string(font, Vector2(x, second_baseline), readouts.radio, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size, second_line_color)
+	host.draw_localized_string(font, Vector2(x, second_baseline), readouts.radio, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size, second_line_color)
 	x += radio_width
-	host.draw_string(font, Vector2(x, second_baseline), separator, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size, second_line_color)
+	host.draw_localized_string(font, Vector2(x, second_baseline), separator, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size, second_line_color)
 	x += separator_width
-	host.draw_string(font, Vector2(x, second_baseline), readouts.ground, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size, second_line_color)
+	host.draw_localized_string(font, Vector2(x, second_baseline), readouts.ground, HORIZONTAL_ALIGNMENT_LEFT, -1, second_font_size, second_line_color)
 
 func optimal_altitude_range(force_refresh := false) -> Vector2:
 	_refresh_economy_range_cache(force_refresh)
@@ -380,7 +383,7 @@ func _draw_compass(center: Vector2, radius: float) -> void:
 		if cardinal:
 			var p = center + direction * (radius - 25)
 			var mark = "N" if degrees == 0 else ("E" if degrees == 90 else ("S" if degrees == 180 else "W"))
-			host.draw_string(ThemeDB.fallback_font, p - Vector2(11, -4), mark, HORIZONTAL_ALIGNMENT_CENTER, 22, 10, Color("d5ddde"))
+			host.draw_localized_string(ThemeDB.fallback_font, p - Vector2(11, -4), mark, HORIZONTAL_ALIGNMENT_CENTER, 22, 10, Color("d5ddde"))
 	var heading_angle: float = deg_to_rad(host.flight.heading_deg - 90.0)
 	var heading_vector = Vector2(cos(heading_angle), sin(heading_angle))
 	var arrow_tip = center + heading_vector * (radius - 8.0)
@@ -392,8 +395,8 @@ func _draw_compass(center: Vector2, radius: float) -> void:
 		arrow_tip - heading_vector * 12.0 - arrow_side * 6.0,
 	]), Color("e5b752"))
 	host.draw_circle(center, 3.0, Color("e5b752"))
-	host.draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "КОМПАС", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "%05.1f°" % host.flight.heading_deg, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 14, Color.WHITE)
+	host.draw_localized_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "КОМПАС", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
+	host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "%05.1f°" % host.flight.heading_deg, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 14, Color.WHITE)
 
 func _draw_variometer(center: Vector2, radius: float) -> void:
 	host.draw_circle(center, radius, Color("0a0e10"))
@@ -404,8 +407,8 @@ func _draw_variometer(center: Vector2, radius: float) -> void:
 	var needle_angle: float = lerpf(-PI * 0.75, PI * 0.75, inverse_lerp(-10.0, 10.0, shown_speed))
 	host.draw_line(center, center + Vector2(cos(needle_angle), sin(needle_angle)) * (radius - 15), Color("79cfa4"), 2)
 	host.draw_circle(center, 3, Color("d8dfe0"))
-	host.draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ВАРИОМЕТР", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 10, Color("b8c5c8"))
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "%+.1f м/с" % host.flight.vertical_speed_mps, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 14, Color.WHITE)
+	host.draw_localized_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ВАРИОМЕТР", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 10, Color("b8c5c8"))
+	host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "%+.1f м/с" % host.flight.vertical_speed_mps, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 14, Color.WHITE)
 
 func _draw_clock(center: Vector2, radius: float, beige: bool = false) -> void:
 	var whole_seconds = int(host.clock_seconds)
@@ -428,19 +431,19 @@ func _draw_clock(center: Vector2, radius: float, beige: bool = false) -> void:
 	host.draw_line(center, center + Vector2(cos(minute_angle), sin(minute_angle)) * (radius * 0.68), ink, 2.0, true)
 	host.draw_line(center, center + Vector2(cos(second_angle), sin(second_angle)) * (radius * 0.73), AircraftArt.LIGHT if beige else Color("ed775f"), 1.0, true)
 	host.draw_circle(center, 2.5, ink)
-	host.draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ЧАСЫ", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 10, AircraftArt.INK if beige else Color("b8c5c8"))
+	host.draw_localized_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ЧАСЫ", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 10, AircraftArt.INK if beige else Color("b8c5c8"))
 	var time_label_width := maxf(radius * 2.0, 142.0)
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(-time_label_width * 0.5, radius + 14), "ДЕНЬ %d • %02d:%02d:%02d" % [game_day_number(), hours, minutes, seconds], HORIZONTAL_ALIGNMENT_CENTER, time_label_width, 10, AircraftArt.INK if beige else Color.WHITE)
+	host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(-time_label_width * 0.5, radius + 14), "ДЕНЬ %d • %02d:%02d:%02d" % [game_day_number(), hours, minutes, seconds], HORIZONTAL_ALIGNMENT_CENTER, time_label_width, 10, AircraftArt.INK if beige else Color.WHITE)
 	if beige:
 		return
 	var trip_whole_seconds = int(host.trip_elapsed_seconds)
 	var trip_minutes: int = trip_whole_seconds / 60
 	var trip_seconds: int = trip_whole_seconds % 60
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 8.0, radius + 29), "ПУТЬ %.1f км • %02d:%02d" % [host.trip_air_distance_km, trip_minutes, trip_seconds], HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 16.0, 10, Color("73d6d0"))
+	host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(-radius - 8.0, radius + 29), "ПУТЬ %.1f км • %02d:%02d" % [host.trip_air_distance_km, trip_minutes, trip_seconds], HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 16.0, 10, Color("73d6d0"))
 	var reset_button = get_trip_reset_button_rect()
 	host.draw_rect(reset_button, Color("334b55"), true)
 	host.draw_rect(reset_button, Color("82979f"), false, 1.0)
-	host.draw_string(ThemeDB.fallback_font, reset_button.position + Vector2(0.0, 13.0), "СБРОС [T]", HORIZONTAL_ALIGNMENT_CENTER, reset_button.size.x, 8, Color.WHITE)
+	host.draw_localized_string(ThemeDB.fallback_font, reset_button.position + Vector2(0.0, 13.0), "СБРОС [T]", HORIZONTAL_ALIGNMENT_CENTER, reset_button.size.x, 8, Color.WHITE)
 
 func game_day_number() -> int:
 	if host.economy == null:
@@ -472,19 +475,19 @@ func _draw_fuel_instrument(center: Vector2, radius: float) -> void:
 	host.draw_line(center, center + Vector2(cos(left_needle_angle), sin(left_needle_angle)) * (radius - 15), Color("e6c75b"), 2.0, true)
 	host.draw_line(center, center + Vector2(cos(right_needle_angle), sin(right_needle_angle)) * (radius - 15), Color("6fc78c"), 2.0, true)
 	host.draw_circle(center, 3.0, Color("d8dfe0"))
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius, 5), "ОСТ", HORIZONTAL_ALIGNMENT_CENTER, radius, 8, Color("e6c75b"))
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(0, 5), "РАСХ", HORIZONTAL_ALIGNMENT_CENTER, radius, 8, Color("6fc78c"))
-	host.draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ТОПЛИВО", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 5.0, radius + 14), "Расход %.2f л/мин" % flow, HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 10.0, 10, Color("6fc78c"))
+	host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(-radius, 5), "ОСТ", HORIZONTAL_ALIGNMENT_CENTER, radius, 8, Color("e6c75b"))
+	host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(0, 5), "РАСХ", HORIZONTAL_ALIGNMENT_CENTER, radius, 8, Color("6fc78c"))
+	host.draw_localized_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ТОПЛИВО", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
+	host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(-radius - 5.0, radius + 14), "Расход %.2f л/мин" % flow, HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 10.0, 10, Color("6fc78c"))
 	# Keep the wide caption box centered on the gauge without clipping units.
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(-90.0, radius + 29), "%.1f/%.0f л • запас %.0f км" % [host.flight.fuel_l, host.flight.fuel_capacity_l, estimated_range], HORIZONTAL_ALIGNMENT_CENTER, 180.0, 10, Color.WHITE)
+	host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(-90.0, radius + 29), "%.1f/%.0f л • запас %.0f км" % [host.flight.fuel_l, host.flight.fuel_capacity_l, estimated_range], HORIZONTAL_ALIGNMENT_CENTER, 180.0, 10, Color.WHITE)
 
 func _draw_ils() -> void:
 	var rect = get_ils_rect()
 	var guidance: Dictionary = host.flight.landing_guidance(host.ils_airport_index, host.ils_signal_status.get("available", false))
 	host.draw_rect(rect, Color("0a0e10"), true)
 	host.draw_rect(rect, Color("6f7f85"), false, 1.5)
-	host.draw_string(ThemeDB.fallback_font, rect.position + Vector2(5, 12), host._ils_title(), HORIZONTAL_ALIGNMENT_LEFT, 200, 10, Color("b8c5c8"))
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(5, 12), host._ils_title(), HORIZONTAL_ALIGNMENT_LEFT, 200, 10, Color("b8c5c8"))
 	var display = Rect2(rect.position + Vector2(7, 16), Vector2(82, 35))
 	var center = display.get_center()
 	var airport_cross_color = Color("66878a")
@@ -494,7 +497,7 @@ func _draw_ils() -> void:
 	if not guidance.signal_available:
 		host.draw_line(display.position + Vector2(8, 4), display.end - Vector2(8, 4), Color("c95d55"), 2.0)
 		host.draw_line(Vector2(display.end.x - 8, display.position.y + 4), Vector2(display.position.x + 8, display.end.y - 4), Color("c95d55"), 2.0)
-		host.draw_string(ThemeDB.fallback_font, rect.position + Vector2(96, 37), "НЕТ СИГНАЛА", HORIZONTAL_ALIGNMENT_LEFT, 104, 10, Color("c95d55"))
+		host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(96, 37), "НЕТ СИГНАЛА", HORIZONTAL_ALIGNMENT_LEFT, 104, 10, Color("c95d55"))
 		return
 	host.draw_line(rect.position + Vector2(207, 4), rect.position + Vector2(207, rect.size.y - 4), Color("536067"), 1.0)
 	var desired_vs: float = guidance.desired_vertical_speed_mps
@@ -506,17 +509,17 @@ func _draw_ils() -> void:
 		approach_speed_color = Color("ef645e")
 	elif host.flight.speed_kmh > 100.0:
 		approach_speed_color = Color("e8d274")
-	host.draw_string(ThemeDB.fallback_font, rect.position + Vector2(216, 22), "H %.1f м" % host.flight.altitude_m, HORIZONTAL_ALIGNMENT_LEFT, 76, 12, altitude_color)
-	host.draw_string(ThemeDB.fallback_font, rect.position + Vector2(292, 22), "VS %+.2f м/с" % host.flight.vertical_speed_mps, HORIZONTAL_ALIGNMENT_LEFT, 105, 12, vertical_speed_color)
-	host.draw_string(ThemeDB.fallback_font, rect.position + Vector2(399, 22), "V %.1f км/ч" % host.flight.speed_kmh, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 407, 11, approach_speed_color)
-	host.draw_string(ThemeDB.fallback_font, rect.position + Vector2(216, 42), "ОТКЛ. ПУТИ %+.1f°" % guidance.course_error_deg, HORIZONTAL_ALIGNMENT_LEFT, 132, 12, course_error_color)
-	host.draw_string(ThemeDB.fallback_font, rect.position + Vector2(350, 42), "ДО ВПП %.2f км" % guidance.actual_distance_to_threshold_km, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 358, 12, Color.WHITE)
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(216, 22), "H %.1f м" % host.flight.altitude_m, HORIZONTAL_ALIGNMENT_LEFT, 76, 12, altitude_color)
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(292, 22), "VS %+.2f м/с" % host.flight.vertical_speed_mps, HORIZONTAL_ALIGNMENT_LEFT, 105, 12, vertical_speed_color)
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(399, 22), "V %.1f км/ч" % host.flight.speed_kmh, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 407, 11, approach_speed_color)
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(216, 42), "ОТКЛ. ПУТИ %+.1f°" % guidance.course_error_deg, HORIZONTAL_ALIGNMENT_LEFT, 132, 12, course_error_color)
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(350, 42), "ДО ВПП %.2f км" % guidance.actual_distance_to_threshold_km, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 358, 12, Color.WHITE)
 	if host.ils_touchdown_prediction.valid:
 		var touchdown_distance: float = host.ils_touchdown_prediction.distance_from_threshold_km
 		var touchdown_color = Color("65d48c") if touchdown_distance >= 0.0 and touchdown_distance <= FlightWorldScript.RUNWAY_LENGTH_KM else Color("ef645e")
-		host.draw_string(ThemeDB.fallback_font, rect.position + Vector2(216, 61), "КАСАНИЕ %+.2f км ОТ ТОРЦА" % touchdown_distance, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 224, 12, touchdown_color)
+		host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(216, 61), "КАСАНИЕ %+.2f км ОТ ТОРЦА" % touchdown_distance, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 224, 12, touchdown_color)
 	else:
-		host.draw_string(ThemeDB.fallback_font, rect.position + Vector2(216, 61), "КАСАНИЕ — НЕТ СНИЖЕНИЯ", HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 224, 12, Color("e8d274"))
+		host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(216, 61), "КАСАНИЕ — НЕТ СНИЖЕНИЯ", HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 224, 12, Color("e8d274"))
 	# Runway edges live on the airport's fixed horizontal axis. Far from the
 	# airport they are close together; towards the threshold they spread apart.
 	var runway_half_width_km = FlightWorldScript.RUNWAY_WIDTH_KM * 0.5
@@ -543,8 +546,8 @@ func _draw_ils() -> void:
 	host.draw_circle(Vector2(localizer_x, glide_y), 2.5, aircraft_center_color)
 	var localizer_color = Color("65d48c") if guidance.in_localizer else Color("e8d274")
 	var glide_color = Color("65d48c") if guidance.in_glide else Color("e8d274")
-	host.draw_string(ThemeDB.fallback_font, rect.position + Vector2(96, 30), "СТВОР" if guidance.in_localizer else "ВНЕ СТВОРА", HORIZONTAL_ALIGNMENT_LEFT, 104, 10, localizer_color)
-	host.draw_string(ThemeDB.fallback_font, rect.position + Vector2(96, 44), "ГЛИСС" if guidance.in_glide else ("ВЫСОКО" if guidance.glide_error > 0 else "НИЗКО"), HORIZONTAL_ALIGNMENT_LEFT, 104, 10, glide_color)
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(96, 30), "СТВОР" if guidance.in_localizer else "ВНЕ СТВОРА", HORIZONTAL_ALIGNMENT_LEFT, 104, 10, localizer_color)
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(96, 44), "ГЛИСС" if guidance.in_glide else ("ВЫСОКО" if guidance.glide_error > 0 else "НИЗКО"), HORIZONTAL_ALIGNMENT_LEFT, 104, 10, glide_color)
 
 func _ils_parameter_color(error: float, signal_available: bool, green_limit: float = 1.0, yellow_limit: float = 2.0) -> Color:
 	if not signal_available or error > yellow_limit:
@@ -565,13 +568,13 @@ func _draw_horizon(center: Vector2, radius: float) -> void:
 	host.draw_line(center + Vector2(7, 0), center + Vector2(25, 0), Color("e7c25f"), 3)
 	host.draw_circle(center, 3, Color("e7c25f"))
 	host.draw_arc(center, radius - 2, 0, TAU, 48, Color("7d8b91"), 2)
-	host.draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "АВИАГОРИЗОНТ", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
+	host.draw_localized_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "АВИАГОРИЗОНТ", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, Color("b8c5c8"))
 	var aoa_color = Color("65d48c")
 	if host.flight.stalled or host.flight.angle_of_attack_deg >= FlightModelScript.STALL_AOA_DEG:
 		aoa_color = Color("ef645e")
 	elif host.flight.angle_of_attack_deg >= FlightModelScript.STALL_WARNING_AOA_DEG:
 		aoa_color = Color("e8d274")
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "УА %+.1f°" % host.flight.angle_of_attack_deg, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 12, aoa_color)
+	host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "УА %+.1f°" % host.flight.angle_of_attack_deg, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 12, aoa_color)
 
 func _draw_beacon_instrument(center: Vector2, radius: float, instrument: int) -> void:
 	var signal_status: Dictionary = host.receiver_signal_status[instrument]
@@ -613,17 +616,17 @@ func _draw_beacon_instrument(center: Vector2, radius: float, instrument: int) ->
 		host.draw_line(center + Vector2(-12, -12), center + Vector2(12, 12), Color("c95d55"), 2.0)
 		host.draw_line(center + Vector2(12, -12), center + Vector2(-12, 12), Color("c95d55"), 2.0)
 	var title_color = Color("73d6d0") if host.active_receiver == instrument else Color("b8c5c8")
-	host.draw_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ПРИЁМНИК %d" % (instrument + 1), HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, title_color)
+	host.draw_localized_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ПРИЁМНИК %d" % (instrument + 1), HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 11, title_color)
 	var frequency_text = "%03d кГц" % int(host.receiver_frequencies[instrument])
-	host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 5.0, radius + 14), frequency_text, HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 10.0, 10, Color.WHITE)
+	host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(-radius - 5.0, radius + 14), frequency_text, HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 10.0, 10, Color.WHITE)
 	if signal_available:
 		var delta: Vector2 = beacon.position - host.flight.position_km
 		var absolute_bearing: float = host.world.vector_heading(delta)
 		var direct_course = int(round(absolute_bearing)) % 360
 		var reverse_course = (direct_course + 180) % 360
-		host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 9.0, radius + 29), "%.1f км  %03d°/%03d°" % [delta.length(), direct_course, reverse_course], HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 18.0, 10, Color("73d6d0"))
+		host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(-radius - 9.0, radius + 29), "%.1f км  %03d°/%03d°" % [delta.length(), direct_course, reverse_course], HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 18.0, 10, Color("73d6d0"))
 	else:
-		host.draw_string(ThemeDB.fallback_font, center + Vector2(-radius - 9.0, radius + 29), signal_status.get("reason", "НЕТ СИГНАЛА"), HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 18.0, 10, Color("c95d55"))
+		host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(-radius - 9.0, radius + 29), signal_status.get("reason", "НЕТ СИГНАЛА"), HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0 + 18.0, 10, Color("c95d55"))
 
 func _draw_controls(rect: Rect2) -> void:
 	var throttle_rect = get_throttle_rect()
@@ -631,18 +634,18 @@ func _draw_controls(rect: Rect2) -> void:
 	host.draw_rect(throttle_rect, Color("6f7f85"), false, 2)
 	var handle_y: float = lerpf(throttle_rect.end.y - 8, throttle_rect.position.y + 8, host.flight.throttle)
 	host.draw_rect(Rect2(throttle_rect.position.x - 5, handle_y - 5, throttle_rect.size.x + 10, 10), Color("e49a4f"), true)
-	host.draw_string(ThemeDB.fallback_font, throttle_rect.position - Vector2(13, 7), "ГАЗ", HORIZONTAL_ALIGNMENT_CENTER, throttle_rect.size.x + 26, 11, Color("b8c5c8"))
-	host.draw_string(ThemeDB.fallback_font, Vector2(throttle_rect.position.x - 56, handle_y + 5), "%d%%" % roundi(host.flight.throttle * 100.0), HORIZONTAL_ALIGNMENT_RIGHT, 44, 11, Color.WHITE)
+	host.draw_localized_string(ThemeDB.fallback_font, throttle_rect.position - Vector2(13, 7), "ГАЗ", HORIZONTAL_ALIGNMENT_CENTER, throttle_rect.size.x + 26, 11, Color("b8c5c8"))
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(throttle_rect.position.x - 56, handle_y + 5), "%d%%" % roundi(host.flight.throttle * 100.0), HORIZONTAL_ALIGNMENT_RIGHT, 44, 11, Color.WHITE)
 	var yoke_rect = get_yoke_rect()
 	if USE_STYLIZED_YOKE:
 		_draw_stylized_yoke(yoke_rect)
 	else:
 		_draw_legacy_yoke(yoke_rect)
-	host.draw_string(ThemeDB.fallback_font, yoke_rect.position - Vector2(0, 7), "ШТУРВАЛ", HORIZONTAL_ALIGNMENT_CENTER, yoke_rect.size.x, 11, Color("b8c5c8"))
+	host.draw_localized_string(ThemeDB.fallback_font, yoke_rect.position - Vector2(0, 7), "ШТУРВАЛ", HORIZONTAL_ALIGNMENT_CENTER, yoke_rect.size.x, 11, Color("b8c5c8"))
 	var center_button = get_center_yoke_button_rect()
 	host.draw_rect(center_button, Color("334b55"), true)
 	host.draw_rect(center_button, Color("82979f"), false, 1)
-	host.draw_string(ThemeDB.fallback_font, center_button.position + Vector2(0, 17), "ЦЕНТР [C]", HORIZONTAL_ALIGNMENT_CENTER, center_button.size.x, 10, Color.WHITE)
+	host.draw_localized_string(ThemeDB.fallback_font, center_button.position + Vector2(0, 17), "ЦЕНТР [C]", HORIZONTAL_ALIGNMENT_CENTER, center_button.size.x, 10, Color.WHITE)
 	var cabin_button = get_cabin_button_rect()
 	_draw_cockpit_action_button(cabin_button, "САЛОН [X]" if cabin_button.size.x >= 80.0 else "САЛОН")
 	var power_button = get_power_button_rect()

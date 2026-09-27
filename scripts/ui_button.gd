@@ -2,9 +2,11 @@ extends RefCounted
 ## Shared immediate-mode button for the code-drawn cockpit and paper scenes.
 ## Labels use font metrics and fit their content box in either palette.
 const Art = preload("res://scripts/aircraft_art.gd")
+const Localization = preload("res://scripts/localization.gd")
 
 static func draw(canvas: Control, rect: Rect2, label: String, paper: bool,
 		font_size: int = 14, indicator: Color = Color.TRANSPARENT, enabled: bool = true) -> void:
+	label = Localization.text(label)
 	var hovered := enabled and rect.has_point(canvas.get_local_mouse_position())
 	var fill := Art.PAPER.darkened(0.04) if hovered else Art.PAPER
 	var border: Color = Art.INK

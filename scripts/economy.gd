@@ -77,7 +77,7 @@ func services_at(airport_index: int) -> Array[String]:
 	if airport_index in fuel_airports:
 		result.append(_known_price_label("топливо", fuel_airports, airport_index))
 	if airport_index in food_airports:
-		result.append(_known_price_label("еда", food_airports, airport_index))
+		result.append(_known_price_label("кафе", food_airports, airport_index))
 	if airport_index in hotel_airports:
 		result.append(_known_price_label("гостиница", hotel_airports, airport_index))
 	if airport_index in repair_airports:
@@ -85,8 +85,30 @@ func services_at(airport_index: int) -> Array[String]:
 	return result
 
 func _known_price_label(label: String, service_airports: Array[int], airport_index: int) -> String:
-	if airport_index not in visited_airports:
+	var context := _known_price_context(service_airports, airport_index)
+	if context.is_empty():
 		return label
+	var price_marks := ""
+	for _mark in int(context.rank) + 1:
+		price_marks += "+"
+	return "%s (%s)" % [label, price_marks]
+
+func known_price_description(service_airports: Array[int], airport_index: int) -> String:
+	var context := _known_price_context(service_airports, airport_index)
+	if context.is_empty():
+		return ""
+	var rank := int(context.rank)
+	if int(context.count) == 2:
+		return "дешево" if rank == 0 else "дорого"
+	return ["дешево", "средне", "дорого"][rank]
+
+func known_price_suffix(service_airports: Array[int], airport_index: int) -> String:
+	var description := known_price_description(service_airports, airport_index)
+	return " (%s)" % description if not description.is_empty() else ""
+
+func _known_price_context(service_airports: Array[int], airport_index: int) -> Dictionary:
+	if airport_index not in visited_airports:
+		return {}
 	var known_airports: Array[int] = []
 	# Service arrays are stored in ascending price order. Filtering that array by
 	# visited locations therefore ranks only prices the pilot has actually seen.
@@ -94,14 +116,11 @@ func _known_price_label(label: String, service_airports: Array[int], airport_ind
 		if service_airport in visited_airports:
 			known_airports.append(service_airport)
 	if known_airports.size() < 2:
-		return label
+		return {}
 	var known_rank := known_airports.find(airport_index)
 	if known_rank < 0:
-		return label
-	var price_marks := ""
-	for _mark in known_rank + 1:
-		price_marks += "+"
-	return "%s (%s)" % [label, price_marks]
+		return {}
+	return {"rank": known_rank, "count": known_airports.size()}
 
 func optional_service_count(airport_index: int) -> int:
 	var count := 0
@@ -157,6 +176,9 @@ func fuel_purchase_cost(litres: float, airport_index: int) -> int:
 
 func food_price(airport_index: int) -> int:
 	return roundi(float(FOOD_PRICE) * _service_price_multiplier(food_airports, airport_index))
+
+func cafe_meal_price(airport_index: int) -> int:
+	return food_price(airport_index) * 2
 
 func hotel_rest_price(airport_index: int) -> int:
 	return roundi(float(HOTEL_REST_PRICE) * _service_price_multiplier(hotel_airports, airport_index))
@@ -292,6 +314,14 @@ func buy_food(airport_index: int = -1) -> bool:
 		return false
 	money -= price
 	carried_item = {"type": "food"}
+	return true
+
+func buy_and_eat_at_cafe(airport_index: int = -1) -> bool:
+	var price := cafe_meal_price(airport_index)
+	if money < price or hunger >= NEED_SEGMENTS:
+		return false
+	money -= price
+	hunger += 1
 	return true
 
 func buy_canister() -> bool:
