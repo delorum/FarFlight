@@ -51,6 +51,12 @@ func advance(real_delta: float, flight, economy, recorder, sleeping: bool) -> Di
 			flight._crash(economy.game_over_reason)
 		else:
 			flight.update(step) # Owns weather evolution as well as aircraft physics.
+		# The panel counter belongs to the current airborne leg. Reset it at the
+		# actual liftoff transition, not when the engine starts or the ground roll
+		# begins. A touch-and-go remains part of the same leg.
+		if previous_state in [Flight.State.PARKED, Flight.State.LANDED] and flight.state == Flight.State.FLYING:
+			trip_air_distance_km = 0.0
+			trip_elapsed_seconds = 0.0
 		flight_history.update(flight, previous_state, previous_position, economy.elapsed_seconds, step)
 		if previous_state == Flight.State.FLYING:
 			trip_air_distance_km += previous_position.distance_to(flight.position_km)

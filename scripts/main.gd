@@ -23,6 +23,12 @@ const UIButton = preload("res://scripts/ui_button.gd")
 
 const FlightWorldScript = preload("res://scripts/world.gd")
 const FlightModelScript = preload("res://scripts/flight_model.gd")
+const LandingPredictorScript = preload("res://scripts/landing_predictor.gd")
+const SessionMode = preload("res://scripts/session_mode.gd")
+const LandingPractice = preload("res://scripts/landing_practice.gd")
+const ILSDisplayState = preload("res://scripts/ils_display_state.gd")
+const CockpitInput = preload("res://scripts/cockpit_input.gd")
+var cockpit_input := CockpitInput.new(self)
 const MapRenderLayerScript = preload("res://scripts/map_render_layer.gd")
 const AircraftArt = preload("res://scripts/aircraft_art.gd")
 const WeatherRadarArt = preload("res://scripts/weather_radar_art.gd")
@@ -36,16 +42,14 @@ const CONTOUR_STEP_M := 250.0
 const SAMPLE_GRID := 192
 const INSTRUMENT_RADIUS = UILayout.INSTRUMENT_RADIUS
 const INSTRUMENT_GAP = UILayout.INSTRUMENT_GAP
-const THROTTLE_HOLD_DELAY := 0.32
-const THROTTLE_HOLD_RATE := 0.35
-const STEERING_TAP_DEGREES := 0.1
-const STEERING_FINE_RATE_DEG_S := 0.1
+const YOKE_PITCH_RANGE_DEG := FlightModelScript.YOKE_PITCH_RANGE_DEG
 const USE_STYLIZED_YOKE := true
 const MAX_MAP_ZOOM := 24.0
 const INITIAL_MAP_RADIUS_KM := 40.0
 const APPROACH_DETAIL_MIN_ZOOM := 20.0
 const WIND_OVERLAY_ALTITUDES = FlightWorldScript.WIND_ALTITUDES_M
 const TIME_SCALES = SimulationSession.TIME_SCALES
+const ILS_PREDICTION_REAL_INTERVAL := 0.5
 # Mirrored scene: both door-to-inventory and inventory-to-chair gaps are 19 units.
 const CABIN_TABLE_X = UILayout.CABIN_TABLE_X
 const CABIN_TABLE_SEAT_X = UILayout.CABIN_TABLE_SEAT_X
@@ -56,6 +60,7 @@ var world
 var flight
 var economy
 var requested_world_seed := 0
+var session_mode := SessionMode.Mode.CAMPAIGN
 # Compatibility facade for input, calculator and v3/v4 saves. State lives in
 # its owning module; these properties never keep a second copy.
 var receiver_frequencies := [305, 327]
@@ -207,19 +212,26 @@ var signal_check_timer := 0.0
 var receiver_signal_status: Array[Dictionary] = [{}, {}]
 var ils_signal_status: Dictionary = {}
 var ils_prediction_timer := 0.0
-var ils_touchdown_prediction: Dictionary = {"valid": false, "distance_from_threshold_km": 0.0}
+var ils_touchdown_prediction: Dictionary = LandingPredictorScript.no_touchdown()
+var large_ils := false
 var map_render_layer: Control
 var map_canvas: Control:
 	get:
 		return navigation_map.map_canvas
 	set(value):
 		navigation_map.map_canvas = value
-var throttle_up_held := false
-var throttle_down_held := false
-var throttle_up_hold_time := 0.0
-var throttle_down_hold_time := 0.0
-var steering_left_held := false
-var steering_right_held := false
+var throttle_up_held: bool:
+	get: return cockpit_input.throttle_up_held
+	set(value): cockpit_input.throttle_up_held = value
+var throttle_down_held: bool:
+	get: return cockpit_input.throttle_down_held
+	set(value): cockpit_input.throttle_down_held = value
+var steering_left_held: bool:
+	get: return cockpit_input.steering_left_held
+	set(value): cockpit_input.steering_left_held = value
+var steering_right_held: bool:
+	get: return cockpit_input.steering_right_held
+	set(value): cockpit_input.steering_right_held = value
 var wind_overlay_index: int:
 	get:
 		return navigation_map.wind_overlay_index
@@ -463,90 +475,18 @@ func _input(event: InputEvent) -> void:
 				_leave_current_scene()
 			get_viewport().set_input_as_handled()
 		return
-	if event is InputEventKey and event.pressed and not event.echo and not event.ctrl_pressed and (event.keycode == KEY_P or event.physical_keycode == KEY_P):
-		flight.toggle_electrical_power()
-		weather_radar_cache.invalidate()
-		_queue_map_redraw()
+	if cockpit_input.handle_key(event):
 		get_viewport().set_input_as_handled()
 		queue_redraw()
 		return
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_M:
-		flight.toggle_engine()
-		_queue_map_redraw()
-		get_viewport().set_input_as_handled()
-		queue_redraw()
-		return
-	if event is InputEventKey and event.pressed and not event.echo and not event.ctrl_pressed and (event.keycode == KEY_B or event.physical_keycode == KEY_B):
-		_toggle_weather_radar()
-		get_viewport().set_input_as_handled()
-		return
-	if event is InputEventKey and event.keycode in [KEY_LEFT, KEY_RIGHT]:
-		if event.echo:
-			get_viewport().set_input_as_handled()
-			return
-		var steer_right: bool = event.keycode == KEY_RIGHT
-		if event.pressed:
-			if event.shift_pressed and not dragging_yoke:
-				if steer_right:
-					steering_right_held = true
-				else:
-					steering_left_held = true
-				flight.heading_deg = fposmod(flight.heading_deg + (STEERING_TAP_DEGREES if steer_right else -STEERING_TAP_DEGREES), 360.0)
-			else:
-				# Plain arrows are read as an immediate continuous yoke axis in
-				# _process(). They no longer wait behind the fine-steering timer.
-				if steer_right:
-					steering_right_held = false
-				else:
-					steering_left_held = false
-		else:
-			if steer_right:
-				steering_right_held = false
-			else:
-				steering_left_held = false
-		get_viewport().set_input_as_handled()
-		queue_redraw()
-		return
-	if event is InputEventKey and (event.keycode == KEY_W or event.keycode == KEY_S):
-		if event.echo:
-			get_viewport().set_input_as_handled()
-			return
-		var increase: bool = event.keycode == KEY_W
-		if increase:
-			throttle_up_held = event.pressed
-			throttle_up_hold_time = 0.0
-		else:
-			throttle_down_held = event.pressed
-			throttle_down_hold_time = 0.0
-			if not event.pressed and flight != null:
-				flight.wheel_brakes_applied = false
-		if event.pressed and flight != null:
-			_adjust_throttle_percent(1 if increase else -1)
-		get_viewport().set_input_as_handled()
-		queue_redraw()
-		return
-	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_C:
-			flight.yoke = Vector2.ZERO
-			get_viewport().set_input_as_handled()
-			queue_redraw()
-		elif event.keycode == KEY_T:
-			_reset_trip_counter()
-			get_viewport().set_input_as_handled()
-			queue_redraw()
-		elif event.keycode == KEY_V:
-			wind_overlay_index += 1
-			if wind_overlay_index > WIND_OVERLAY_ALTITUDES.size():
-				wind_overlay_index = 0
-			last_wind_overlay_altitude_m = -INF
-			get_viewport().set_input_as_handled()
-			_queue_map_redraw()
 
 func regenerate_world(requested_seed: int = 0) -> void:
 	run_finish_save_attempted = false
 	world = FlightWorldScript.new(requested_seed)
 	flight = FlightModelScript.new(world)
 	economy = EconomyScript.new(world)
+	if SessionMode.is_landing_practice(session_mode):
+		LandingPractice.configure(world, flight)
 	navigation_map.refresh_weather_briefing()
 	last_economy_flight_state = flight.state
 	propeller_phase = 0.0
@@ -559,6 +499,8 @@ func regenerate_world(requested_seed: int = 0) -> void:
 	radar_measurement_lines.clear()
 	radar_pending_measure = null
 	radar_range_index = 0
+	large_weather_radar = false
+	large_ils = SessionMode.starts_with_large_ils(session_mode)
 	time_scale_index = 0
 	cabin_sleeping = false
 	cabin_sleep_progress_seconds = 0.0
@@ -566,7 +508,7 @@ func regenerate_world(requested_seed: int = 0) -> void:
 	trip_elapsed_seconds = 0.0
 	simulation.flight_history.reset()
 	_reset_flight_trajectory()
-	ils_airport_index = 0
+	ils_airport_index = flight.airport_index
 	ils_prediction_timer = 0.0
 	_tune_receivers_to_departure_airport()
 	_build_contours()
@@ -582,7 +524,7 @@ func _process(delta: float) -> void:
 		# or while the full-screen weather radar is open. Always leave those views
 		# for the navigation-map debrief instead of trapping the player behind a
 		# display whose controls are intentionally disabled after game over.
-		if view_mode not in [ViewMode.COCKPIT, ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY] or large_weather_radar:
+		if view_mode not in [ViewMode.COCKPIT, ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY] or large_weather_radar or large_ils:
 			_show_crash_map()
 		if not run_finish_save_attempted and get_parent().has_method("_on_run_finished"):
 			run_finish_save_attempted = true
@@ -599,26 +541,14 @@ func _process(delta: float) -> void:
 	if time_scale_index != 0 and _storm_is_turning_aircraft():
 		_reset_time_scale()
 	_update_held_steering(delta)
-	# Shift+arrow is a direct fine course adjustment and must not also feed the
-	# yoke axis. Plain arrows reach the yoke immediately through the input map.
-	var steering_axis := 0.0 if steering_left_held or steering_right_held else Input.get_axis("ui_left", "ui_right")
-	var keyboard_yoke := Vector2(steering_axis, Input.get_axis("ui_up", "ui_down"))
-	if flight_calculator != null and flight_calculator.editing():
-		keyboard_yoke = Vector2.ZERO
-	if view_mode == ViewMode.COCKPIT and not dragging_yoke:
-		if absf(keyboard_yoke.x) > 0.05:
-			flight.yoke.x = keyboard_yoke.x
-		else:
-			flight.yoke.x = move_toward(flight.yoke.x, 0.0, delta * 1.8)
-		if absf(keyboard_yoke.y) > 0.05:
-			# Only the pitch axis is positional: releasing Up/Down leaves the
-			# elevator command where the pilot set it.
-			flight.yoke.y = clampf(flight.yoke.y + keyboard_yoke.y * delta * 0.75, -1.0, 1.0)
+	cockpit_input.update_keyboard_yoke(delta)
 	_update_held_throttle(delta)
 	var engine_before_update: bool = flight.engine_running
 	var events := simulation.advance(delta, flight, economy, recorder, cabin_sleeping)
 	var game_delta: float = events.elapsed
 	if events.landed:
+		if SessionMode.keeps_storms_clear(session_mode):
+			LandingPractice.clear_storms(world)
 		navigation_map.refresh_weather_briefing()
 		weather_radar_cache.invalidate()
 	navigation_map.update_dynamic_annotations(delta)
@@ -626,16 +556,22 @@ func _process(delta: float) -> void:
 	if signal_check_timer <= 0.0:
 		_update_receiver_signals()
 		signal_check_timer = 1.0
-	ils_prediction_timer -= game_delta
-	if ils_prediction_timer <= 0.0:
-		_update_ils_touchdown_prediction()
-		ils_prediction_timer = 1.0
+	if view_mode == ViewMode.COCKPIT and flight.electrical_power and flight.state == FlightModelScript.State.FLYING:
+		ils_prediction_timer -= delta
+		if ils_prediction_timer <= 0.0:
+			_update_ils_touchdown_prediction()
+			ils_prediction_timer = ILS_PREDICTION_REAL_INTERVAL
+	else:
+		# Recompute immediately when the instrument becomes relevant again.
+		ils_prediction_timer = 0.0
+		if flight.state != FlightModelScript.State.FLYING and bool(ils_touchdown_prediction.get("valid", false)):
+			ils_touchdown_prediction = LandingPredictorScript.no_touchdown("not_flying")
 	if events.map_changed:
 		_queue_map_redraw()
 	_update_cabin_sleep_notice()
 	# Match the small scope: heading and motion must be rendered every frame,
 	# independently of the once-per-second radio/ILS signal checks.
-	if large_weather_radar and view_mode == ViewMode.COCKPIT and flight.electrical_power:
+	if (large_weather_radar or large_ils) and view_mode == ViewMode.COCKPIT and flight.electrical_power:
 		_queue_map_redraw()
 	if cabin_terrain_zoom > 0:
 		if not _can_view_cabin_terrain():
@@ -687,13 +623,7 @@ func _storm_is_turning_aircraft() -> bool:
 	return SimulationSession.storm_turning(flight)
 
 func _key_causes_time_reset(event: InputEventKey) -> bool:
-	var code := event.keycode
-	var physical := event.physical_keycode
-	if code in [KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN, KEY_ENTER, KEY_KP_ENTER]:
-		return true
-	if code in [KEY_X, KEY_M, KEY_B, KEY_W, KEY_S, KEY_SPACE, KEY_C, KEY_T, KEY_V] or physical in [KEY_X, KEY_B, KEY_W, KEY_S]:
-		return true
-	return false
+	return CockpitInput.key_causes_time_reset(event)
 
 func _stop_cabin_sleep() -> void:
 	if not cabin_sleeping:
@@ -747,6 +677,7 @@ func _update_crash_overlay() -> void:
 
 func _show_crash_map() -> void:
 	large_weather_radar = false
+	large_ils = false
 	final_trajectory_visible = true
 	_set_view_mode(ViewMode.COCKPIT)
 
@@ -758,13 +689,7 @@ func _update_propeller_animation(delta: float) -> void:
 		propeller_phase = fposmod(propeller_phase + delta * TAU * lerpf(2.8, 5.2, flight.throttle), TAU)
 
 func _adjust_throttle_percent(step_percent: int) -> void:
-	var current_percent := roundi(flight.throttle * 100.0)
-	if step_percent < 0 and current_percent <= 0 and _aircraft_is_on_ground():
-		flight.wheel_brakes_applied = true
-		return
-	if step_percent > 0:
-		flight.wheel_brakes_applied = false
-	flight.throttle = clampf((current_percent + step_percent) / 100.0, 0.0, 1.0)
+	cockpit_input.adjust_throttle_percent(step_percent)
 
 func _reset_trip_counter() -> void:
 	trip_air_distance_km = 0.0
@@ -778,7 +703,7 @@ func _prepare_from_operations(reverse_direction: bool) -> void:
 	_tune_receivers_to_departure_airport()
 	_update_receiver_signals()
 	_update_ils_touchdown_prediction()
-	ils_prediction_timer = 1.0
+	ils_prediction_timer = ILS_PREDICTION_REAL_INTERVAL
 	apron_aircraft_on_left = not reverse_direction
 	scene_notice = "Самолёт подготовлен к вылету курсом %03d°" % roundi(flight.heading_deg)
 
@@ -945,9 +870,11 @@ func open_flight_history_from_pause() -> void:
 		"scene_walk_phase": scene_walk_phase,
 		"scene_is_walking": scene_is_walking,
 		"large_weather_radar": large_weather_radar,
+		"large_ils": large_ils,
 	}
 	simulation_paused = true
 	large_weather_radar = false
+	large_ils = false
 	_set_view_mode(ViewMode.FLIGHT_HISTORY)
 
 func _prepare_return_from_pause_history() -> void:
@@ -1136,24 +1063,10 @@ func _draw_economy_scene() -> void:
 	side_scenes._draw_economy_scene()
 
 func _update_held_throttle(delta: float) -> void:
-	if throttle_up_held:
-		var previous_time := throttle_up_hold_time
-		throttle_up_hold_time += delta
-		var active_delta := maxf(0.0, throttle_up_hold_time - THROTTLE_HOLD_DELAY) - maxf(0.0, previous_time - THROTTLE_HOLD_DELAY)
-		flight.throttle = minf(1.0, flight.throttle + active_delta * THROTTLE_HOLD_RATE)
-	if throttle_down_held:
-		var previous_time := throttle_down_hold_time
-		throttle_down_hold_time += delta
-		var active_delta := maxf(0.0, throttle_down_hold_time - THROTTLE_HOLD_DELAY) - maxf(0.0, previous_time - THROTTLE_HOLD_DELAY)
-		flight.throttle = maxf(0.0, flight.throttle - active_delta * THROTTLE_HOLD_RATE)
-		if flight.throttle <= 0.001 and _aircraft_is_on_ground():
-			flight.throttle = 0.0
-			flight.wheel_brakes_applied = true
+	cockpit_input.update_held_throttle(delta)
 
 func _update_held_steering(delta: float) -> void:
-	var direction := float(int(steering_right_held) - int(steering_left_held))
-	if not is_zero_approx(direction):
-		flight.heading_deg = fposmod(flight.heading_deg + direction * STEERING_FINE_RATE_DEG_S * delta, 360.0)
+	cockpit_input.update_held_steering(delta)
 
 func _aircraft_is_on_ground() -> bool:
 	return flight.state == FlightModelScript.State.PARKED or flight.state == FlightModelScript.State.ROLLING or flight.state == FlightModelScript.State.LANDED
@@ -1261,6 +1174,24 @@ func _draw_map_on(canvas: Control) -> void:
 func _toggle_weather_radar() -> void:
 	navigation_map._toggle_weather_radar()
 
+func _toggle_large_ils() -> void:
+	var opening := not large_ils or large_weather_radar
+	large_weather_radar = false
+	large_ils = opening
+	# A full-screen instrument replaces the chart, so discard only in-progress
+	# gestures while preserving all finished map and radar annotations.
+	dragging_map = false
+	map_drag_candidate = false
+	point_drag_candidate = false
+	dragging_measure_point = false
+	dragged_measure_connections.clear()
+	navigation_map.update_weather_storm_hover(-1, Vector2.ZERO)
+	_queue_map_redraw()
+	queue_redraw()
+
+func _draw_large_ils(canvas: CanvasItem, rect: Rect2) -> void:
+	instrument_panel._draw_large_ils(canvas, rect)
+
 func _measurement_to_screen(point: Vector2) -> Vector2:
 	return navigation_map._measurement_to_screen(point)
 
@@ -1358,6 +1289,9 @@ func _selected_ils_airport_index() -> int:
 func _ils_title() -> String:
 	return "ILS %03d кГц" % int(receiver_frequencies[0])
 
+func ils_display_state() -> Dictionary:
+	return ILSDisplayState.build(flight, ils_airport_index, bool(ils_signal_status.get("available", false)), ils_touchdown_prediction, int(receiver_frequencies[0]))
+
 func _beacon_for_frequency(frequency_khz: int) -> Variant:
 	for beacon in world.beacons:
 		if roundi(float(beacon.frequency)) == frequency_khz:
@@ -1367,10 +1301,12 @@ func _beacon_for_frequency(frequency_khz: int) -> Variant:
 func _update_ils_touchdown_prediction() -> void:
 	if flight == null:
 		return
-	if _selected_ils_airport_index() < 0:
-		ils_touchdown_prediction = {"valid": false, "distance_from_threshold_km": 0.0}
+	var selected_airport := _selected_ils_airport_index()
+	if selected_airport < 0:
+		ils_touchdown_prediction = LandingPredictorScript.no_touchdown("no_runway_frequency")
 		return
-	ils_touchdown_prediction = flight.touchdown_prediction(ils_airport_index)
+	ils_airport_index = selected_airport
+	ils_touchdown_prediction = LandingPredictorScript.predict(flight, selected_airport)
 
 func get_throttle_rect() -> Rect2:
 	return instrument_panel.get_throttle_rect()
@@ -1488,11 +1424,16 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	if event.button_index == MOUSE_BUTTON_LEFT and event.pressed and get_weather_radar_rect().has_point(event.position):
 		_toggle_weather_radar()
 		return
+	if event.button_index == MOUSE_BUTTON_LEFT and event.pressed and get_ils_rect().has_point(event.position):
+		_toggle_large_ils()
+		return
 	if event.button_index == MOUSE_BUTTON_LEFT and event.pressed and get_weather_briefing_button_rect().has_point(event.position):
 		navigation_map.toggle_weather_briefing()
 		return
 	if large_weather_radar and (mrect.has_point(event.position) or map_drag_candidate or point_drag_candidate or dragging_measure_point):
 		_handle_radar_mouse_button(event)
+		return
+	if large_ils and mrect.has_point(event.position):
 		return
 	var hovered_receiver := _receiver_at_point(event.position)
 	if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN] and event.pressed and hovered_receiver >= 0:
@@ -1574,13 +1515,14 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 	if view_mode != ViewMode.COCKPIT:
 		queue_redraw()
 		return
-	var next_hovered_airport := _airport_hover_index(event.position) if not large_weather_radar else -1
-	var next_hovered_wind := _wind_arrow_hovered(event.position)
-	var next_hovered_measurement_line := navigation_map._measurement_line_index_at(event.position) if not large_weather_radar and map_rect().has_point(event.position) else -1
+	var map_is_visible: bool = not large_weather_radar and not large_ils
+	var next_hovered_airport: int = _airport_hover_index(event.position) if map_is_visible else -1
+	var next_hovered_wind: bool = _wind_arrow_hovered(event.position) if map_is_visible else false
+	var next_hovered_measurement_line: int = navigation_map._measurement_line_index_at(event.position) if map_is_visible and map_rect().has_point(event.position) else -1
 	# Hide the fixed annotation while panning: the chart moves underneath it.
 	# It will be placed again on the next ordinary pointer motion.
-	var next_hovered_storm := navigation_map.weather_briefing_storm_at(event.position) if not map_drag_candidate and not dragging_map else -1
-	var storm_hover_changed := navigation_map.update_weather_storm_hover(next_hovered_storm, event.position)
+	var next_hovered_storm: int = navigation_map.weather_briefing_storm_at(event.position) if map_is_visible and not map_drag_candidate and not dragging_map else -1
+	var storm_hover_changed: bool = navigation_map.update_weather_storm_hover(next_hovered_storm, event.position)
 	if next_hovered_airport != hovered_airport_index or next_hovered_wind != hovered_wind_arrow or next_hovered_measurement_line != navigation_map.hovered_measurement_line_index or storm_hover_changed:
 		hovered_airport_index = next_hovered_airport
 		hovered_wind_arrow = next_hovered_wind

@@ -144,7 +144,10 @@ func map_rect() -> Rect2:
 
 func _draw_map_on(canvas: Control) -> void:
 	map_canvas = canvas
-	if large_weather_radar:
+	if host.large_ils:
+		host._draw_large_ils(canvas, map_rect())
+		host._draw_economy_hud(canvas, false)
+	elif large_weather_radar:
 		if host.flight.electrical_power:
 			host.weather_radar_cache.update_cache(host.world, host.flight, host.status_timer, RADAR_RANGES_KM[radar_range_index])
 		WeatherRadarArt.draw_large(canvas,map_rect(),host.world,host.flight,host.weather_radar_cache.get_texture(),RADAR_RANGES_KM[radar_range_index])
@@ -159,7 +162,9 @@ func _draw_map_on(canvas: Control) -> void:
 
 func _toggle_weather_radar() -> void:
 	host.weather_radar_cache.invalidate()
-	large_weather_radar = not large_weather_radar
+	var opening: bool = not large_weather_radar or bool(host.large_ils)
+	host.large_ils = false
+	large_weather_radar = opening
 	if large_weather_radar:
 		_normalize_radar_course_line()
 	update_weather_storm_hover(-1, Vector2.ZERO)
@@ -411,8 +416,13 @@ func _draw_hovered_airport_services(rect: Rect2) -> void:
 	var mouse = host.get_local_mouse_position()
 	var text := map_footer_text_at(mouse)
 	if not text.is_empty():
-		map_canvas.draw_rect(Rect2(rect.position.x + 8, rect.end.y - 47, minf(520.0, rect.size.x - 16), 25), Color("d7d0ad"), true)
-		Localization.draw_string(map_canvas,ThemeDB.fallback_font, Vector2(rect.position.x + 14, rect.end.y - 29), text, HORIZONTAL_ALIGNMENT_LEFT, minf(508.0, rect.size.x - 28), 12, Color("35372e"))
+		# Let long service lists use the whole map, but size the opaque backing to
+		# the actual localized text so a short hint does not create a wide stripe.
+		var localized_text := Localization.text(text)
+		var measured_width := ThemeDB.fallback_font.get_string_size(localized_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+		var background_width := minf(rect.size.x - 16, ceilf(measured_width) + 12.0)
+		map_canvas.draw_rect(Rect2(rect.position.x + 8, rect.end.y - 47, background_width, 25), Color("d7d0ad"), true)
+		Localization.draw_string(map_canvas,ThemeDB.fallback_font, Vector2(rect.position.x + 14, rect.end.y - 29), text, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 28, 12, Color("35372e"))
 
 func map_footer_text_at(screen_position: Vector2) -> String:
 	if large_weather_radar or not map_rect().has_point(screen_position):
@@ -824,7 +834,6 @@ func _draw_approach_direction(airport: Dictionary, approach_sign: float) -> void
 	_draw_clipped_map_line(world_to_screen(capture_boundary.apex), world_to_screen(capture_arc[-1]), approach_color, 1.5, true)
 	for point_index in range(1, capture_arc.size()):
 		_draw_clipped_map_line(world_to_screen(capture_arc[point_index - 1]), world_to_screen(capture_arc[point_index]), approach_color, 1.5, true)
-	var approach_vertical_speed = -(92.0 / 3.6) * tan(deg_to_rad(FlightModelScript.GLIDE_SLOPE_DEG))
 	var markers_by_direction: Dictionary = airport.get("approach_markers", {})
 	var markers: Array = markers_by_direction.get(str(int(approach_sign)), [])
 	if markers.is_empty():
@@ -845,7 +854,7 @@ func _draw_approach_direction(airport: Dictionary, approach_sign: float) -> void
 		map_canvas.draw_colored_polygon(diamond, Color("d7d0ad"))
 		map_canvas.draw_polyline(PackedVector2Array([diamond[0], diamond[1], diamond[2], diamond[3], diamond[0]]), Color("185f61"), 2.0)
 		var desired_altitude: float = marker.altitude_m
-		var label = Localization.text("%.1f км • %.0f м • %.1f м/с" % [float(marker.distance_km), desired_altitude, approach_vertical_speed])
+		var label = Localization.text("%.1f км • %.0f м" % [float(marker.distance_km), desired_altitude])
 		var text_size = ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 10)
 		var label_position = point + Vector2(12.0, 4.0)
 		label_position.x = clampf(label_position.x, map_rect().position.x + 4.0, map_rect().end.x - text_size.x - 4.0)

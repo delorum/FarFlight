@@ -308,6 +308,7 @@ func _test_approach(airport_index: int, reverse_direction: bool) -> bool:
 	assert(Vector2(landing_world.beacons[airport_index].position).is_equal_approx(approach_airport.position))
 	assert(is_equal_approx(initial_guidance.approach_sign, -1.0 if reverse_direction else 1.0))
 	assert(absf(initial_guidance.actual_distance_to_threshold_km - 4.0) < 0.001)
+	assert(absf(initial_guidance.signed_distance_to_threshold_km - 4.0) < 0.001)
 	assert(not approach.touchdown_prediction(airport_index).valid)
 	approach.vertical_speed_mps = -1.5
 	var predicted_touchdown: Dictionary = approach.touchdown_prediction(airport_index)

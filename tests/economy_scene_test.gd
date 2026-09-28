@@ -24,56 +24,6 @@ func _run() -> void:
 	check(half_liquid.end == full_liquid.end, "Canisters must fill from the bottom")
 	check(full_liquid == canister_rect.grow(-3.0), "Full liquid must remain inside the canister contour")
 	check(scene._canister_liquid_rect(canister_rect, 30.0) == full_liquid, "Liquid must not overflow the canister")
-	var time_key := InputEventKey.new()
-	time_key.keycode = KEY_Z
-	time_key.pressed = true
-	time_key.shift_pressed = true
-	scene._input(time_key)
-	check(scene.time_scale_index == 1, "Shift+Z must cycle time to 2x")
-	for expected_index in [2, 3, 4, 0]:
-		scene._input(time_key)
-		check(scene.time_scale_index == expected_index, "Shift+Z must cycle all time scales and wrap to 1x")
-	scene.time_scale_index = 4
-	time_key.shift_pressed = false
-	scene._input(time_key)
-	check(scene.time_scale_index == 0, "Z must immediately restore 1x")
-	scene._input(time_key)
-	check(scene.time_scale_index == 0, "Repeated Z must keep time at 1x")
-	scene.time_scale_index = 3
-	var turn_key := InputEventKey.new()
-	turn_key.keycode = KEY_RIGHT
-	turn_key.pressed = true
-	var heading_before_tap: float = scene.flight.heading_deg
-	scene._input(turn_key)
-	check(scene.time_scale_index == 0, "Aircraft control must reset accelerated time before acting")
-	check(is_equal_approx(scene.flight.heading_deg, heading_before_tap), "A plain arrow press must steer through the yoke instead of directly trimming heading")
-	Input.action_press("ui_right")
-	scene._process(0.0)
-	check(is_equal_approx(scene.flight.yoke.x, 1.0), "Plain right arrow must engage full yoke input immediately without a hold delay")
-	Input.action_release("ui_right")
-	turn_key.pressed = false
-	scene._input(turn_key)
-	scene.flight.yoke.x = 0.0
-	turn_key.shift_pressed = true
-	turn_key.pressed = true
-	scene._input(turn_key)
-	check(is_equal_approx(scene.flight.heading_deg, fposmod(heading_before_tap + 0.1, 360.0)), "Shift+Right tap must nudge heading by exactly 0.1 degree")
-	turn_key.pressed = false
-	scene._input(turn_key)
-	turn_key.keycode = KEY_LEFT
-	turn_key.pressed = true
-	scene._input(turn_key)
-	check(is_equal_approx(scene.flight.heading_deg, heading_before_tap), "An opposite Shift+arrow tap must trim the previous 0.1-degree correction away")
-	turn_key.pressed = false
-	scene._input(turn_key)
-	turn_key.keycode = KEY_RIGHT
-	turn_key.pressed = true
-	scene._input(turn_key)
-	scene._update_held_steering(1.0)
-	check(is_equal_approx(scene.flight.heading_deg, fposmod(heading_before_tap + 0.2, 360.0)), "Holding Shift+Right must add 0.1 degree per second after its initial tap")
-	check(is_zero_approx(scene.flight.yoke.x), "Fine Shift steering must not deflect the yoke")
-	turn_key.pressed = false
-	scene._input(turn_key)
 	scene.time_scale_index = 4
 	var elapsed_before_day_test: float = scene.economy.elapsed_seconds
 	check(is_zero_approx(scene.clock_seconds), "A new game's clock must begin at midnight alongside flight history")

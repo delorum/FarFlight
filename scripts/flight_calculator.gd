@@ -693,7 +693,7 @@ func _drag_input(event: InputEvent) -> void:
 		accept_event()
 
 func _process(_delta: float) -> void:
-	visible = controller.view_mode == controller.ViewMode.COCKPIT and not controller.large_weather_radar
+	visible = controller.view_mode == controller.ViewMode.COCKPIT and not controller.large_weather_radar and not controller.large_ils
 	if not visible:
 		dragging = false
 		return

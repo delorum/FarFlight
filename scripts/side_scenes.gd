@@ -690,7 +690,7 @@ func _fuel_slider_is_active() -> bool:
 func _draw_scene_background(title: String) -> float:
 	host.draw_rect(Rect2(Vector2.ZERO, host.size), AircraftArt.PAPER, true)
 	var ground_y = host.size.y * 0.76
-	host.draw_localized_string(ThemeDB.fallback_font, Vector2(38, 44), "FAR FLIGHT   /   ПОЧТОВАЯ АВИАЦИЯ", HORIZONTAL_ALIGNMENT_LEFT, host.size.x - 76, 11, Color("#b29a78"))
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(38, 44), "ДАЛЕКИЙ ПОЛЕТ   /   ПОЧТОВАЯ АВИАЦИЯ", HORIZONTAL_ALIGNMENT_LEFT, host.size.x - 76, 11, Color("#b29a78"))
 	host.draw_localized_string(ThemeDB.fallback_font, Vector2(36, 79), title, HORIZONTAL_ALIGNMENT_LEFT, host.size.x - 72, 24, AircraftArt.INK)
 	host.draw_line(Vector2(36, 98), Vector2(host.size.x-36,98), AircraftArt.LIGHT, 1, true)
 	# Faint horizon, grass and broken ground lines echo the architectural reference.

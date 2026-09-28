@@ -8,7 +8,10 @@ const MAP_MARGIN = UILayout.MAP_MARGIN
 const INSTRUMENT_RADIUS = UILayout.INSTRUMENT_RADIUS
 const FlightModelScript = preload("res://scripts/flight_model.gd")
 const WeatherRadarArt = preload("res://scripts/weather_radar_art.gd")
+const ILSDisplayArt = preload("res://scripts/ils_display_art.gd")
+const ILSDisplayState = preload("res://scripts/ils_display_state.gd")
 const INSTRUMENT_GAP = UILayout.INSTRUMENT_GAP
+const HORIZON_READOUT_GAP := 22.0
 const AircraftArt = preload("res://scripts/aircraft_art.gd")
 const TIME_SCALES = preload("res://scripts/simulation_session.gd").TIME_SCALES
 const FlightWorldScript = preload("res://scripts/world.gd")
@@ -96,7 +99,10 @@ func _draw_unpowered_instruments(gauge_y: float) -> void:
 		host.draw_circle(center, INSTRUMENT_RADIUS, Color("0a0e10"))
 		host.draw_arc(center, INSTRUMENT_RADIUS - 2, 0, TAU, 48, Color("7d8b91"), 2)
 		host.draw_localized_string(ThemeDB.fallback_font, center - Vector2(INSTRUMENT_RADIUS, INSTRUMENT_RADIUS + 10.0), titles[index], HORIZONTAL_ALIGNMENT_CENTER, INSTRUMENT_RADIUS * 2, 11, Color("b8c5c8"))
-	_draw_unpowered_display(get_ils_rect(), "ILS")
+	if host.large_ils:
+		WeatherRadarArt.draw_map_button(host, get_ils_rect(), "КАРТА [I]")
+	else:
+		_draw_unpowered_display(get_ils_rect(), "ILS [I]")
 	var radar_rect = get_weather_radar_rect()
 	if radar_rect.size.x >= 150.0:
 		if host.large_weather_radar:
@@ -135,7 +141,9 @@ func _draw_weather_radar() -> void:
 
 func _instrument_center(index: int, gauge_y: float) -> Vector2:
 	var step = INSTRUMENT_RADIUS * 2.0 + INSTRUMENT_GAP
-	return Vector2(panel_rect().position.x + INSTRUMENT_RADIUS + 5.0 + index * step, gauge_y)
+	# Keep a narrow readout slot between the attitude gauge and receiver 1.
+	var readout_offset := HORIZON_READOUT_GAP if index >= 5 else 0.0
+	return Vector2(panel_rect().position.x + INSTRUMENT_RADIUS + 5.0 + index * step + readout_offset, gauge_y)
 
 func _draw_speedometer(center: Vector2, radius: float) -> void:
 	var start_angle = -PI * 0.75
@@ -484,42 +492,33 @@ func _draw_fuel_instrument(center: Vector2, radius: float) -> void:
 
 func _draw_ils() -> void:
 	var rect = get_ils_rect()
-	var guidance: Dictionary = host.flight.landing_guidance(host.ils_airport_index, host.ils_signal_status.get("available", false))
+	if host.large_ils:
+		WeatherRadarArt.draw_map_button(host, rect, "КАРТА [I]")
+		return
+	var state: Dictionary = host.ils_display_state()
+	var guidance: Dictionary = state.guidance
 	host.draw_rect(rect, Color("0a0e10"), true)
 	host.draw_rect(rect, Color("6f7f85"), false, 1.5)
-	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(5, 12), host._ils_title(), HORIZONTAL_ALIGNMENT_LEFT, 200, 10, Color("b8c5c8"))
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(5, 12), "%s [I]" % state.title, HORIZONTAL_ALIGNMENT_LEFT, 200, 10, Color("b8c5c8"))
 	var display = Rect2(rect.position + Vector2(7, 16), Vector2(82, 35))
 	var center = display.get_center()
 	var airport_cross_color = Color("66878a")
 	host.draw_line(Vector2(display.position.x, center.y), Vector2(display.end.x, center.y), airport_cross_color, 1.5)
 	host.draw_line(Vector2(center.x, display.position.y), Vector2(center.x, display.end.y), airport_cross_color, 1.5)
 	host.draw_circle(center, 2.5, airport_cross_color)
-	if not guidance.signal_available:
+	if not state.signal_available:
 		host.draw_line(display.position + Vector2(8, 4), display.end - Vector2(8, 4), Color("c95d55"), 2.0)
 		host.draw_line(Vector2(display.end.x - 8, display.position.y + 4), Vector2(display.position.x + 8, display.end.y - 4), Color("c95d55"), 2.0)
 		host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(96, 37), "НЕТ СИГНАЛА", HORIZONTAL_ALIGNMENT_LEFT, 104, 10, Color("c95d55"))
 		return
 	host.draw_line(rect.position + Vector2(207, 4), rect.position + Vector2(207, rect.size.y - 4), Color("536067"), 1.0)
-	var desired_vs: float = guidance.desired_vertical_speed_mps
-	var altitude_color = _ils_parameter_color(absf(guidance.glide_error), true)
-	var vertical_speed_color = _ils_parameter_color(absf(host.flight.vertical_speed_mps - desired_vs) / 0.35, true)
-	var course_error_color = _ils_parameter_color(absf(guidance.course_error_deg), true, 1.0, 5.0)
-	var approach_speed_color = Color("65d48c")
-	if host.flight.speed_kmh > 115.0:
-		approach_speed_color = Color("ef645e")
-	elif host.flight.speed_kmh > 100.0:
-		approach_speed_color = Color("e8d274")
-	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(216, 22), "H %.1f м" % host.flight.altitude_m, HORIZONTAL_ALIGNMENT_LEFT, 76, 12, altitude_color)
-	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(292, 22), "VS %+.2f м/с" % host.flight.vertical_speed_mps, HORIZONTAL_ALIGNMENT_LEFT, 105, 12, vertical_speed_color)
-	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(399, 22), "V %.1f км/ч" % host.flight.speed_kmh, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 407, 11, approach_speed_color)
-	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(216, 42), "ОТКЛ. ПУТИ %+.1f°" % guidance.course_error_deg, HORIZONTAL_ALIGNMENT_LEFT, 132, 12, course_error_color)
-	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(350, 42), "ДО ВПП %.2f км" % guidance.actual_distance_to_threshold_km, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 358, 12, Color.WHITE)
-	if host.ils_touchdown_prediction.valid:
-		var touchdown_distance: float = host.ils_touchdown_prediction.distance_from_threshold_km
-		var touchdown_color = Color("65d48c") if touchdown_distance >= 0.0 and touchdown_distance <= FlightWorldScript.RUNWAY_LENGTH_KM else Color("ef645e")
-		host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(216, 61), "КАСАНИЕ %+.2f км ОТ ТОРЦА" % touchdown_distance, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 224, 12, touchdown_color)
-	else:
-		host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(216, 61), "КАСАНИЕ — НЕТ СНИЖЕНИЯ", HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 224, 12, Color("e8d274"))
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(216, 22), state.altitude_text, HORIZONTAL_ALIGNMENT_LEFT, 76, 12, state.altitude_color)
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(292, 22), state.vertical_speed_text, HORIZONTAL_ALIGNMENT_LEFT, 105, 12, state.vertical_speed_color)
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(399, 22), state.speed_text, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 407, 11, state.speed_color)
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(216, 42), state.course_text, HORIZONTAL_ALIGNMENT_LEFT, 132, 12, state.course_color)
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(350, 42), state.distance_text, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 358, 12, Color.WHITE)
+	if state.show_forecast:
+		host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(216, 61), state.touchdown_text, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 224, 12, state.touchdown_color)
 	# Runway edges live on the airport's fixed horizontal axis. Far from the
 	# airport they are close together; towards the threshold they spread apart.
 	var runway_half_width_km = FlightWorldScript.RUNWAY_WIDTH_KM * 0.5
@@ -534,13 +533,14 @@ func _draw_ils() -> void:
 	# left to the pilot on the supported approach. Invert it for the aircraft
 	# symbol: if the moving line is left of the airport, steering right must move
 	# it back towards the fixed centre, and vice versa.
-	var localizer_x: float = center.x - clampf(guidance.localizer_error, -1.4, 1.4) * display.size.x * 0.30
-	var glide_y: float = center.y - clampf(guidance.glide_error, -1.4, 1.4) * display.size.y * 0.30
+	var aircraft_marker: Vector2 = ILSDisplayArt.localizer_marker_position(display, guidance)
+	var localizer_x := aircraft_marker.x
+	var glide_y := aircraft_marker.y
 	var localizer_severity: float = absf(guidance.localizer_error)
 	var glide_severity: float = absf(guidance.glide_error)
-	var localizer_line_color = _ils_parameter_color(localizer_severity, true)
-	var glide_line_color = _ils_parameter_color(glide_severity, true)
-	var aircraft_center_color = _ils_parameter_color(maxf(localizer_severity, glide_severity), true)
+	var localizer_line_color = ILSDisplayState.parameter_color(localizer_severity)
+	var glide_line_color = ILSDisplayState.parameter_color(glide_severity)
+	var aircraft_center_color = ILSDisplayState.parameter_color(maxf(localizer_severity, glide_severity))
 	host.draw_line(Vector2(localizer_x, display.position.y + 3), Vector2(localizer_x, display.end.y - 3), localizer_line_color, 2.0)
 	host.draw_line(Vector2(display.position.x + 3, glide_y), Vector2(display.end.x - 3, glide_y), glide_line_color, 2.0)
 	host.draw_circle(Vector2(localizer_x, glide_y), 2.5, aircraft_center_color)
@@ -548,13 +548,10 @@ func _draw_ils() -> void:
 	var glide_color = Color("65d48c") if guidance.in_glide else Color("e8d274")
 	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(96, 30), "СТВОР" if guidance.in_localizer else "ВНЕ СТВОРА", HORIZONTAL_ALIGNMENT_LEFT, 104, 10, localizer_color)
 	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(96, 44), "ГЛИСС" if guidance.in_glide else ("ВЫСОКО" if guidance.glide_error > 0 else "НИЗКО"), HORIZONTAL_ALIGNMENT_LEFT, 104, 10, glide_color)
+	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(96, 59), state.descent_angle_text, HORIZONTAL_ALIGNMENT_LEFT, 104, 10, state.descent_angle_color)
 
-func _ils_parameter_color(error: float, signal_available: bool, green_limit: float = 1.0, yellow_limit: float = 2.0) -> Color:
-	if not signal_available or error > yellow_limit:
-		return Color("ef645e")
-	if error > green_limit:
-		return Color("e8d274")
-	return Color("65d48c")
+func _draw_large_ils(canvas: CanvasItem, rect: Rect2) -> void:
+	ILSDisplayArt.draw_large(canvas, rect, host.ils_display_state())
 
 func _draw_horizon(center: Vector2, radius: float) -> void:
 	host.draw_circle(center, radius, Color("0a0e10"))
@@ -574,7 +571,33 @@ func _draw_horizon(center: Vector2, radius: float) -> void:
 		aoa_color = Color("ef645e")
 	elif host.flight.angle_of_attack_deg >= FlightModelScript.STALL_WARNING_AOA_DEG:
 		aoa_color = Color("e8d274")
-	host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "УА %+.1f°" % host.flight.angle_of_attack_deg, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 12, aoa_color)
+	host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "УА %+.1f°" % host.flight.angle_of_attack_deg, HORIZONTAL_ALIGNMENT_CENTER, radius, 11, aoa_color)
+	var yoke_degrees: float = float(host.flight.yoke.y) * FlightModelScript.YOKE_PITCH_RANGE_DEG
+	_draw_pitch_yoke_readout(center, radius, yoke_degrees)
+
+static func pitch_yoke_readout(yoke_degrees: float) -> Dictionary:
+	var tenths := roundi(absf(yoke_degrees) * 10.0)
+	return {"direction": 0 if tenths == 0 else (1 if yoke_degrees > 0.0 else -1), "angle": "%.1f°" % (tenths / 10.0)}
+
+func _draw_pitch_yoke_readout(horizon_center: Vector2, radius: float, yoke_degrees: float) -> void:
+	var readout: Dictionary = pitch_yoke_readout(yoke_degrees)
+	var receiver_center := _instrument_center(5, horizon_center.y)
+	var gap_left := horizon_center.x + radius
+	var gap_right := receiver_center.x - radius
+	var center_x := (gap_left + gap_right) * 0.5
+	var color := Color("73d6d0") if int(readout.direction) != 0 else Color("82979f")
+	var arrow_y := horizon_center.y - 8.0
+	if int(readout.direction) == 0:
+		host.draw_line(Vector2(center_x - 4.0, arrow_y), Vector2(center_x + 4.0, arrow_y), color, 1.5, true)
+	else:
+		var direction := -1.0 if int(readout.direction) > 0 else 1.0
+		host.draw_line(Vector2(center_x, arrow_y - direction * 6.0), Vector2(center_x, arrow_y + direction * 5.0), color, 1.5, true)
+		host.draw_colored_polygon(PackedVector2Array([
+			Vector2(center_x, arrow_y + direction * 8.0),
+			Vector2(center_x - 4.0, arrow_y + direction * 2.0),
+			Vector2(center_x + 4.0, arrow_y + direction * 2.0),
+		]), color)
+	host.draw_string(ThemeDB.fallback_font, Vector2(gap_left, horizon_center.y + 13.0), readout.angle, HORIZONTAL_ALIGNMENT_CENTER, gap_right - gap_left, 9, color)
 
 func _draw_beacon_instrument(center: Vector2, radius: float, instrument: int) -> void:
 	var signal_status: Dictionary = host.receiver_signal_status[instrument]
@@ -647,7 +670,7 @@ func _draw_controls(rect: Rect2) -> void:
 	host.draw_rect(center_button, Color("82979f"), false, 1)
 	host.draw_localized_string(ThemeDB.fallback_font, center_button.position + Vector2(0, 17), "ЦЕНТР [C]", HORIZONTAL_ALIGNMENT_CENTER, center_button.size.x, 10, Color.WHITE)
 	var cabin_button = get_cabin_button_rect()
-	_draw_cockpit_action_button(cabin_button, "САЛОН [X]" if cabin_button.size.x >= 80.0 else "САЛОН")
+	_draw_cockpit_action_button(cabin_button, "САЛОН [X]")
 	var power_button = get_power_button_rect()
 	_draw_cockpit_action_button(power_button, "ВЫКЛЮЧИТЬ ПИТАНИЕ [P]" if host.flight.electrical_power else "ВКЛЮЧИТЬ ПИТАНИЕ [P]", Color("65d48c") if host.flight.electrical_power else Color("c95d55"))
 	var engine_button = get_engine_button_rect()

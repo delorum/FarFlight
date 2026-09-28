@@ -28,6 +28,7 @@ const PRACTICAL_CEILING_M := 600.0
 const ABSOLUTE_CEILING_M := FlightWorldScript.ROUTE_CEILING_M
 const ROTATION_AUTHORITY_START_KMH := 60.0
 const ROTATION_AUTHORITY_FULL_KMH := 100.0
+const YOKE_PITCH_RANGE_DEG := 18.0
 const NOMINAL_STALL_SPEED_KMH := 75.0
 const RECOMMENDED_ROTATION_SPEED_KMH := 75.0
 const VX_KMH := 130.0
@@ -295,10 +296,29 @@ func leave_cockpit_on_ground() -> void:
 	_show_message("Двигатель остановлен • %s" % status, 4.0, "")
 
 func update(delta: float) -> void:
+	_update_simulation(delta, true, true)
+
+func update_prediction(delta: float) -> void:
+	_update_simulation(delta, false, false)
+
+func _update_simulation(delta: float, advance_world_weather: bool, include_storms: bool) -> void:
 	_update_message(delta)
-	world.update_weather(delta)
-	storm_intensity = world.storm_intensity_at(position_km) if state == State.FLYING else 0.0
-	_update_storm_disturbance(delta)
+	if advance_world_weather:
+		world.update_weather(delta)
+	if include_storms:
+		storm_intensity = world.storm_intensity_at(position_km) if state == State.FLYING else 0.0
+		_update_storm_disturbance(delta)
+	else:
+		storm_intensity = 0.0
+		storm_vertical_flow_mps = 0.0
+		storm_roll_bias_deg = 0.0
+		storm_pitch_bias_deg = 0.0
+		storm_wind_gust_kmh = Vector2.ZERO
+		storm_disturbance_timer = 0.0
+		storm_vertical_target_mps = 0.0
+		storm_roll_target_deg = 0.0
+		storm_pitch_target_deg = 0.0
+		storm_wind_target_kmh = Vector2.ZERO
 	current_wind_kmh = world.wind_at(altitude_m) + storm_wind_gust_kmh if state == State.FLYING else Vector2.ZERO
 	if state == State.CRASHED:
 		return
@@ -326,7 +346,7 @@ func update(delta: float) -> void:
 		# Airflow controls how quickly the elevator can change pitch, not the
 		# attitude selected by a held yoke. Reducing speed must not automatically
 		# lower the nose and save the aircraft from a high-angle-of-attack stall.
-		var pitch_command := yoke.y * 18.0 + (storm_pitch_bias_deg if state == State.FLYING else 0.0)
+		var pitch_command := yoke.y * YOKE_PITCH_RANGE_DEG + (storm_pitch_bias_deg if state == State.FLYING else 0.0)
 		if state == State.PARKED or state == State.LANDED:
 			pitch_command = clampf(pitch_command, -10.0, 10.0)
 		pitch_deg = move_toward(pitch_deg, pitch_command, delta * 30.0 * elevator_authority())
@@ -371,7 +391,7 @@ func update(delta: float) -> void:
 	# A large sustained pull creates rapidly increasing induced drag. It can
 	# briefly convert speed into height, but cannot be used as a permanent
 	# maximum-climb command: the aircraft slows towards a high-AoA stall.
-	var nose_up_ratio := clampf(maxf(0.0, pitch_deg) / 18.0, 0.0, 1.0)
+	var nose_up_ratio := clampf(maxf(0.0, pitch_deg) / YOKE_PITCH_RANGE_DEG, 0.0, 1.0)
 	var heavy_pull_ratio := smoothstep(0.55, 1.0, nose_up_ratio)
 	var high_angle_drag := 155.0 * heavy_pull_ratio * heavy_pull_ratio if state == State.FLYING else 0.0
 	var dive_drag: float = maxf(0.0, -pitch_deg) * 0.25
@@ -526,7 +546,7 @@ func _update_ground_roll(delta: float) -> void:
 		return
 	# A runway touch does not complete the flight. While there is still forward
 	# speed, the pilot may add power and rotate for a touch-and-go/go-around.
-	var pitch_command := clampf(yoke.y * 18.0, -10.0, 10.0)
+	var pitch_command := clampf(yoke.y * YOKE_PITCH_RANGE_DEG, -10.0, 10.0)
 	pitch_deg = move_toward(pitch_deg, pitch_command, delta * 30.0 * elevator_authority())
 	var lift_factor := clampf((speed_kmh - 55.0) / 75.0, 0.0, 1.0)
 	var takeoff_vertical_speed := minf(
@@ -759,7 +779,8 @@ func landing_guidance(index: int, signal_available_override: Variant = null) -> 
 	var right := Vector2(forward.y, -forward.x)
 	var along: float = delta.dot(forward)
 	var cross: float = delta.dot(right)
-	var distance_to_threshold_km: float = maxf(0.0, -FlightWorldScript.RUNWAY_LENGTH_KM * 0.5 - along)
+	var signed_distance_to_threshold_km: float = -FlightWorldScript.RUNWAY_LENGTH_KM * 0.5 - along
+	var distance_to_threshold_km: float = maxf(0.0, signed_distance_to_threshold_km)
 	var near_threshold: Vector2 = airport.position - forward * (FlightWorldScript.RUNWAY_LENGTH_KM * 0.5)
 	var actual_distance_to_threshold_km: float = position_km.distance_to(near_threshold)
 	# The ideal glide path intersects the runway 60 m beyond the threshold, not
@@ -786,6 +807,7 @@ func landing_guidance(index: int, signal_available_override: Variant = null) -> 
 		"beacon_distance_km": beacon_distance_km,
 		"signal_range_km": runway_beacon.range_km,
 		"distance_to_threshold_km": distance_to_threshold_km,
+		"signed_distance_to_threshold_km": signed_distance_to_threshold_km,
 		"actual_distance_to_threshold_km": actual_distance_to_threshold_km,
 		"desired_altitude_m": desired_altitude_m,
 		"localizer_error": localizer_error,
@@ -794,6 +816,7 @@ func landing_guidance(index: int, signal_available_override: Variant = null) -> 
 		"course_error_deg": signed_course_error,
 		"heading_error_deg": wrapf(heading_deg - approach_heading, -180.0, 180.0),
 		"ground_track_heading": ground_track_heading,
+		"along_ground_speed_kmh": along_ground_speed_kmh,
 		"desired_vertical_speed_mps": desired_vertical_speed_mps,
 		"in_localizer": signal_available and absf(localizer_error) <= 1.0,
 		"in_glide": signal_available and absf(glide_error) <= 1.0,
@@ -802,7 +825,7 @@ func landing_guidance(index: int, signal_available_override: Variant = null) -> 
 func touchdown_prediction(index: int) -> Dictionary:
 	var valid := vertical_speed_mps < -0.05
 	if not valid:
-		return {"valid": false, "distance_from_threshold_km": 0.0}
+		return {"valid": false, "distance_from_threshold_km": 0.0, "cross_track_km": 0.0}
 	var airport: Dictionary = world.airports[index]
 	var seconds_to_surface: float = altitude_m / -vertical_speed_mps
 	var ground_velocity: Vector2 = world.heading_vector(heading_deg) * speed_kmh + current_wind_kmh
@@ -813,4 +836,8 @@ func touchdown_prediction(index: int) -> Dictionary:
 	return {
 		"valid": true,
 		"distance_from_threshold_km": predicted_along + FlightWorldScript.RUNWAY_LENGTH_KM * 0.5,
+		# Express lateral displacement in the pilot's approach frame. Positive is
+		# always to the right, including when using the reciprocal runway.
+		"cross_track_km": predicted_coords.y * approach_sign,
+		"predicted_position": predicted_position,
 	}

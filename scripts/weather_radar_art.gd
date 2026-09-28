@@ -158,7 +158,7 @@ static func storm_motion_label_rect(rect: Rect2, origin: Vector2, tip: Vector2, 
 			return candidate
 	return Rect2()
 
-static func draw_map_button(canvas: CanvasItem, rect: Rect2) -> void:
+static func draw_map_button(canvas: CanvasItem, rect: Rect2, title := "КАРТА [B]") -> void:
 	# A paper-map icon, deliberately without aircraft position or live navigation.
 	canvas.draw_rect(rect,Color("d7d0ad"))
 	canvas.draw_rect(rect,Color("8b8263"),false,1.5)
@@ -171,4 +171,4 @@ static func draw_map_button(canvas: CanvasItem, rect: Rect2) -> void:
 			var u := step/23.0
 			points.append(rect.position+Vector2(5+u*(rect.size.x-10),28+row*10+sin(u*TAU+row*0.7)*4))
 		canvas.draw_polyline(points,Color("968260"),1,true)
-	Localization.draw_string(canvas,ThemeDB.fallback_font,rect.position+Vector2(7,13),"КАРТА [B]",HORIZONTAL_ALIGNMENT_LEFT,rect.size.x-14,10,Color("5c5138"))
+	Localization.draw_string(canvas,ThemeDB.fallback_font,rect.position+Vector2(7,13),title,HORIZONTAL_ALIGNMENT_LEFT,rect.size.x-14,10,Color("5c5138"))

@@ -9,6 +9,7 @@ const LEGACY_WEB_KEYS := ["farflight.save.v4", "farflight.save.v3"]
 const FlightCalculatorScript = preload("res://scripts/flight_calculator.gd")
 const NavigationMapScript = preload("res://scripts/navigation_map.gd")
 const FlightHistoryScript = preload("res://scripts/flight_history.gd")
+const SessionMode = preload("res://scripts/session_mode.gd")
 const ViewMode = preload("res://scripts/scene_modes.gd").ViewMode
 static var last_validation_error := ""
 
@@ -197,6 +198,9 @@ static func read_slot(path: String = PATH) -> Dictionary:
 	return data if valid(data) else {}
 
 static func write_slot(game, path: String = PATH) -> Error:
+	if not SessionMode.allows_save(game.session_mode):
+		last_validation_error = "тренировочная попытка не сохраняется"
+		return ERR_UNAUTHORIZED
 	var data := capture(game)
 	if not valid(data):
 		last_validation_error = _validation_error(data)

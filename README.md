@@ -64,7 +64,9 @@ The 200×200 km map is procedurally generated. Each of its four 100×100 km regi
 
 Before a new game, you may enter a positive `seed` from 1 to 2147483647 or leave the field blank. The same seed reproduces the terrain, airfields, beacons, services, and weather sequence. You can share it with another player to compare records in the same world. The seed appears on the Continue button in both the title and pause menus.
 
-The title screen offers continuation or results for the saved run, a new game, About, Language, Credits, and Quit. About links to this complete guide. The Language screen switches the entire interface between Russian and English and saves that choice independently of the current game.
+The title screen offers continuation or results for the saved run, a new game, Landing Practice, About, Language, Credits, and Quit. About links to this complete guide. The Language screen switches the entire interface between Russian and English and saves that choice independently of the current game.
+
+Landing Practice creates a fresh random world and airfield for every attempt. The aircraft starts on a six-kilometre final at 234 m, 150 km/h, 70% throttle, with electrical power and engine on, 40 litres of fuel, random wind, no thunderstorms, and the large ILS open. The mode can be restarted or left for the title screen and never reads, creates, or replaces the main campaign save.
 
 ## Controls
 
@@ -76,10 +78,12 @@ The title screen offers continuation or results for the saved run, a new game, A
 - up/down arrows — pitch control: up/forward to descend, down/back to climb;
 - left/right arrows — immediately deflect the yoke and turn;
 - `Shift` + left/right arrow — adjust heading by 0.1°; holding changes it at 0.1° per second without deflecting the yoke;
+- `Shift` + up/down arrow — move the yoke forward/back by a precise 0.1°;
 - mouse over the throttle or yoke — direct control;
 - `X` — leave for the cabin or return to the cockpit from anywhere in the cabin.
 
 The yoke automatically centres laterally. Its longitudinal position remains where you leave it.
+The small arrow to the right of the attitude indicator shows the resulting nose direction; the number below it shows the yoke's longitudinal deflection in degrees.
 
 ### Map and weather radar
 
@@ -90,6 +94,7 @@ The yoke automatically centres laterally. Its longitudinal position remains wher
 - RMB — cancel an unfinished line or delete the nearest completed one;
 - wheel over a radio receiver — change frequency by 1 kHz, or 10 kHz with `Shift`;
 - `B` or click the weather radar — switch between the map and large radar;
+- `I` or click the small ILS display — switch between the map and large ILS;
 - wheel over the large radar — choose a 30, 20, 10, or 5 km range;
 - click the aircraft on the large radar — draw the single 30 km current-ground-track line;
 - RMB over the radar track line — delete it;
@@ -127,7 +132,7 @@ Fuel consumption falls to an optimum near 425 m and then rises again. Above 450 
 
 The cyan bands on the airspeed indicator and altimeter show ranges that achieve at least 95% of the maximum calculated range for the current direction and wind. An economical speed is selected separately at each altitude. When the radio altimeter can see the ground, a red mark on the altimeter shows its absolute elevation, while the cyan recommendation only considers levels at least 50 m above that mark. Recommendations are hidden on the ground and recalculated no more than once per real second.
 
-Range is calculated from ground speed. The counter under the clock accumulates the actual distance travelled over the ground. The fuel gauge shows the saving or penalty relative to sea-level consumption.
+Range is calculated from ground speed. The counter under the clock starts from zero at actual liftoff and accumulates the distance travelled over the ground while airborne; a touch-and-go keeps the current count. The fuel gauge shows the saving or penalty relative to sea-level consumption.
 
 ### Electrical power, engine, and gliding
 
@@ -175,7 +180,9 @@ En-route NDBs have a 30 km range; approach beacons have a 15 km range. NDBs are 
 
 ILS uses receiver 1. Tune an approach beacon: the instrument activates within 15 km, inside the forward sector, and with a suitable aircraft heading. The vertical needle shows localizer deviation and the horizontal needle shows deviation from the 3.3° glideslope. Green indicates capture within tolerance.
 
-At the two most detailed map scales, dashed lines show the capture sector: side boundaries begin at the far runway end and the outer arc lies 15 km from the beacon. Each airfield has an approach-entry marker with the required altitude and vertical speed.
+The small ILS also shows course error, distance, and predicted touchdown distance. Press `I` or click it to open the large display. In its single square window, runway perspective is calculated from the real 2 km × 50 m dimensions, current altitude, signed distance to the threshold, and a fixed field of view. It therefore remains appropriately small on a distant final and moves backwards out of the window at touchdown. Centreline dashes have fixed positions on the runway: they move in perspective as the aircraft advances and pass behind it. The larger coloured cross shows the aircraft's localizer and glideslope position, just like the moving cross on the small ILS. Its short arrow indicates the current ground-track trend; a compact cyan cross separately shows nose direction relative to runway heading and the glideslope-aligned viewing direction. The diamond shows where the aircraft will reach the ground if throttle and longitudinal yoke remain unchanged and the lateral yoke is released. Twice per real second, an isolated aircraft copy is simulated with changing speed and vertical speed, fuel burn, and altitude-dependent wind; thunderstorms are currently excluded. The diamond and numerical forecast disappear after touchdown or whenever the unchanged-control trajectory predicts no contact. Precise readings are placed directly beside the window. The two large displays are mutually exclusive: opening large ILS closes the weather radar and vice versa.
+
+At the two most detailed map scales, dashed lines show the capture sector: side boundaries begin at the far runway end and the outer arc lies 15 km from the beacon. Each airfield has approach markers with distance and required altitude. Both ILS sizes show the current descent angle calculated from vertical speed and ground speed along the runway; the 3.3° target is exceeded in yellow and substantially exceeded in red. A shallower angle is neutral rather than presented as a correct approach.
 
 As a throttle reference, join the runway extension 6 km from the far beacon at about 230 m and 100 km/h, set neutral pitch and 30% throttle. Reduce to 10% about 2.05 km from the beacon. The stable segment runs at 90–92 km/h on a roughly 3° glide path.
 
@@ -259,6 +266,8 @@ Flight continues while you walk through the cabin. A warning appears at a high a
 
 The desktop slot is stored at `user://flight_save.dat`. Save and Quit writes it before closing the game. On failure, the game remains open and the previous slot is preserved. Starting a new game does not delete the old slot until a successful save.
 
+Landing Practice is deliberately temporary: it has no save command, does not autosave after a crash, and leaves the main slot untouched.
+
 The world, weather and report, aircraft and pilot, economy, mail, cargo, instruments, map, map and radar lines, calculator tabs, active flight, track, log, scene, and character are saved. A corrupted or incompatible file is not loaded.
 
 In the browser, the slot is stored in `localStorage` under `farflight.save.v5`. It belongs to that browser and site address, does not synchronise with the desktop version, and may disappear after clearing data or using a private session. Closing the tab does not save the game by itself.
@@ -300,7 +309,9 @@ References: [Godot Web export](https://docs.godotengine.org/en/stable/tutorials/
 - `FlightModel` stores aircraft state and dynamics independently from the interface;
 - `FlightPlanSolver` performs pure route calculations;
 - `EconomyModel` stores money, needs, services, mail, and cargo;
-- `main.gd` coordinates models, scenes, and input;
+- `main.gd` coordinates models and scenes; `cockpit_input.gd` handles flight controls;
+- session mode rules and landing practice setup live in `session_mode.gd` and `landing_practice.gd`;
+- `ils_display_state.gd` supplies the same guidance and forecast readouts to both ILS sizes;
 - the map, instrument panel, and side scenes live in separate modules;
 - `aircraft_art.gd` draws the aircraft externally and in cutaway view.
 

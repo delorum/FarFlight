@@ -46,7 +46,7 @@ func _run() -> void:
 	check(GameVersion.is_valid(GameVersion.base_version()), "Project version must use the supported 0.MINOR.PATCH format")
 	check(shell.version_label != null and shell.version_label.text.begins_with("v" + GameVersion.base_version()), "Title and pause shell must display the configured game version")
 	check(shell.menu_open and shell.game == null, "Startup must show title menu without running a flight")
-	check(button_texts(shell) == ["Новая игра", "Об игре", "Язык", "Авторы", "Выход"], "Startup without a save must hide Continue and keep the requested order")
+	check(button_texts(shell) == ["Новая игра", "Посадка", "Об игре", "Язык", "Авторы", "Выход"], "Startup without a save must hide Continue and keep the requested order")
 	shell._open_about()
 	check(shell.about_open, "About page must open")
 	var about_links: Array[Node] = shell.content.find_children("*", "LinkButton", true, false)
@@ -281,7 +281,7 @@ func _run() -> void:
 	second_shell.save_path = slot
 	second_shell.settings_path = slot + ".settings.second"
 	root.add_child(second_shell)
-	check(button_texts(second_shell) == ["Продолжить • seed 424242", "Новая игра", "Об игре", "Язык", "Авторы", "Выход"], "Startup with a save must show its world seed on Continue")
+	check(button_texts(second_shell) == ["Продолжить • seed 424242", "Новая игра", "Посадка", "Об игре", "Язык", "Авторы", "Выход"], "Startup with a save must show its world seed on Continue")
 	second_shell._continue_game()
 	check(second_shell.game != null and not second_shell.menu_open, "Startup Continue must load the slot")
 	second_shell.game.flight._crash("Проверка завершённого прохождения")
@@ -297,7 +297,7 @@ func _run() -> void:
 	finished_shell.save_path = slot
 	finished_shell.settings_path = slot + ".settings.finished"
 	root.add_child(finished_shell)
-	check(button_texts(finished_shell) == ["Итоги • seed 424242", "Новая игра", "Об игре", "Язык", "Авторы", "Выход"], "Startup must identify a finished run as Results instead of Continue")
+	check(button_texts(finished_shell) == ["Итоги • seed 424242", "Новая игра", "Посадка", "Об игре", "Язык", "Авторы", "Выход"], "Startup must identify a finished run as Results instead of Continue")
 	finished_shell._continue_game()
 	check(finished_shell.game.flight.state == finished_shell.game.FlightModelScript.State.CRASHED, "Opening saved results must remain in the terminal crash state")
 	for path in [slot, slot + ".tmp", corrupt_path, slot + ".settings", slot + ".settings.second", slot + ".settings.finished"]:

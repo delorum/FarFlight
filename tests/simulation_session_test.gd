@@ -31,6 +31,40 @@ func _initialize() -> void:
 	assert(is_equal_approx(economy.elapsed_seconds, result.elapsed))
 	assert(is_equal_approx(world.weather_time_seconds - weather_before, result.elapsed))
 
+	var takeoff_flight := Flight.new(world)
+	takeoff_flight.state = Flight.State.LANDED
+	takeoff_flight.engine_running = true
+	takeoff_flight.departure_authorized = true
+	takeoff_flight.throttle = 1.0
+	takeoff_flight.speed_kmh = 80.0
+	takeoff_flight.pitch_deg = 10.0
+	takeoff_flight.yoke.y = 1.0
+	var takeoff_session := Session.new()
+	takeoff_session.trip_air_distance_km = 12.0
+	takeoff_session.trip_elapsed_seconds = 345.0
+	var takeoff_recorder := Recorder.new()
+	takeoff_recorder.reset(takeoff_flight)
+	takeoff_session.advance(Session.MAX_STEP, takeoff_flight, economy, takeoff_recorder, false)
+	assert(takeoff_flight.state == Flight.State.FLYING, "Takeoff fixture must reach the airborne state")
+	assert(is_zero_approx(takeoff_session.trip_air_distance_km) and is_zero_approx(takeoff_session.trip_elapsed_seconds), "Panel trip distance and time must start at zero on actual liftoff")
+
+	var touch_and_go := Flight.new(world)
+	touch_and_go.state = Flight.State.ROLLING
+	touch_and_go.engine_running = true
+	touch_and_go.departure_authorized = true
+	touch_and_go.throttle = 1.0
+	touch_and_go.speed_kmh = 80.0
+	touch_and_go.pitch_deg = 10.0
+	touch_and_go.yoke.y = 1.0
+	var touch_and_go_session := Session.new()
+	touch_and_go_session.trip_air_distance_km = 12.0
+	touch_and_go_session.trip_elapsed_seconds = 345.0
+	var touch_and_go_recorder := Recorder.new()
+	touch_and_go_recorder.reset(touch_and_go)
+	touch_and_go_session.advance(Session.MAX_STEP, touch_and_go, economy, touch_and_go_recorder, false)
+	assert(touch_and_go.state == Flight.State.FLYING, "Touch-and-go fixture must return airborne")
+	assert(is_equal_approx(touch_and_go_session.trip_air_distance_km, 12.0) and is_equal_approx(touch_and_go_session.trip_elapsed_seconds, 345.0), "Touch-and-go must preserve the current leg counter")
+
 	var storm_flight := StormFlight.new(world)
 	storm_flight.state = Flight.State.FLYING
 	storm_flight.altitude_m = Flight.ABSOLUTE_CEILING_M - 50.0

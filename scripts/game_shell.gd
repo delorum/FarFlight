@@ -2,6 +2,7 @@ extends Control
 
 const SaveGame = preload("res://scripts/save_game.gd")
 const GameVersion = preload("res://scripts/game_version.gd")
+const SessionMode = preload("res://scripts/session_mode.gd")
 const Localization = preload("res://scripts/localization.gd")
 const GAME_SCENE = preload("res://scenes/main.tscn")
 const INK := Color("513e2c")
@@ -28,7 +29,7 @@ func _ready() -> void:
 	Localization.initialize(settings_path)
 	Engine.max_fps = 60
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
-	DisplayServer.window_set_title(Localization.text("Far Flight — Почтовая авиация"))
+	DisplayServer.window_set_title(Localization.text("Далекий полет — Почтовая авиация"))
 	if not OS.has_feature("web"):
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 	_build_background()
@@ -113,7 +114,7 @@ func _rebuild_menu() -> void:
 	content = VBoxContainer.new()
 	content.add_theme_constant_override("separation", 12)
 	menu_root.add_child(content)
-	content.add_child(_label("Far Flight", 64))
+	content.add_child(_label("Далекий полет", 64))
 	content.add_child(_label("ПОЧТОВАЯ АВИАЦИЯ", 22))
 	var spacer := Control.new()
 	spacer.custom_minimum_size.y = 18
@@ -174,23 +175,29 @@ func _rebuild_menu() -> void:
 		_button("Начать игру", _start_configured_new_game)
 		_button("Назад", _close_new_game_setup)
 	elif game != null:
-		var run_finished: bool = game.flight.state == game.FlightModelScript.State.CRASHED
-		content.add_child(_label("ИТОГИ ПРОХОЖДЕНИЯ" if run_finished else "ПАУЗА", 14))
-		_button(("Вернуться к итогам" if run_finished else "Продолжить") + " • seed %d" % game.world.seed_value, _resume_game)
-		_button("Статистика полётов", _open_pause_flight_history)
-		_button("Об игре", _open_about)
-		_button("Язык", _open_language)
-		_button("Новая игра", _open_new_game_setup)
-		if run_finished:
-			_button("Выйти", _exit_game)
+		if SessionMode.is_landing_practice(game.session_mode):
+			content.add_child(_label("ПОСАДКА", 14))
+			_button("Начать заново", _restart_landing_training)
+			_button("В главное меню", _leave_landing_training)
 		else:
-			_button("Сохранить и выйти", _save_and_exit)
+			var run_finished: bool = game.flight.state == game.FlightModelScript.State.CRASHED
+			content.add_child(_label("ИТОГИ ПРОХОЖДЕНИЯ" if run_finished else "ПАУЗА", 14))
+			_button(("Вернуться к итогам" if run_finished else "Продолжить") + " • seed %d" % game.world.seed_value, _resume_game)
+			_button("Статистика полётов", _open_pause_flight_history)
+			_button("Об игре", _open_about)
+			_button("Язык", _open_language)
+			_button("Новая игра", _open_new_game_setup)
+			if run_finished:
+				_button("Выйти", _exit_game)
+			else:
+				_button("Сохранить и выйти", _save_and_exit)
 	else:
 		var slot := SaveGame.read_slot(save_path)
 		if not slot.is_empty():
 			var saved_action: String = "Итоги" if SaveGame.is_finished_run(slot) else "Продолжить"
 			_button("%s • seed %d" % [saved_action, int(slot.world.seed)], _continue_game)
 		_button("Новая игра", _open_new_game_setup)
+		_button("Посадка", _start_landing_training)
 		_button("Об игре", _open_about)
 		_button("Язык", _open_language)
 		_button("Авторы", _open_authors)
@@ -221,9 +228,10 @@ func _layout_menu() -> void:
 	if scroll != null:
 		scroll.custom_minimum_size.y = clampf(size.y - 365.0,160.0,480.0)
 
-func _create_game(requested_seed: int = 0) -> Control:
+func _create_game(requested_seed: int = 0, mode: int = SessionMode.Mode.CAMPAIGN) -> Control:
 	var instance: Control = GAME_SCENE.instantiate()
 	instance.requested_world_seed = requested_seed
+	instance.session_mode = mode
 	add_child(instance)
 	move_child(instance, 0)
 	instance.set_process(false)
@@ -271,6 +279,40 @@ func _new_game(requested_seed: int = 0) -> void:
 	error_text = ""
 	new_game_setup_open = false
 	_resume_game()
+
+func _start_landing_training() -> void:
+	var previous_seed := int(game.world.seed_value) if game != null and SessionMode.is_landing_practice(game.session_mode) else 0
+	_discard_current_game()
+	var training_seed := randi_range(10000, 99999999)
+	if training_seed == previous_seed:
+		training_seed = 10000 if training_seed == 99999999 else training_seed + 1
+	game = _create_game(training_seed, SessionMode.Mode.LANDING_PRACTICE)
+	error_text = ""
+	new_game_setup_open = false
+	_resume_game()
+
+func _restart_landing_training() -> void:
+	if game == null or not SessionMode.is_landing_practice(game.session_mode):
+		return
+	_start_landing_training()
+
+func _leave_landing_training() -> void:
+	if game == null or not SessionMode.is_landing_practice(game.session_mode):
+		return
+	_discard_current_game()
+	menu_open = true
+	menu_root.show()
+	error_text = ""
+	_rebuild_menu()
+
+func _discard_current_game() -> void:
+	if game == null:
+		return
+	game.set_process(false)
+	game.set_process_input(false)
+	game.hide()
+	game.queue_free()
+	game = null
 
 func _continue_game() -> void:
 	var data := SaveGame.read_slot(save_path)
@@ -323,6 +365,8 @@ func _open_pause_flight_history() -> void:
 func _on_run_finished(finished_game: Control) -> void:
 	if finished_game != game:
 		return
+	if not SessionMode.allows_save(game.session_mode):
+		return
 	var error := SaveGame.write_slot(game, save_path)
 	if error == OK:
 		error_text = ""
@@ -343,6 +387,9 @@ func _resume_game() -> void:
 	game.queue_redraw()
 
 func _save_and_exit() -> void:
+	if game != null and not SessionMode.allows_save(game.session_mode):
+		_leave_landing_training()
+		return
 	var error := SaveGame.write_slot(game, save_path)
 	if error == OK:
 		_exit_game()
@@ -408,7 +455,7 @@ func _close_language() -> void:
 
 func _select_language(selected: String) -> void:
 	Localization.set_language(selected)
-	DisplayServer.window_set_title(Localization.text("Far Flight — Почтовая авиация"))
+	DisplayServer.window_set_title(Localization.text("Далекий полет — Почтовая авиация"))
 	if game != null and game.has_method("localization_changed"):
 		game.localization_changed()
 	_rebuild_menu()

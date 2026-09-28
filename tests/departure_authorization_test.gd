@@ -87,7 +87,7 @@ func _run() -> void:
 	assert(scene._flight_message_color() == Color("e8d274"), "Ordinary information must remain yellow")
 	scene.flight.prepare_at_airport(0)
 	var action_buttons := [scene.get_cabin_button_rect(), scene.get_trajectory_button_rect(), scene.get_weather_briefing_button_rect(), scene.get_power_button_rect(), scene.get_engine_button_rect()]
-	var longest_labels := ["САЛОН", "ТР: ВЫКЛ", "ГР: ВЫКЛ", "ВЫКЛЮЧИТЬ ПИТАНИЕ [P]", "ОСТАНОВИТЬ ДВИГАТЕЛЬ [M]"]
+	var longest_labels := ["САЛОН [X]", "ТР: ВЫКЛ", "ГР: ВЫКЛ", "ВЫКЛЮЧИТЬ ПИТАНИЕ [P]", "ОСТАНОВИТЬ ДВИГАТЕЛЬ [M]"]
 	for button_index in action_buttons.size():
 		assert(scene.panel_rect().encloses(action_buttons[button_index]), "Every cockpit action button must remain inside the panel")
 		var indicator_width := 16.0 if button_index in [3, 4] else 4.0
