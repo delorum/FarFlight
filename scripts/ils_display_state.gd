@@ -51,7 +51,7 @@ static func build(flight, airport_index: int, signal_available: bool, prediction
 		"descent_angle_color": angle_color,
 		"course_text": "ОТКЛ. ПУТИ %+.1f°" % float(guidance.get("course_error_deg", 0.0)),
 		"distance_text": "ДО ВПП %.2f км" % float(guidance.get("actual_distance_to_threshold_km", 0.0)),
-		"touchdown_text": "КАСАНИЕ %+.2f км ОТ ТОРЦА" % float(prediction.get("distance_from_threshold_km", 0.0)) if has_prediction else "КАСАНИЕ — НЕ ПРОГНОЗИРУЕТСЯ",
+		"touchdown_text": "КАС. %+.2f км" % float(prediction.get("distance_from_threshold_km", 0.0)) if has_prediction else "КАСАНИЕ — НЕ ПРОГНОЗИРУЕТСЯ",
 		"lateral_text": "БОК %+.0f м" % (float(prediction.get("cross_track_km", 0.0)) * 1000.0) if has_prediction else "",
 		"altitude_color": altitude_color,
 		"vertical_speed_color": vertical_speed_color,

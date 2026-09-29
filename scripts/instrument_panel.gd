@@ -512,13 +512,23 @@ func _draw_ils() -> void:
 		host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(96, 37), "НЕТ СИГНАЛА", HORIZONTAL_ALIGNMENT_LEFT, 104, 10, Color("c95d55"))
 		return
 	host.draw_line(rect.position + Vector2(207, 4), rect.position + Vector2(207, rect.size.y - 4), Color("536067"), 1.0)
-	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(216, 22), state.altitude_text, HORIZONTAL_ALIGNMENT_LEFT, 76, 12, state.altitude_color)
-	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(292, 22), state.vertical_speed_text, HORIZONTAL_ALIGNMENT_LEFT, 105, 12, state.vertical_speed_color)
-	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(399, 22), state.speed_text, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 407, 11, state.speed_color)
-	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(216, 42), state.course_text, HORIZONTAL_ALIGNMENT_LEFT, 132, 12, state.course_color)
-	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(350, 42), state.distance_text, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 358, 12, Color.WHITE)
+	var info_x: float = rect.position.x + 216.0
+	var info_width: float = rect.size.x - 224.0
+	ILSDisplayArt.draw_info_segments(host, info_x, rect.position.y + 22.0, [
+		{"text": state.altitude_text, "color": state.altitude_color},
+		{"text": state.vertical_speed_text, "color": state.vertical_speed_color},
+		{"text": state.speed_text, "color": state.speed_color},
+	], 12, info_width)
+	ILSDisplayArt.draw_info_segments(host, info_x, rect.position.y + 42.0, [
+		{"text": state.course_text, "color": state.course_color},
+		{"text": state.distance_text, "color": Color.WHITE},
+		{"text": state.descent_angle_text, "color": state.descent_angle_color},
+	], 12, info_width)
 	if state.show_forecast:
-		host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(216, 61), state.touchdown_text, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 224, 12, state.touchdown_color)
+		var forecast_segments := [{"text": state.touchdown_text, "color": state.touchdown_color}]
+		if state.has_prediction:
+			forecast_segments.append({"text": state.lateral_text, "color": state.touchdown_color})
+		ILSDisplayArt.draw_info_segments(host, info_x, rect.position.y + 61.0, forecast_segments, 12, info_width)
 	# Runway edges live on the airport's fixed horizontal axis. Far from the
 	# airport they are close together; towards the threshold they spread apart.
 	var runway_half_width_km = FlightWorldScript.RUNWAY_WIDTH_KM * 0.5
@@ -548,7 +558,6 @@ func _draw_ils() -> void:
 	var glide_color = Color("65d48c") if guidance.in_glide else Color("e8d274")
 	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(96, 30), "СТВОР" if guidance.in_localizer else "ВНЕ СТВОРА", HORIZONTAL_ALIGNMENT_LEFT, 104, 10, localizer_color)
 	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(96, 44), "ГЛИСС" if guidance.in_glide else ("ВЫСОКО" if guidance.glide_error > 0 else "НИЗКО"), HORIZONTAL_ALIGNMENT_LEFT, 104, 10, glide_color)
-	host.draw_localized_string(ThemeDB.fallback_font, rect.position + Vector2(96, 59), state.descent_angle_text, HORIZONTAL_ALIGNMENT_LEFT, 104, 10, state.descent_angle_color)
 
 func _draw_large_ils(canvas: CanvasItem, rect: Rect2) -> void:
 	ILSDisplayArt.draw_large(canvas, rect, host.ils_display_state())

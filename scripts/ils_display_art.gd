@@ -22,6 +22,7 @@ const CENTERLINE_FIRST_KM := 0.10
 const CENTERLINE_DASH_KM := 0.03
 const CENTERLINE_PERIOD_KM := 0.06
 const CENTERLINE_MIN_MARK_PX := 1.0
+const LOCALIZER_DISPLAY_LIMIT := 1.4
 
 static func draw_large(canvas: CanvasItem, rect: Rect2, state: Dictionary) -> void:
 	canvas.draw_rect(rect, BACKGROUND, true)
@@ -85,11 +86,26 @@ static func _draw_combined_scope(canvas: CanvasItem, scope: Rect2, guidance: Dic
 	var aircraft_marker := localizer_marker_position(inner, guidance)
 	var aircraft_error := maxf(absf(float(guidance.localizer_error)), absf(float(guidance.glide_error)))
 	var aircraft_color := _parameter_color(aircraft_error, 1.0, 2.0)
-	_draw_aircraft_marker(canvas, inner, aircraft_marker, aircraft_color)
-	_draw_ground_track_arrow(canvas, inner, aircraft_marker, guidance, aircraft_color)
+	var aircraft_offscale := aircraft_lateral_offscale_info(inner, guidance)
+	var nose_offscale := nose_heading_offscale_info(inner, guidance)
+	# Separate the two edge readouts if both instruments reach the same side.
+	if bool(aircraft_offscale.visible) and bool(nose_offscale.visible) and int(aircraft_offscale.side) == int(nose_offscale.side):
+		var aircraft_y := Vector2(aircraft_offscale.position).y
+		var nose_y := Vector2(nose_offscale.position).y
+		if absf(aircraft_y - nose_y) < 36.0:
+			aircraft_offscale.position = Vector2(aircraft_marker.x, clampf(aircraft_y + 18.0, inner.position.y + 18.0, inner.end.y - 18.0))
+			nose_offscale.position = Vector2(Vector2(nose_offscale.position).x, clampf(nose_y - 18.0, inner.position.y + 18.0, inner.end.y - 18.0))
+	if bool(aircraft_offscale.visible):
+		_draw_offscale_arrow(canvas, inner, aircraft_offscale, aircraft_color, false)
+	else:
+		_draw_aircraft_marker(canvas, inner, aircraft_marker, aircraft_color)
+		_draw_ground_track_arrow(canvas, inner, aircraft_marker, guidance, aircraft_color)
 	# The compact marker is a nose-direction cue, distinct from the larger
-	# flight-path marker above.
-	_draw_nose_marker(canvas, inner, nose_marker_position(inner, guidance))
+	# aircraft marker above. Beyond the horizontal range it becomes an arrow.
+	if bool(nose_offscale.visible):
+		_draw_offscale_arrow(canvas, inner, nose_offscale, NOSE_MARKER, true)
+	else:
+		_draw_nose_marker(canvas, inner, nose_marker_position(inner, guidance))
 	if bool(prediction.get("valid", false)):
 		var marker := touchdown_cross_position(inner, guidance, prediction)
 		_draw_touchdown_marker(canvas, marker, GREEN if prediction_inside_runway(prediction) else RED)
@@ -222,9 +238,34 @@ static func flight_path_marker_position(view: Rect2, guidance: Dictionary) -> Ve
 
 static func localizer_marker_position(view: Rect2, guidance: Dictionary) -> Vector2:
 	return view.get_center() - Vector2(
-		clampf(float(guidance.get("localizer_error", 0.0)), -1.4, 1.4) * view.size.x * 0.30,
-		clampf(float(guidance.get("glide_error", 0.0)), -1.4, 1.4) * view.size.y * 0.30
+		clampf(float(guidance.get("localizer_error", 0.0)), -LOCALIZER_DISPLAY_LIMIT, LOCALIZER_DISPLAY_LIMIT) * view.size.x * 0.30,
+		clampf(float(guidance.get("glide_error", 0.0)), -LOCALIZER_DISPLAY_LIMIT, LOCALIZER_DISPLAY_LIMIT) * view.size.y * 0.30
 	)
+
+static func aircraft_lateral_offscale_info(view: Rect2, guidance: Dictionary) -> Dictionary:
+	var error := float(guidance.get("localizer_error", 0.0))
+	if absf(error) <= LOCALIZER_DISPLAY_LIMIT:
+		return {"visible": false}
+	# Positive localizer error appears left to the pilot, so metres to the
+	# right of the runway have the opposite sign.
+	var lateral_m := -error * float(guidance.get("localizer_tolerance_km", FlightWorld.RUNWAY_WIDTH_KM * 0.5)) * 1000.0
+	return {
+		"visible": true,
+		"position": localizer_marker_position(view, guidance),
+		"side": 1 if lateral_m > 0.0 else -1,
+		"label": "ОСЬ %+.0f м" % lateral_m,
+	}
+
+static func nose_heading_offscale_info(view: Rect2, guidance: Dictionary) -> Dictionary:
+	var heading_error := float(guidance.get("heading_error_deg", 0.0))
+	if absf(heading_error) <= DISPLAY_VERTICAL_FOV_DEG * 0.5:
+		return {"visible": false}
+	return {
+		"visible": true,
+		"position": nose_marker_position(view, guidance),
+		"side": 1 if heading_error > 0.0 else -1,
+		"label": "НОС %+.1f°" % heading_error,
+	}
 
 static func prediction_inside_runway(prediction: Dictionary) -> bool:
 	return ILSDisplayState.prediction_inside_runway(prediction)
@@ -237,6 +278,24 @@ static func _draw_nose_marker(canvas: CanvasItem, view: Rect2, center: Vector2) 
 	canvas.draw_line(center - Vector2(0, arm), center - Vector2(0, gap), NOSE_MARKER, 2.0, true)
 	canvas.draw_line(center + Vector2(0, gap), center + Vector2(0, arm), NOSE_MARKER, 2.0, true)
 	canvas.draw_circle(center, 2.0, NOSE_MARKER)
+
+static func _draw_offscale_arrow(canvas: CanvasItem, view: Rect2, info: Dictionary, color: Color, label_above: bool) -> void:
+	var center: Vector2 = info.position
+	var side := float(info.side)
+	var tip := Vector2(view.end.x - 3.0 if side > 0.0 else view.position.x + 3.0, center.y)
+	canvas.draw_line(center - Vector2(side * 5.0, 0.0), tip, color, 2.0, true)
+	canvas.draw_line(tip, tip - Vector2(side * 7.0, 5.0), color, 2.0, true)
+	canvas.draw_line(tip, tip - Vector2(side * 7.0, -5.0), color, 2.0, true)
+	var label := Localization.text(info.label)
+	var font_size := 12
+	var font := ThemeDB.fallback_font
+	var label_width := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+	var label_x := tip.x - label_width - 12.0 if side > 0.0 else tip.x + 12.0
+	label_x = clampf(label_x, view.position.x + 4.0, view.end.x - label_width - 4.0)
+	var baseline := center.y - 12.0 if label_above else center.y + 22.0
+	baseline = clampf(baseline, view.position.y + font_size + 4.0, view.end.y - 4.0)
+	canvas.draw_rect(Rect2(Vector2(label_x - 3.0, baseline - font_size - 2.0), Vector2(label_width + 6.0, font_size + 5.0)), Color(SCOPE_BACKGROUND, 0.9), true)
+	canvas.draw_string(font, Vector2(label_x, baseline), label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
 
 static func _draw_aircraft_marker(canvas: CanvasItem, view: Rect2, center: Vector2, color: Color) -> void:
 	var arm := clampf(view.size.x * 0.065, 18.0, 30.0)
@@ -288,16 +347,16 @@ static func _draw_information(canvas: CanvasItem, left: Rect2, right: Rect2, sta
 	# Repeat the small ILS' compact information layout on the right.
 	var show_forecast: bool = state.show_forecast
 	var has_prediction: bool = state.has_prediction
-	var row_count := 3 + (1 if show_forecast else 0) + (1 if has_prediction else 0)
+	var row_count := 3 + (1 if show_forecast else 0)
 	var row_offset: float = (row_count - 1) * 0.5
 	var right_y := right.get_center().y - line_height * row_offset
-	_draw_info_segments(canvas, right.position.x, right_y, [
+	draw_info_segments(canvas, right.position.x, right_y, [
 		{"text": state.altitude_text, "color": state.altitude_color},
 		{"text": state.vertical_speed_text, "color": state.vertical_speed_color},
 		{"text": state.speed_text, "color": state.speed_color},
 	], font_size)
 	right_y += line_height
-	_draw_info_segments(canvas, right.position.x, right_y, [
+	draw_info_segments(canvas, right.position.x, right_y, [
 		{"text": state.course_text, "color": state.course_color},
 		{"text": state.distance_text, "color": TEXT},
 	], font_size)
@@ -305,9 +364,10 @@ static func _draw_information(canvas: CanvasItem, left: Rect2, right: Rect2, sta
 	_draw_info_line(canvas, right.position.x, right_y, right.size.x, state.descent_angle_text, state.descent_angle_color, font_size)
 	right_y += line_height
 	if has_prediction:
-		_draw_info_line(canvas, right.position.x, right_y, right.size.x, state.touchdown_text, state.touchdown_color, font_size)
-		right_y += line_height
-		_draw_info_line(canvas, right.position.x, right_y, right.size.x, state.lateral_text, state.touchdown_color, font_size)
+		draw_info_segments(canvas, right.position.x, right_y, [
+			{"text": state.touchdown_text, "color": state.touchdown_color},
+			{"text": state.lateral_text, "color": state.touchdown_color},
+		], font_size, right.size.x)
 	elif show_forecast:
 		_draw_info_line(canvas, right.position.x, right_y, right.size.x, state.touchdown_text, state.touchdown_color, font_size)
 	Localization.draw_string(canvas, ThemeDB.fallback_font, right.position + Vector2(0, right.size.y - 6), "I: КАРТА", HORIZONTAL_ALIGNMENT_LEFT, right.size.x, 12, MUTED_TEXT)
@@ -315,7 +375,11 @@ static func _draw_information(canvas: CanvasItem, left: Rect2, right: Rect2, sta
 static func _draw_info_line(canvas: CanvasItem, x: float, y: float, width: float, value: String, color: Color, font_size: int, alignment := HORIZONTAL_ALIGNMENT_LEFT) -> void:
 	Localization.draw_string(canvas, ThemeDB.fallback_font, Vector2(x, y), value, alignment, width, font_size, color)
 
-static func _draw_info_segments(canvas: CanvasItem, x: float, y: float, segments: Array, font_size: int) -> void:
+static func draw_info_segments(canvas: CanvasItem, x: float, y: float, segments: Array, font_size: int, max_width: float = INF) -> void:
+	# The small scope has fixed-width rows; preserve all values by fitting each
+	# whole row rather than reserving oversized columns for individual values.
+	while font_size > 8 and _info_segments_width(segments, font_size) > max_width:
+		font_size -= 1
 	var cursor := x
 	var separator := " • "
 	var separator_width := ThemeDB.fallback_font.get_string_size(separator, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
@@ -327,6 +391,14 @@ static func _draw_info_segments(canvas: CanvasItem, x: float, y: float, segments
 		var localized := Localization.text(segment.text)
 		canvas.draw_string(ThemeDB.fallback_font, Vector2(cursor, y), localized, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, segment.color)
 		cursor += ThemeDB.fallback_font.get_string_size(localized, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+
+static func _info_segments_width(segments: Array, font_size: int) -> float:
+	var width := 0.0
+	for index in segments.size():
+		if index > 0:
+			width += ThemeDB.fallback_font.get_string_size(" • ", HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+		width += ThemeDB.fallback_font.get_string_size(Localization.text(segments[index].text), HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+	return width
 
 static func _parameter_color(error: float, green_limit := 1.0, yellow_limit := 2.0) -> Color:
 	return ILSDisplayState.parameter_color(error, green_limit, yellow_limit)

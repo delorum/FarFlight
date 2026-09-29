@@ -36,6 +36,8 @@ func _run() -> void:
 	check(Localization.text("Самолёт подготовлен к вылету курсом 185° • оплачено 40 монет") == "Aircraft prepared for departure on heading 185° • paid 40 coins", "Composed operation notices must translate")
 	check("%s • %s" % [Localization.text("СТВОР"), Localization.text("НИЗКО")] == "LOCALIZER • LOW", "Composed ILS status must not retain Russian fragments")
 	check(Localization.text("VS -1.25 м/с • НУЖНО -1.40 м/с") == "VS -1.25 m/s • TARGET -1.40 m/s", "Large ILS target vertical speed must translate")
+	check(Localization.text("ОСЬ +200 м") == "AXIS +200 m" and Localization.text("НОС -16.5°") == "NOSE -16.5°", "Off-scale ILS arrows must translate their numeric labels")
+	check(Localization.text("КАС. +0.09 км") == "TD +0.09 km" and Localization.text("БОК -1 м") == "LAT -1 m", "Compact touchdown and lateral forecast labels must translate")
 
 	var shell = load("res://scenes/game_shell.tscn").instantiate()
 	shell.settings_path = settings_path
