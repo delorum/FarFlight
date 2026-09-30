@@ -11,6 +11,7 @@ const RADAR_ANNOTATION_RETENTION_KM := 30.0
 const RADAR_COURSE_LINE_LENGTH_KM := 30.0
 const RADAR_AIRCRAFT_CLICK_RADIUS_PX := 16.0
 const WeatherRadarArt = preload("res://scripts/weather_radar_art.gd")
+const StormGeometry = preload("res://scripts/storm_geometry.gd")
 const FlightWorldScript = preload("res://scripts/world.gd")
 const FlightModelScript = preload("res://scripts/flight_model.gd")
 const WIND_OVERLAY_ALTITUDES = FlightWorldScript.WIND_ALTITUDES_M
@@ -383,6 +384,7 @@ func _draw_map() -> void:
 	if pending_measure != null:
 		_draw_measurement(pending_measure, _snap_map_point(host.get_local_mouse_position()), Color(0.1, 0.25, 0.7, 0.55))
 	_draw_completed_flight_trajectory()
+	_draw_exit_portal()
 	host._draw_economy_hud(map_canvas, false)
 	_draw_hovered_weather_storm_motion(rect)
 	_draw_hovered_airport_services(rect)
@@ -412,6 +414,28 @@ func _draw_map() -> void:
 	map_canvas.draw_line(scale_start, scale_start + Vector2(scale_px, 0), Color("25271f"), 3)
 	Localization.draw_string(map_canvas,ThemeDB.fallback_font, scale_start - Vector2(0, 6), "10 км", HORIZONTAL_ALIGNMENT_CENTER, scale_px, 12, Color("25271f"))
 
+func _draw_exit_portal() -> void:
+	if host.world.exit_portal.is_empty():
+		return
+	var point: Vector2 = world_to_screen(Vector2(host.world.exit_portal.position))
+	if not map_rect().grow(-6.0).has_point(point):
+		return
+	var color := Color("784a91")
+	map_canvas.draw_circle(point, 9.0, Color("d7d0ad"))
+	map_canvas.draw_arc(point, 9.0, 0.0, TAU, 24, color, 2.5, true)
+	var direction := Vector2.ZERO
+	match String(host.world.exit_portal.side):
+		"right": direction = Vector2.RIGHT
+		"left": direction = Vector2.LEFT
+		"top": direction = Vector2.UP
+		"bottom": direction = Vector2.DOWN
+	map_canvas.draw_line(point - direction * 5.0, point + direction * 5.0, color, 2.0, true)
+	var label := Localization.text("НОВАЯ КАРТА")
+	var label_width := ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+	var label_x := clampf(point.x - label_width * 0.5, map_rect().position.x + 5.0, map_rect().end.x - label_width - 5.0)
+	var label_y := point.y - 14.0 if point.y > map_rect().position.y + 30.0 else point.y + 25.0
+	map_canvas.draw_string(ThemeDB.fallback_font, Vector2(label_x, label_y), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, color)
+
 func _draw_hovered_airport_services(rect: Rect2) -> void:
 	var mouse = host.get_local_mouse_position()
 	var text := map_footer_text_at(mouse)
@@ -432,7 +456,9 @@ func map_footer_text_at(screen_position: Vector2) -> String:
 	var airport_index := _airport_hover_index(screen_position)
 	if airport_index >= 0:
 		var airport: Dictionary = host.world.airports[airport_index]
-		return "%s: %s" % [airport.name, ", ".join(host.economy.services_at(airport_index))]
+		return "%s: %s • %s" % [airport.name, ", ".join(host.economy.services_at(airport_index)), Localization.text("пос. %d" % host.economy.remaining_parcels_at(airport_index))]
+	if not host.world.exit_portal.is_empty() and world_to_screen(Vector2(host.world.exit_portal.position)).distance_to(screen_position) <= 13.0:
+		return Localization.text("Переход на новую карту • недоставленная почта останется здесь")
 	var line_text := measurement_line_description_at(screen_position)
 	if not line_text.is_empty():
 		return line_text
@@ -497,13 +523,12 @@ func _draw_hovered_weather_storm_motion(rect: Rect2) -> void:
 
 func _weather_briefing_contour(storm: Dictionary, center: Vector2) -> PackedVector2Array:
 	var points := PackedVector2Array()
-	var radius: float = float(storm.radius_km)
 	for sample_index in 48:
 		var direction := Vector2.RIGHT.rotated(TAU * sample_index / 48.0)
 		var extent := 0.0
 		for lobe in storm.radar_lobes:
 			var offset := Vector2(lobe.offset_km)
-			var lobe_radius := radius * float(lobe.radius_scale)
+			var lobe_radius := StormGeometry.lobe_radius(storm, lobe)
 			var projection := direction.dot(offset)
 			var discriminant := projection * projection - (offset.length_squared() - lobe_radius * lobe_radius)
 			if discriminant >= 0.0:
@@ -518,10 +543,7 @@ func _weather_briefing_circle(center: Vector2, radius: float) -> PackedVector2Ar
 	return points
 
 func _weather_briefing_maximum_extent_km(storm: Dictionary) -> float:
-	var result := float(storm.radius_km)
-	for lobe in storm.radar_lobes:
-		result = maxf(result, Vector2(lobe.offset_km).length() + float(storm.radius_km) * float(lobe.radius_scale))
-	return result
+	return StormGeometry.maximum_extent_km(storm)
 
 func _draw_weather_briefing_echoes(rect: Rect2, clip_polygon: PackedVector2Array) -> void:
 	# Reuse the radar's thresholds and hues, with much lower opacity on paper.
@@ -531,28 +553,25 @@ func _draw_weather_briefing_echoes(rect: Rect2, clip_polygon: PackedVector2Array
 		var zone: Dictionary = WeatherRadarArt.ECHO_ZONES[zone_index]
 		var zone_color := Color(zone.color, map_alphas[zone_index])
 		for storm in weather_briefing_storms:
-			for wrap_y in [-1, 0, 1]:
-				for wrap_x in [-1, 0, 1]:
-					var center := Vector2(storm.center) + Vector2(wrap_x, wrap_y) * FlightWorldScript.SIZE_KM
-					var center_screen := world_to_screen(center)
-					var maximum_extent_px := _weather_briefing_maximum_extent_km(storm) * pixels_per_km()
-					if not Rect2(center_screen - Vector2.ONE * maximum_extent_px, Vector2.ONE * maximum_extent_px * 2.0).intersects(rect):
-						continue
-					for lobe in storm.radar_lobes:
-						var peak := float(storm.intensity) * float(lobe.strength)
-						if peak <= float(zone.threshold):
-							continue
-						var ratio := 1.0 if float(zone.threshold) <= 0.0 else sqrt(1.0 - float(zone.threshold) / peak)
-						var echo_center := world_to_screen(center + Vector2(lobe.offset_km))
-						var echo_radius := float(storm.radius_km) * float(lobe.radius_scale) * ratio * pixels_per_km()
-						var bounds := Rect2(echo_center - Vector2.ONE * echo_radius, Vector2.ONE * echo_radius * 2.0)
-						if not bounds.intersects(rect):
-							continue
-						if rect.encloses(bounds):
-							map_canvas.draw_circle(echo_center, echo_radius, zone_color)
-						else:
-							for clipped_polygon in Geometry2D.intersect_polygons(_weather_briefing_circle(echo_center, echo_radius), clip_polygon):
-								map_canvas.draw_colored_polygon(clipped_polygon, zone_color)
+			var center := Vector2(storm.center)
+			var center_screen := world_to_screen(center)
+			var maximum_extent_px := _weather_briefing_maximum_extent_km(storm) * pixels_per_km()
+			if not Rect2(center_screen - Vector2.ONE * maximum_extent_px, Vector2.ONE * maximum_extent_px * 2.0).intersects(rect):
+				continue
+			for lobe in storm.radar_lobes:
+				var echo_radius_km := StormGeometry.lobe_radius(storm, lobe, float(zone.threshold))
+				if echo_radius_km <= 0.0:
+					continue
+				var echo_center := world_to_screen(center + Vector2(lobe.offset_km))
+				var echo_radius := echo_radius_km * pixels_per_km()
+				var bounds := Rect2(echo_center - Vector2.ONE * echo_radius, Vector2.ONE * echo_radius * 2.0)
+				if not bounds.intersects(rect):
+					continue
+				if rect.encloses(bounds):
+					map_canvas.draw_circle(echo_center, echo_radius, zone_color)
+				else:
+					for clipped_polygon in Geometry2D.intersect_polygons(_weather_briefing_circle(echo_center, echo_radius), clip_polygon):
+						map_canvas.draw_colored_polygon(clipped_polygon, zone_color)
 
 func _draw_weather_briefing(rect: Rect2) -> void:
 	if not weather_briefing_visible:
@@ -561,21 +580,19 @@ func _draw_weather_briefing(rect: Rect2) -> void:
 	_draw_weather_briefing_echoes(rect, clip_polygon)
 	var line_color := Color(0.52, 0.54, 0.16, 0.30)
 	for storm in weather_briefing_storms:
-		for wrap_y in [-1, 0, 1]:
-			for wrap_x in [-1, 0, 1]:
-				var center := Vector2(storm.center) + Vector2(wrap_x, wrap_y) * FlightWorldScript.SIZE_KM
-				var center_screen := world_to_screen(center)
-				var extent_px := _weather_briefing_maximum_extent_km(storm) * pixels_per_km()
-				if not Rect2(center_screen - Vector2.ONE * extent_px, Vector2.ONE * extent_px * 2.0).intersects(rect):
-					continue
-				var contour := _weather_briefing_contour(storm, center)
-				var bounds := Rect2(contour[0], Vector2.ZERO)
-				for point in contour:
-					bounds = bounds.expand(point)
-				if not bounds.intersects(rect):
-					continue
-				for point_index in contour.size():
-					_draw_clipped_map_line(contour[point_index], contour[(point_index + 1) % contour.size()], line_color, 1.2)
+		var center := Vector2(storm.center)
+		var center_screen := world_to_screen(center)
+		var extent_px := _weather_briefing_maximum_extent_km(storm) * pixels_per_km()
+		if not Rect2(center_screen - Vector2.ONE * extent_px, Vector2.ONE * extent_px * 2.0).intersects(rect):
+			continue
+		var contour := _weather_briefing_contour(storm, center)
+		var bounds := Rect2(contour[0], Vector2.ZERO)
+		for point in contour:
+			bounds = bounds.expand(point)
+		if not bounds.intersects(rect):
+			continue
+		for point_index in contour.size():
+			_draw_clipped_map_line(contour[point_index], contour[(point_index + 1) % contour.size()], line_color, 1.2)
 
 func weather_briefing_storm_at(mouse: Vector2) -> int:
 	if large_weather_radar or not weather_briefing_visible or not map_rect().has_point(mouse):
@@ -586,17 +603,10 @@ func weather_briefing_storm_at(mouse: Vector2) -> int:
 	for storm_index in weather_briefing_storms.size():
 		var storm: Dictionary = weather_briefing_storms[storm_index]
 		for lobe in storm.radar_lobes:
-			var center := Vector2(storm.center) + Vector2(lobe.offset_km)
-			var delta := point - center
-			delta.x = fposmod(delta.x + FlightWorldScript.SIZE_KM * 0.5, FlightWorldScript.SIZE_KM) - FlightWorldScript.SIZE_KM * 0.5
-			delta.y = fposmod(delta.y + FlightWorldScript.SIZE_KM * 0.5, FlightWorldScript.SIZE_KM) - FlightWorldScript.SIZE_KM * 0.5
-			var lobe_radius := float(storm.radius_km) * float(lobe.radius_scale)
-			var ratio := delta.length() / lobe_radius
-			if ratio < 1.0:
-				var strength := float(storm.intensity) * float(lobe.strength) * (1.0 - ratio * ratio)
-				if strength > strongest:
-					strongest = strength
-					selected = storm_index
+			var strength := StormGeometry.lobe_strength(storm, Vector2(storm.center), lobe, point)
+			if strength > strongest:
+				strongest = strength
+				selected = storm_index
 	return selected
 
 func _airport_hover_index(mouse: Vector2) -> int:

@@ -1,5 +1,6 @@
 extends RefCounted
 const Localization = preload("res://scripts/localization.gd")
+const StormGeometry = preload("res://scripts/storm_geometry.gd")
 ## Shared echoes: enlarging the scope reveals the same weather, not extra data.
 const RANGE_KM := 30.0
 const ECHO_ZONES := [
@@ -21,17 +22,16 @@ static func draw_echoes(canvas: CanvasItem, world, flight, center: Vector2, radi
 	for zone in ECHO_ZONES:
 		for storm in world.storms:
 			var relative: Vector2 = (world.storm_position(storm)-flight.position_km).rotated(-deg_to_rad(flight.heading_deg))
-			if relative.length() > range_km+float(storm.radius_km)*1.2:
+			if relative.length() > range_km + StormGeometry.maximum_extent_km(storm):
 				continue
 			var lobes: Array = world.storm_lobes(storm)
 			for lobe in lobes:
-				var peak: float = float(storm.intensity)*float(lobe.strength)
-				if peak <= float(zone.threshold):
+				var echo_radius_km := StormGeometry.lobe_radius(storm, lobe, float(zone.threshold))
+				if echo_radius_km <= 0.0:
 					continue
-				var ratio := 1.0 if float(zone.threshold) <= 0.0 else sqrt(1.0-float(zone.threshold)/peak)
 				var offset: Vector2 = Vector2(lobe.offset_km).rotated(-deg_to_rad(flight.heading_deg))
 				var echo_center := center+(relative+offset)/range_km*radius
-				var echo_radius: float = float(storm.radius_km)*float(lobe.radius_scale)*ratio/range_km*radius
+				var echo_radius: float = echo_radius_km/range_km*radius
 				var distance := center.distance_to(echo_center)
 				if distance >= radius+echo_radius:
 					continue
@@ -111,12 +111,8 @@ static func draw_storm_motion(canvas: CanvasItem, rect: Rect2, world, flight, mo
 	for storm in world.storms:
 		var storm_center: Vector2 = world.storm_position(storm)
 		for lobe in world.storm_lobes(storm):
-			var lobe_radius := float(storm.radius_km) * float(lobe.radius_scale)
-			if lobe_radius <= 0.0:
-				continue
-			var ratio := point.distance_to(storm_center + Vector2(lobe.offset_km)) / lobe_radius
-			var strength := float(storm.intensity) * float(lobe.strength) * (1.0 - ratio * ratio)
-			if ratio < 1.0 and strength > strongest:
+			var strength := StormGeometry.lobe_strength(storm, storm_center, lobe, point)
+			if strength > strongest:
 				strongest = strength
 				selected = storm
 	if selected.is_empty():

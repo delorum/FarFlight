@@ -13,6 +13,7 @@ var instrument_panel := InstrumentPanel.new(self)
 
 const FlightRecorder = preload("res://scripts/flight_recorder.gd")
 const SimulationSession = preload("res://scripts/simulation_session.gd")
+const WorldProgression = preload("res://scripts/world_progression.gd")
 var recorder := FlightRecorder.new()
 var simulation := SimulationSession.new()
 
@@ -321,8 +322,14 @@ var radar_range_index: int:
 var weather_radar_cache: Node
 var crash_overlay: PanelContainer
 var crash_description: Label
+var crash_stats: Label
 var crash_title: Label
 var crash_map_button: Button
+var crash_expand_button: Button
+var crash_details: VBoxContainer
+var crash_overlay_collapsed := false
+var crash_overlay_dragging := false
+var crash_overlay_drag_offset := Vector2.ZERO
 var selected_inventory_slot: int:
 	get:
 		return side_scenes.selected_inventory_slot
@@ -427,7 +434,7 @@ func _input(event: InputEvent) -> void:
 	if flight != null and flight.state == FlightModelScript.State.CRASHED and view_mode not in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY]:
 		if event is InputEventKey and event.pressed and not event.echo:
 			if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
-				_show_crash_map()
+				_collapse_crash_overlay()
 			get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_Z or event.physical_keycode == KEY_Z):
@@ -482,7 +489,10 @@ func _input(event: InputEvent) -> void:
 
 func regenerate_world(requested_seed: int = 0) -> void:
 	run_finish_save_attempted = false
-	world = FlightWorldScript.new(requested_seed)
+	world = WorldProgression.initial_world(requested_seed) if not SessionMode.is_landing_practice(session_mode) else FlightWorldScript.new(requested_seed)
+	if world == null:
+		push_error("Could not generate a reachable starting world")
+		return
 	flight = FlightModelScript.new(world)
 	economy = EconomyScript.new(world)
 	if SessionMode.is_landing_practice(session_mode):
@@ -518,7 +528,53 @@ func regenerate_world(requested_seed: int = 0) -> void:
 	_queue_map_redraw()
 	queue_redraw()
 
+func _transition_to_next_world() -> void:
+	var exit_side: String = world.exit_portal.side
+	var coordinate: float = world.exit_portal.coordinate
+	var result: Dictionary = WorldProgression.transition(world, flight, economy, simulation)
+	if result.is_empty():
+		# Keep the current flight recoverable instead of flying into an invalid
+		# world if an unusually restrictive terrain seed defeats the search.
+		flight.position_km = world.edge_position(exit_side, coordinate, 1.0)
+		flight.position_integration_error_km = Vector2.ZERO
+		flight.world_exit_reached = false
+		flight._show_message("Не удалось найти доступную новую карту", 6.0, "", true)
+		return
+	world = result.world
+	var entry_position: Vector2 = result.entry_position
+	var nearest_airport: int = result.nearest_airport
+	flight._show_message("Новая карта %d • старая почта оставлена: %d" % [world.level_index + 1, result.abandoned], 8.0, "")
+	_set_view_mode(ViewMode.COCKPIT)
+	scene_is_walking = false
+	_reset_flight_trajectory()
+	map_center = entry_position
+	map_zoom = _initial_map_zoom(map_center)
+	_clamp_map_center()
+	flight_calculator.clear_line_links()
+	measurement_lines.clear()
+	pending_measure = null
+	radar_measurement_lines.clear()
+	radar_pending_measure = null
+	large_weather_radar = false
+	large_ils = false
+	ils_airport_index = nearest_airport
+	ils_prediction_timer = 0.0
+	navigation_map.refresh_weather_briefing()
+	_build_contours()
+	_build_approach_markers()
+	_update_receiver_signals()
+	_update_ils_touchdown_prediction()
+	weather_radar_cache.invalidate()
+	_queue_map_redraw()
+	queue_redraw()
+
 func _process(delta: float) -> void:
+	if crash_overlay_dragging:
+		if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+			crash_overlay.global_position = crash_overlay.get_global_mouse_position() - crash_overlay_drag_offset
+			_clamp_crash_overlay()
+		else:
+			crash_overlay_dragging = false
 	if flight.state == FlightModelScript.State.CRASHED:
 		# A crash may happen while the pilot is in the cabin, at an airport scene,
 		# or while the full-screen weather radar is open. Always leave those views
@@ -546,6 +602,9 @@ func _process(delta: float) -> void:
 	var engine_before_update: bool = flight.engine_running
 	var events := simulation.advance(delta, flight, economy, recorder, cabin_sleeping)
 	var game_delta: float = events.elapsed
+	if events.world_exit:
+		_transition_to_next_world()
+		return
 	if events.landed:
 		if SessionMode.keeps_storms_clear(session_mode):
 			LandingPractice.clear_storms(world)
@@ -643,43 +702,92 @@ func _build_crash_overlay() -> void:
 		margin.add_theme_constant_override("margin_"+side,20)
 	crash_overlay.add_child(margin)
 	var layout := VBoxContainer.new()
-	layout.add_theme_constant_override("separation",16)
+	layout.add_theme_constant_override("separation",12)
 	margin.add_child(layout)
+	var header := HBoxContainer.new()
+	layout.add_child(header)
 	crash_title = Label.new()
 	crash_title.text = Localization.text("ПОЛЁТ ЗАВЕРШЁН — КРУШЕНИЕ")
 	crash_title.add_theme_color_override("font_color",Color("a83f38"))
 	crash_title.add_theme_font_size_override("font_size",22)
-	layout.add_child(crash_title)
+	crash_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	crash_title.mouse_filter = Control.MOUSE_FILTER_STOP
+	crash_title.mouse_default_cursor_shape = Control.CURSOR_MOVE
+	crash_title.gui_input.connect(_crash_overlay_drag_input)
+	header.add_child(crash_title)
+	crash_expand_button = Button.new()
+	crash_expand_button.text = Localization.text("РАЗВЕРНУТЬ")
+	crash_expand_button.visible = false
+	crash_expand_button.pressed.connect(_expand_crash_overlay)
+	header.add_child(crash_expand_button)
+	crash_details = VBoxContainer.new()
+	crash_details.add_theme_constant_override("separation",12)
+	layout.add_child(crash_details)
 	crash_description = Label.new()
 	crash_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	crash_description.custom_minimum_size = Vector2(600,90)
+	crash_description.custom_minimum_size = Vector2(600,70)
 	crash_description.add_theme_color_override("font_color",Color("694b30"))
-	layout.add_child(crash_description)
+	crash_details.add_child(crash_description)
+	crash_stats = Label.new()
+	crash_stats.add_theme_color_override("font_color",Color("694b30"))
+	crash_details.add_child(crash_stats)
 	crash_map_button = Button.new()
 	crash_map_button.text = Localization.text("ПОКАЗАТЬ ТРАЕКТОРИЮ [ENTER]")
-	crash_map_button.pressed.connect(_show_crash_map)
-	layout.add_child(crash_map_button)
+	crash_map_button.pressed.connect(_collapse_crash_overlay)
+	crash_details.add_child(crash_map_button)
 	resized.connect(_update_crash_overlay)
 
 func _update_crash_overlay() -> void:
 	if crash_overlay == null or flight == null:
 		return
 	var needs_death: bool = economy != null and not economy.game_over_reason.is_empty()
+	var was_visible := crash_overlay.visible
 	crash_overlay.visible = flight.state == FlightModelScript.State.CRASHED and view_mode not in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY] and (view_mode != ViewMode.COCKPIT or needs_death)
 	if not crash_overlay.visible:
+		crash_overlay_dragging = false
 		return
-	var overlay_width := minf(760,size.x-40)
+	var overlay_width := minf(760 if not crash_overlay_collapsed else 400,size.x-40)
 	crash_title.text = Localization.text("ИГРА ОКОНЧЕНА" if needs_death else "ПОЛЁТ ЗАВЕРШЁН — КРУШЕНИЕ")
 	crash_description.custom_minimum_size.x = overlay_width-44
 	crash_description.text = (Localization.text("Самолёт находился в сваливании.\n") if flight.stalled else "") + Localization.text(flight.message)
-	crash_overlay.size = Vector2(overlay_width,280)
-	crash_overlay.position = (size-crash_overlay.size)*0.5
+	var total_seconds := maxi(0, floori(economy.elapsed_seconds))
+	crash_stats.text = Localization.text("Время игры: %d д %02d:%02d:%02d • доставок: %d") % [total_seconds / 86400, (total_seconds % 86400) / 3600, (total_seconds % 3600) / 60, total_seconds % 60, economy.total_deliveries]
+	crash_details.visible = not crash_overlay_collapsed
+	crash_expand_button.visible = crash_overlay_collapsed
+	crash_map_button.text = Localization.text("ПОКАЗАТЬ ТРАЕКТОРИЮ [ENTER]")
+	crash_expand_button.text = Localization.text("РАЗВЕРНУТЬ")
+	var target_size := Vector2(overlay_width,80 if crash_overlay_collapsed else 280)
+	var size_changed := crash_overlay.size != target_size
+	crash_overlay.size = target_size
+	if not was_visible or size_changed:
+		crash_overlay.position = Vector2((size.x-overlay_width)*0.5, map_rect().position.y+12 if crash_overlay_collapsed else (size.y-target_size.y)*0.5)
+	_clamp_crash_overlay()
 
 func _show_crash_map() -> void:
 	large_weather_radar = false
 	large_ils = false
 	final_trajectory_visible = true
 	_set_view_mode(ViewMode.COCKPIT)
+
+func _collapse_crash_overlay() -> void:
+	_show_crash_map()
+	if economy != null and not economy.game_over_reason.is_empty():
+		crash_overlay_collapsed = true
+		_update_crash_overlay()
+
+func _expand_crash_overlay() -> void:
+	crash_overlay_collapsed = false
+	_update_crash_overlay()
+
+func _crash_overlay_drag_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		crash_overlay_dragging = event.pressed
+		crash_overlay_drag_offset = crash_overlay.get_global_mouse_position() - crash_overlay.global_position
+		crash_title.accept_event()
+
+func _clamp_crash_overlay() -> void:
+	var bounds := map_rect().grow(-4)
+	crash_overlay.position = crash_overlay.position.clamp(bounds.position, (bounds.end - crash_overlay.size).max(bounds.position))
 
 func _update_propeller_animation(delta: float) -> void:
 	if not flight.engine_running:
@@ -775,7 +883,10 @@ func _handle_economy_click(position: Vector2) -> void:
 			if economy.carried_item.get("type", "") == "parcel" and int(economy.carried_item.get("destination", -1)) == flight.airport_index:
 				if _economy_button_rect(row).has_point(position):
 					var delivery: Dictionary = economy.deliver_carried(flight.airport_index)
-					scene_notice = "Доставлено: +%d монет" % delivery.paid
+					if economy.deliveries_on_map >= EconomyScript.DELIVERIES_TO_UNLOCK_EXIT and world.exit_portal.is_empty():
+						world.ensure_exit_portal()
+						_queue_map_redraw()
+					scene_notice = "Доставлено: +%d монет • переход открыт на карте" % delivery.paid if not world.exit_portal.is_empty() and economy.deliveries_on_map == EconomyScript.DELIVERIES_TO_UNLOCK_EXIT else "Доставлено: +%d монет • %d/16" % [delivery.paid, economy.deliveries_on_map]
 					return
 				row += 1
 			var offers: Array = economy.offers_at(flight.airport_index)
@@ -1158,8 +1269,8 @@ func _airframe_indicator_text() -> String:
 	return "ПЛАНЕР: %s  %s  %.1f%% • износ %.3f%%/мин" % [_airframe_condition_status().label, _airframe_bar(), flight.airframe_condition, wear_per_minute]
 
 func _airframe_bar() -> String:
-	var filled := ceili(clampf(flight.airframe_condition, 0.0, 100.0) / 100.0 * 6.0)
-	return "■".repeat(filled) + "□".repeat(6 - filled)
+	var filled := ceili(clampf(flight.airframe_condition, 0.0, 100.0) / 100.0 * 5.0)
+	return "■".repeat(filled) + "□".repeat(5 - filled)
 
 func _need_bar(value: int) -> String:
 	return "■".repeat(clampi(value, 0, 6)) + "□".repeat(6 - clampi(value, 0, 6))

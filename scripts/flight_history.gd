@@ -7,6 +7,7 @@ const Flight = preload("res://scripts/flight_model.gd")
 var records: Array[Dictionary] = []
 var active := false
 var active_origin := -1
+var active_level := 0
 var active_start_seconds := 0.0
 var active_distance_km := 0.0
 
@@ -14,6 +15,7 @@ func reset() -> void:
 	records.clear()
 	active = false
 	active_origin = -1
+	active_level = 0
 	active_start_seconds = 0.0
 	active_distance_km = 0.0
 
@@ -21,6 +23,7 @@ func update(flight, previous_state: int, previous_position: Vector2, elapsed_sec
 	if not active and previous_state != Flight.State.FLYING and flight.state == Flight.State.FLYING:
 		active = true
 		active_origin = int(flight.airport_index)
+		active_level = int(flight.world.level_index)
 		active_start_seconds = maxf(0.0, elapsed_seconds - step)
 		active_distance_km = 0.0
 	if active and previous_state == Flight.State.FLYING:
@@ -32,6 +35,7 @@ func update(flight, previous_state: int, previous_position: Vector2, elapsed_sec
 		records.append({
 			"origin": active_origin,
 			"destination": int(flight.airport_index),
+			"level": active_level,
 			"distance_km": active_distance_km,
 			"duration_seconds": end_seconds - active_start_seconds,
 			"start_seconds": active_start_seconds,
@@ -45,10 +49,10 @@ func update(flight, previous_state: int, previous_position: Vector2, elapsed_sec
 		active_origin = -1
 		active_distance_km = 0.0
 
-func route_records(origin: int, destination: int) -> Array[Dictionary]:
+func route_records(origin: int, destination: int, level: int = -1) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for record in records:
-		if int(record.origin) == origin and int(record.destination) == destination:
+		if int(record.origin) == origin and int(record.destination) == destination and (level < 0 or int(record.get("level", 0)) == level):
 			result.append(record)
 	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		if not is_equal_approx(float(a.duration_seconds), float(b.duration_seconds)):
@@ -57,10 +61,10 @@ func route_records(origin: int, destination: int) -> Array[Dictionary]:
 	)
 	return result
 
-func route_count(origin: int, destination: int) -> int:
+func route_count(origin: int, destination: int, level: int = -1) -> int:
 	var count := 0
 	for record in records:
-		if int(record.origin) == origin and int(record.destination) == destination:
+		if int(record.origin) == origin and int(record.destination) == destination and (level < 0 or int(record.get("level", 0)) == level):
 			count += 1
 	return count
 
@@ -69,6 +73,7 @@ func snapshot() -> Dictionary:
 		"records": records.duplicate(true),
 		"active": active,
 		"active_origin": active_origin,
+		"active_level": active_level,
 		"active_start_seconds": active_start_seconds,
 		"active_distance_km": active_distance_km,
 	}.duplicate(true)
@@ -84,12 +89,16 @@ static func valid_snapshot(data: Variant, airport_count: int = 8) -> bool:
 		return false
 	if data.active and int(data.active_origin) not in range(airport_count):
 		return false
+	if data.has("active_level") and (not data.active_level is int or int(data.active_level) < 0):
+		return false
 	for record in data.records:
 		if not record is Dictionary or not record.has_all(["origin", "destination", "distance_km", "duration_seconds", "start_seconds", "end_seconds"]):
 			return false
 		if not record.origin is int or int(record.origin) not in range(airport_count):
 			return false
 		if not record.destination is int or int(record.destination) not in range(airport_count):
+			return false
+		if record.has("level") and (not record.level is int or int(record.level) < 0):
 			return false
 		for key in ["distance_km", "duration_seconds", "start_seconds", "end_seconds"]:
 			if not record[key] is float or not is_finite(float(record[key])) or float(record[key]) < 0.0:
@@ -104,6 +113,7 @@ func restore_snapshot(data: Dictionary, airport_count: int = 8) -> bool:
 	records.assign(data.records.duplicate(true))
 	active = data.active
 	active_origin = data.active_origin
+	active_level = int(data.get("active_level", 0))
 	active_start_seconds = data.active_start_seconds
 	active_distance_km = data.active_distance_km
 	return true

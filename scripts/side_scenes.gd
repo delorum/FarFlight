@@ -38,6 +38,7 @@ var route_history_scroll := 0
 var route_history_selected := 0
 var route_history_origin := -1
 var route_history_destination := -1
+var route_history_level := 0
 var route_history_records_cache: Array[Dictionary] = []
 var history_route_counts: Dictionary = {}
 var history_route_counts_size := -1
@@ -1210,18 +1211,18 @@ func _history_record_at(display_index: int) -> Dictionary:
 	# and reversing the full journal on every redraw or input event.
 	return records[records.size() - 1 - display_index]
 
-func _history_route_key(origin: int, destination: int) -> String:
-	return "%d:%d" % [origin, destination]
+func _history_route_key(origin: int, destination: int, level: int = 0) -> String:
+	return "%d:%d:%d" % [level, origin, destination]
 
-func _history_route_count(origin: int, destination: int) -> int:
+func _history_route_count(origin: int, destination: int, level: int = 0) -> int:
 	var records: Array[Dictionary] = host.simulation.flight_history.records
 	if history_route_counts_size != records.size():
 		history_route_counts.clear()
 		for record in records:
-			var key := _history_route_key(int(record.origin), int(record.destination))
+			var key := _history_route_key(int(record.origin), int(record.destination), int(record.get("level", 0)))
 			history_route_counts[key] = int(history_route_counts.get(key, 0)) + 1
 		history_route_counts_size = records.size()
-	return int(history_route_counts.get(_history_route_key(origin, destination), 0))
+	return int(history_route_counts.get(_history_route_key(origin, destination, level), 0))
 
 func _clamp_history_selection(route_details: bool) -> void:
 	var records: Array[Dictionary] = route_history_records_cache if route_details else host.simulation.flight_history.records
@@ -1317,12 +1318,13 @@ func _open_selected_history_route() -> void:
 	if records.is_empty() or history_selected < 0 or history_selected >= records.size():
 		return
 	var record: Dictionary = _history_record_at(history_selected)
-	var count: int = _history_route_count(int(record.origin), int(record.destination))
+	var count: int = _history_route_count(int(record.origin), int(record.destination), int(record.get("level", 0)))
 	if count < 2:
 		return
 	route_history_origin = int(record.origin)
 	route_history_destination = int(record.destination)
-	route_history_records_cache = host.simulation.flight_history.route_records(route_history_origin, route_history_destination)
+	route_history_level = int(record.get("level", 0))
+	route_history_records_cache = host.simulation.flight_history.route_records(route_history_origin, route_history_destination, route_history_level)
 	route_history_selected = 0
 	route_history_scroll = 0
 	_set_view_mode(ViewMode.ROUTE_HISTORY)
@@ -1343,7 +1345,7 @@ func _draw_flight_history_scene() -> void:
 	var records := _active_history_records()
 	var title := "ИСТОРИЯ ПОЛЁТОВ • НОВЫЕ СВЕРХУ"
 	if route_details and route_history_origin in range(host.world.airports.size()) and route_history_destination in range(host.world.airports.size()):
-		title = "%s → %s • ВСЕГО ПОЛЁТОВ: %d • РЕКОРД СВЕРХУ" % [host.world.airports[route_history_origin].name, host.world.airports[route_history_destination].name, records.size()]
+		title = "КАРТА %d • %s → %s • ВСЕГО ПОЛЁТОВ: %d • РЕКОРД СВЕРХУ" % [route_history_level + 1, host.world.airports[route_history_origin].name, host.world.airports[route_history_destination].name, records.size()]
 	var back_rect := get_history_back_rect()
 	host.draw_localized_string(ThemeDB.fallback_font, Vector2(_history_left_margin(), 139), title, HORIZONTAL_ALIGNMENT_LEFT, maxf(100.0, back_rect.position.x - _history_left_margin() - 18.0), 17, AircraftArt.INK)
 	_draw_menu_button(get_history_back_rect(), "НАЗАД")
@@ -1365,12 +1367,13 @@ func _draw_flight_history_scene() -> void:
 			host.draw_rect(row_rect, Color("c4ba91"), true)
 		var origin_name: String = host.world.airports[int(record.origin)].name
 		var destination_name: String = host.world.airports[int(record.destination)].name
-		var count: int = _history_route_count(int(record.origin), int(record.destination))
-		var count_text := " • всего полётов: %d • Enter: рекорды" % count if not route_details and count > 1 else ""
+		var level := int(record.get("level", 0))
+		var count: int = _history_route_count(int(record.origin), int(record.destination), level)
+		var count_text := Localization.text(" • всего полётов: %d • Enter: рекорды" % count) if not route_details and count > 1 else ""
 		var rank_text := "%d. " % (record_index + 1) if route_details else ""
 		if route_details and record_index == 0:
-			rank_text += "РЕКОРД • "
-		host.draw_localized_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 21), "%s%s → %s%s" % [rank_text, origin_name, destination_name, count_text], HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 15, AircraftArt.INK)
+			rank_text += Localization.text("РЕКОРД • ")
+		host.draw_localized_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 21), "%s%s • %s → %s%s" % [rank_text, Localization.text("Карта %d" % (level + 1)), origin_name, destination_name, count_text], HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 15, AircraftArt.INK)
 		var details := "%.1f км • %s • %s → %s" % [float(record.distance_km), _format_history_duration(float(record.duration_seconds)), _format_history_timestamp(float(record.start_seconds)), _format_history_timestamp(float(record.end_seconds))]
 		host.draw_localized_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 43), details, HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 13, Color("6f5b3e"))
 	if records.size() > _history_visible_rows():
@@ -1395,6 +1398,8 @@ func _draw_economy_scene() -> void:
 	host.draw_localized_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.48, 120), "%s • %d монет" % [host.world.airports[host.flight.airport_index].name, host.economy.money], HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.46, 18, AircraftArt.INK)
 	match view_mode:
 		ViewMode.MAIL:
+			var mail_status := "ПОСЫЛОК ОСТАЛОСЬ: %d • ПЕРЕХОД ОТКРЫТ" % host.economy.remaining_parcels_at(host.flight.airport_index) if not host.world.exit_portal.is_empty() else "ПОСЫЛОК ОСТАЛОСЬ: %d • ДО НОВОЙ КАРТЫ: %d" % [host.economy.remaining_parcels_at(host.flight.airport_index), maxi(0, EconomyScript.DELIVERIES_TO_UNLOCK_EXIT - host.economy.deliveries_on_map)]
+			host.draw_localized_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.48, 147), mail_status, HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.46, 13, AircraftArt.INK)
 			var row = 0
 			if host.economy.carried_item.get("type", "") == "parcel" and int(host.economy.carried_item.get("destination", -1)) == host.flight.airport_index:
 				_draw_menu_button(_economy_button_rect(row), _delivery_button_text(host.economy.carried_item))

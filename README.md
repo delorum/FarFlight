@@ -62,7 +62,7 @@ For level cruise, use roughly 87% throttle and 200 km/h as a starting point. The
 
 The 200×200 km map is procedurally generated. Each of its four 100×100 km regions contains two airfields and four en-route radio beacons. Any two airfields are separated by at least 45 km.
 
-Before a new game, you may enter a positive `seed` from 1 to 2147483647 or leave the field blank. The same seed reproduces the terrain, airfields, beacons, services, and weather sequence. You can share it with another player to compare records in the same world. The seed appears on the Continue button in both the title and pause menus.
+Before a new game, you may enter a positive `seed` from 1 to 2147483647 or leave the field blank. The same seed reproduces the terrain, airfields, beacons, services, and weather sequence. You can share it with another player to compare records in the same world. Before a campaign starts, the game checks that all airfields and a future exit are reachable. A rare unusable requested seed is deterministically replaced by a playable one; the actual seed appears on the Continue button in both the title and pause menus.
 
 The title screen offers continuation or results for the saved run, a new game, Landing Practice, About, Language, Credits, and Quit. About links to this complete guide. The Language screen switches the entire interface between Russian and English and saves that choice independently of the current game.
 
@@ -150,7 +150,7 @@ The radio altimeter works with power on up to and including 750 m. Outside its r
 
 ### Airframe wear
 
-The airframe begins with 100 condition points and slowly wears during flight. Above safe speed, wear grows quadratically; inside a storm it increases toward the core. Reaching zero condition destroys the aircraft.
+The airframe begins with 100 condition points and loses 20 points—one of five condition squares—per hour of ordinary flight. Above safe speed, wear grows quadratically; inside a storm it increases toward the core. Reaching zero condition destroys the aircraft.
 
 The panel shows integrity and wear per game minute. Side scenes use a compact indicator. Repairs are available in dedicated hangars.
 
@@ -196,7 +196,7 @@ Wind is defined at 0, 250, 500, and 700 m and interpolated between them. It affe
 
 ### Thunderstorms and weather report
 
-Thunderstorms may appear over airfields and approaches. They move, cause turbulence, and accelerate wear.
+Thunderstorms may appear over airfields and approaches. They move, cause turbulence, and accelerate wear. Cells crossing a map boundary continue outward and disappear once their last echoes leave; they do not reappear on the opposite edge. A weather report remains a static snapshot until refreshed.
 
 The map shows a static storm snapshot: pale yellow, orange, and red areas mirror the weather radar, while the contour records the position at report time. Its age is displayed at the upper left. Hovering shows the storm's approximate direction and speed.
 
@@ -232,9 +232,13 @@ Starting money is 160 coins. After visiting at least two buildings of one type, 
 
 ### Mail
 
-The post office offers three parcels for different airfields and refreshes them after a landing at another airfield. Job distance follows the shortest passable route under the 700 m ceiling with 150 m terrain clearance.
+Each airfield has exactly one parcel for each of the other seven airfields. The post office displays three random destinations from its remaining stock; accepting one reserves that origin–destination parcel and replenishes the displayed choices. The post office and the map hover hint show how many parcels remain there. Job distance follows the shortest passable route under the 700 m ceiling with 150 m terrain clearance.
+
+Discarding an undelivered parcel cancels that order and returns its destination to the originating post office's stock; only a delivered parcel is permanently completed.
 
 Payment grows slightly faster than distance and accounts for a destination's lack of services: no optional services add 35%, one adds 20%, and two add 10%. Actual flown distance does not increase the reward. There are no deadlines, so several parcels can be taken on a multi-stop route.
+
+Deliver 16 parcels on a map to reveal a one-way exit near a reachable lowland edge. Fly through the marked edge to generate the next 200 × 200 km map; the aircraft keeps its fuel, condition, money and non-mail cargo and enters from the opposite edge at a point with a passable route to an airfield. Undelivered parcels from the old map are left behind. Each new map has a fresh mail stock and another 16-delivery objective; flight history keeps maps distinct.
 
 ### Cargo and refuelling
 
@@ -262,7 +266,7 @@ Touchdown does not complete a flight. Until the aircraft stops, you may add powe
 
 Flight service keeps flight records. The main log shows the newest flights first, with airfields, actual distance, duration, start time, and end time. Repeated routes have a fastest-to-slowest record list.
 
-Flight continues while you walk through the cabin. A warning appears at a high angle of attack or during a stall. After a crash, the map opens with the cause, distance, time, and track. The slot is replaced by a completed-run save: its history, seed, and route remain viewable, but the flight cannot continue.
+Flight continues while you walk through the cabin. A warning appears at a high angle of attack or during a stall. After a crash or fatal exhaustion, the map opens with the cause, distance, flight time, total play time, delivery count, and track. On the game-over screen, Show flight track (or Enter) collapses the results into a draggable panel; use Expand to reopen it. The slot is replaced by a completed-run save: its history, seed, and route remain viewable, but the flight cannot continue.
 
 ## Saves
 
@@ -310,7 +314,9 @@ References: [Godot Web export](https://docs.godotengine.org/en/stable/tutorials/
 - `FlightWorld` owns the seed, terrain, airfields, corridors, weather, and beacons;
 - `FlightModel` stores aircraft state and dynamics independently from the interface;
 - `FlightPlanSolver` performs pure route calculations;
-- `EconomyModel` stores money, needs, services, mail, and cargo;
+- `EconomyModel` stores money, needs, services and cargo; `mail_stock.gd` owns finite mail offers and delivery counts;
+- `world_progression.gd` validates starting and successor charts and transfers the airborne session between them;
+- `storm_geometry.gd` supplies the common storm-cell calculations used by physics, map and radar;
 - `main.gd` coordinates models and scenes; `cockpit_input.gd` handles flight controls;
 - session mode rules and landing practice setup live in `session_mode.gd` and `landing_practice.gd`;
 - `ils_display_state.gd` supplies the same guidance and forecast readouts to both ILS sizes;

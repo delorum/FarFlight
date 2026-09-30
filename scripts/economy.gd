@@ -1,5 +1,6 @@
 class_name EconomyModel
 extends RefCounted
+const MailStock = preload("res://scripts/mail_stock.gd")
 
 const INVENTORY_CAPACITY := 6
 const NEED_SEGMENTS := 6
@@ -17,6 +18,7 @@ const BASE_REWARD_50_KM := 80
 const DISTANCE_REWARD_EXPONENT := 1.12
 const POVERTY_REWARD_MULTIPLIERS := [1.35, 1.20, 1.10, 1.0, 1.0]
 const MAX_AIRPORTS_WITHOUT_OPTIONAL_SERVICES := 2
+const DELIVERIES_TO_UNLOCK_EXIT := 16
 
 var money := 160
 var hunger := 6
@@ -25,15 +27,27 @@ var elapsed_seconds := 0.0
 var need_accumulator_seconds := 0.0
 var inventory: Array[Dictionary] = []
 var carried_item: Dictionary = {}
-var offers_by_airport: Dictionary = {}
+var mail := MailStock.new()
+var offers_by_airport: Dictionary:
+	get: return mail.offers_by_airport
+var remaining_destinations_by_airport: Dictionary:
+	get: return mail.remaining_destinations_by_airport
+var deliveries_on_map: int:
+	get: return mail.deliveries_on_map
+var total_deliveries: int:
+	get: return mail.total_deliveries
+	set(value): mail.total_deliveries = value
 var fuel_airports: Array[int] = []
 var food_airports: Array[int] = []
 var hotel_airports: Array[int] = []
 var repair_airports: Array[int] = []
 var visited_airports: Array[int] = []
-var last_landed_airport := -1
-var next_parcel_id := 1
+var last_landed_airport: int:
+	get: return mail.last_landed_airport
+var next_parcel_id: int:
+	get: return mail.next_parcel_id
 var game_over_reason := ""
+var world_ref
 
 func _init(world = null) -> void:
 	for _slot in INVENTORY_CAPACITY:
@@ -41,7 +55,10 @@ func _init(world = null) -> void:
 	if world != null:
 		configure_world(world)
 
-func configure_world(world) -> void:
+func configure_world(world, starting_airport_index: int = 0) -> void:
+	world_ref = world
+	mail.reset_for_world(world.airports.size())
+	visited_airports.clear()
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(world.seed_value) ^ 0x51EC0
 	fuel_airports = _pick_three(rng, world.airports.size())
@@ -49,7 +66,25 @@ func configure_world(world) -> void:
 	hotel_airports = _pick_three(rng, world.airports.size())
 	repair_airports = _generate_repair_airports(world)
 	_balance_service_coverage(world.airports.size())
-	arrive_at_airport(0, world)
+	if starting_airport_index >= 0:
+		arrive_at_airport(starting_airport_index, world)
+
+func advance_to_world(world) -> int:
+	# Old-map destinations cannot be delivered on a new map. Non-mail cargo and
+	# the pilot's money, needs and elapsed time survive the one-way crossing.
+	var abandoned := 0
+	if carried_item.get("type", "") == "parcel":
+		carried_item = {}
+		abandoned += 1
+	for slot in inventory.size():
+		if inventory[slot].get("type", "") == "parcel":
+			inventory[slot] = {}
+			abandoned += 1
+	configure_world(world, -1)
+	return abandoned
+
+func remaining_parcels_at(airport_index: int) -> int:
+	return mail.remaining_at(airport_index)
 
 func _generate_repair_airports(world) -> Array[int]:
 	# A separate seed keeps the established fuel/food/hotel distribution stable
@@ -199,44 +234,25 @@ func buy_repair(requested_points: float, airport_index: int) -> float:
 	return repaired
 
 func arrive_at_airport(airport_index: int, world) -> void:
+	world_ref = world
 	if airport_index not in visited_airports:
 		visited_airports.append(airport_index)
-	if airport_index == last_landed_airport:
-		return
-	last_landed_airport = airport_index
-	offers_by_airport[airport_index] = _generate_offers(airport_index, world)
+	mail.arrive_at_airport(airport_index, world, elapsed_seconds, _make_mail_offer)
 
-func _generate_offers(origin: int, world) -> Array[Dictionary]:
-	var candidates: Array[int] = []
-	for index in world.airports.size():
-		if index != origin:
-			candidates.append(index)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = int(world.seed_value) ^ (origin + 1) * 7919 ^ int(elapsed_seconds * 10.0) ^ next_parcel_id * 104729
-	for index in range(candidates.size() - 1, 0, -1):
-		var other := rng.randi_range(0, index)
-		var value := candidates[index]
-		candidates[index] = candidates[other]
-		candidates[other] = value
-	var offers: Array[Dictionary] = []
-	for candidate_index in mini(3, candidates.size()):
-		var destination := candidates[candidate_index]
-		var direct_distance: float = Vector2(world.airports[origin].position).distance_to(Vector2(world.airports[destination].position))
-		var route_distance: float = world.planned_route_distance_km(origin, destination)
-		if not is_finite(route_distance):
-			# Explicitly seeded legacy worlds can predate the route rules. Keep
-			# their mail deliverable even without a planned route.
-			route_distance = direct_distance
-		offers.append({
-			"type": "parcel", "id": next_parcel_id, "origin": origin,
-			"destination": destination, "distance_km": route_distance,
-			"direct_distance_km": direct_distance, "route_distance_km": route_distance,
-			"destination_service_count": optional_service_count(destination),
-			"poverty_bonus_percent": poverty_bonus_percent(destination),
-			"reward": _reward_for_route(route_distance, destination),
-		})
-		next_parcel_id += 1
-	return offers
+func _make_mail_offer(origin: int, destination: int, parcel_id: int, world) -> Dictionary:
+	var direct_distance: float = Vector2(world.airports[origin].position).distance_to(Vector2(world.airports[destination].position))
+	var route_distance: float = world.planned_route_distance_km(origin, destination)
+	if not is_finite(route_distance):
+		# Explicitly seeded legacy worlds can predate the route rules.
+		route_distance = direct_distance
+	return {
+		"type": "parcel", "id": parcel_id, "origin": origin,
+		"destination": destination, "distance_km": route_distance,
+		"direct_distance_km": direct_distance, "route_distance_km": route_distance,
+		"destination_service_count": optional_service_count(destination),
+		"poverty_bonus_percent": poverty_bonus_percent(destination),
+		"reward": _reward_for_route(route_distance, destination),
+	}
 
 func _reward_for_route(route_distance: float, destination: int) -> int:
 	return maxi(1, roundi(BASE_REWARD_50_KM * pow(route_distance / 50.0, DISTANCE_REWARD_EXPONENT) * poverty_reward_multiplier(destination)))
@@ -258,17 +274,15 @@ func _normalize_saved_parcel(item: Dictionary) -> Dictionary:
 	return normalized
 
 func offers_at(airport_index: int) -> Array:
-	return offers_by_airport.get(airport_index, [])
+	return mail.offers_at(airport_index)
 
 func accept_offer(airport_index: int, offer_index: int) -> Dictionary:
 	if not carried_item.is_empty():
 		return {}
-	var offers: Array = offers_at(airport_index)
-	if offer_index < 0 or offer_index >= offers.size():
+	var parcel: Dictionary = mail.accept_offer(airport_index, offer_index, world_ref, elapsed_seconds, _make_mail_offer)
+	if parcel.is_empty():
 		return {}
-	var parcel: Dictionary = offers.pop_at(offer_index).duplicate(true)
 	carried_item = parcel
-	offers_by_airport[airport_index] = offers
 	return parcel
 
 func first_empty_slot() -> int:
@@ -296,6 +310,8 @@ func take_slot(slot: int) -> bool:
 	return true
 
 func discard_carried() -> void:
+	if carried_item.get("type", "") == "parcel":
+		mail.return_parcel(carried_item)
 	carried_item = {}
 
 func deliver_carried(airport_index: int) -> Dictionary:
@@ -305,6 +321,7 @@ func deliver_carried(airport_index: int) -> Dictionary:
 	var result := carried_item.duplicate(true)
 	result["paid"] = reward
 	money += reward
+	mail.record_delivery()
 	carried_item = {}
 	return result
 
@@ -422,22 +439,23 @@ func advance_time(delta: float, resting: bool = false, _unused_sleep_cap: int = 
 			return
 
 func snapshot() -> Dictionary:
-	return {
+	var data := {
 		"money": money, "hunger": hunger, "fatigue": fatigue,
 		"elapsed_seconds": elapsed_seconds, "need_accumulator_seconds": need_accumulator_seconds,
-		"inventory": inventory, "carried_item": carried_item, "offers_by_airport": offers_by_airport,
+		"inventory": inventory, "carried_item": carried_item,
 		"fuel_airports": fuel_airports, "food_airports": food_airports, "hotel_airports": hotel_airports,
 		"repair_airports": repair_airports, "visited_airports": visited_airports,
-		"last_landed_airport": last_landed_airport, "next_parcel_id": next_parcel_id,
 		"game_over_reason": game_over_reason,
-	}.duplicate(true)
+	}
+	data.merge(mail.snapshot())
+	return data.duplicate(true)
 
 func restore(data: Dictionary, world = null) -> bool:
 	if not data.has_all(["money", "hunger", "fatigue", "elapsed_seconds", "need_accumulator_seconds", "inventory", "carried_item", "offers_by_airport", "fuel_airports", "food_airports", "hotel_airports", "last_landed_airport", "next_parcel_id", "game_over_reason"]):
 		return false
 	if not data.inventory is Array or data.inventory.size() != INVENTORY_CAPACITY:
 		return false
-	if not data.carried_item is Dictionary or not data.offers_by_airport is Dictionary:
+	if not data.carried_item is Dictionary or not MailStock.valid_snapshot(data, world.airports.size() if world != null else 8):
 		return false
 	for item in data.inventory:
 		if not item is Dictionary:
@@ -466,7 +484,9 @@ func restore(data: Dictionary, world = null) -> bool:
 	need_accumulator_seconds = float(data.need_accumulator_seconds)
 	inventory.assign(data.inventory)
 	carried_item = data.carried_item.duplicate(true)
-	offers_by_airport = data.offers_by_airport.duplicate(true)
+	world_ref = world
+	if not mail.restore(data, world.airports.size() if world != null else 8, inventory + [carried_item]):
+		return false
 	fuel_airports.assign(data.fuel_airports)
 	food_airports.assign(data.food_airports)
 	hotel_airports.assign(data.hotel_airports)
@@ -475,7 +495,6 @@ func restore(data: Dictionary, world = null) -> bool:
 	else:
 		repair_airports = _generate_repair_airports(world)
 	_balance_service_coverage(world.airports.size() if world != null else 8)
-	last_landed_airport = int(data.last_landed_airport)
 	visited_airports.clear()
 	if data.has("visited_airports"):
 		if not data.visited_airports is Array:
@@ -493,7 +512,6 @@ func restore(data: Dictionary, world = null) -> bool:
 				visited_airports.append(airport_index)
 		if last_landed_airport >= 0 and last_landed_airport not in visited_airports:
 			visited_airports.append(last_landed_airport)
-	next_parcel_id = int(data.next_parcel_id)
 	game_over_reason = String(data.game_over_reason)
 	carried_item = _normalize_saved_parcel(carried_item)
 	for slot in inventory.size():

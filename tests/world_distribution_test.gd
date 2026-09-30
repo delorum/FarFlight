@@ -1,6 +1,7 @@
 extends SceneTree
 
 const World = preload("res://scripts/world.gd")
+const StormGeometry = preload("res://scripts/storm_geometry.gd")
 var failed := false
 
 func check(condition: bool, message: String) -> void:
@@ -59,7 +60,17 @@ func _initialize() -> void:
 		"radar_lobes":[{"offset_km":Vector2(2.0, 0.0), "radius_scale":0.5, "strength":0.75}],
 	})
 	check(is_equal_approx(shape_world.storm_intensity_at(Vector2(52.0, 50.0)), 0.6), "Physical storm peak must match the radar lobe peak")
+	check(is_equal_approx(StormGeometry.intensity_at(shape_world.storms[0], Vector2(50.0, 50.0), Vector2(52.0, 50.0)), shape_world.storm_intensity_at(Vector2(52.0, 50.0))), "Physics and radar/map geometry must report the same cell strength")
+	check(is_equal_approx(StormGeometry.lobe_radius(shape_world.storms[0], shape_world.storms[0].radar_lobes[0], 0.35), 5.0 * sqrt(1.0 - 0.35 / 0.6)), "All weather views must use the same echo threshold radius")
 	check(is_zero_approx(shape_world.storm_intensity_at(Vector2(50.0, 56.0))), "Area outside every visible radar lobe must have no rain or turbulence")
+	shape_world.storms[0].origin = Vector2(196.0, 100.0)
+	shape_world.storms[0].drift_kmh = Vector2(5.0, 0.0)
+	shape_world.weather_time_seconds = 3600.0
+	check(shape_world.storm_position(shape_world.storms[0]) == Vector2(201.0, 100.0), "A storm crossing the right edge must continue beyond the map instead of wrapping")
+	check(shape_world.storm_intensity_at(Vector2(199.0, 100.0)) > 0.0, "A cell still overlapping the map must keep affecting the aircraft")
+	check(is_zero_approx(shape_world.storm_intensity_at(Vector2(1.0, 100.0))), "A departing storm must not reappear at the opposite edge")
+	shape_world.weather_time_seconds = 5.0 * 3600.0
+	check(is_zero_approx(shape_world.storm_intensity_at(Vector2(199.0, 100.0))), "The storm must cease affecting the map after its final lobe leaves")
 	var old_wind: Array = shape_world.wind_layers.duplicate(true)
 	var old_storms: Array = shape_world.storms.duplicate(true)
 	shape_world.refresh_weather()

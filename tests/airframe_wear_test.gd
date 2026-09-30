@@ -21,7 +21,7 @@ func _run() -> void:
 	flight.speed_kmh = 200.0
 	flight.storm_intensity = 0.0
 	flight._update_airframe_condition(3600.0)
-	check(is_equal_approx(flight.airframe_condition, 99.25), "Ordinary flight must slowly wear the aircraft")
+	check(is_equal_approx(flight.airframe_condition, 80.0), "Ordinary flight must consume about one fifth of the airframe per hour")
 
 	flight.airframe_condition = 100.0
 	flight.speed_kmh = Flight.VNE_KMH
@@ -53,16 +53,16 @@ func _run() -> void:
 	await process_frame
 	scene.set_process(false)
 	var repair_airport: int = scene.economy.repair_airports[0]
-	check(scene._airframe_bar() == "■■■■■■", "A healthy aircraft must use the same six-square scale as pilot needs")
+	check(scene._airframe_bar() == "■■■■■", "A healthy aircraft must show five airframe squares")
 	scene.flight.airframe_condition = 0.0
-	check(scene._airframe_bar() == "□□□□□□", "An exhausted airframe scale must contain six empty squares")
+	check(scene._airframe_bar() == "□□□□□", "An exhausted airframe scale must contain five empty squares")
 	scene.flight.airport_index = repair_airport
 	check(scene._airport_buildings().any(func(building): return building.kind == scene.ViewMode.REPAIR), "Repair airport must draw a dedicated hangar")
 	scene.flight.airframe_condition = 80.0
 	scene.flight.state = Flight.State.FLYING
 	scene.flight.speed_kmh = 220.0
 	scene.flight.storm_intensity = 0.0
-	check(scene._airframe_indicator_text().contains("80.0% • износ 0.013%/мин"), "Panel must show exact condition and ordinary wear per minute")
+	check(scene._airframe_indicator_text().contains("80.0% • износ 0.333%/мин"), "Panel must show exact condition and ordinary wear per minute")
 	scene.economy.money = 100
 	scene._set_view_mode(scene.ViewMode.REPAIR)
 	scene._handle_economy_click(scene._economy_button_rect(0).get_center())

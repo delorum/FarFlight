@@ -19,7 +19,7 @@ const VNE_KMH := 250.0
 const BREAKUP_SPEED_KMH := 280.0
 const MAX_AIRFRAME_STRESS := 100.0
 const MAX_AIRFRAME_CONDITION := 100.0
-const NORMAL_WEAR_PER_HOUR := 0.75
+const NORMAL_WEAR_PER_HOUR := 20.0
 const OVERSPEED_WEAR_PER_HOUR := 18.0
 const STORM_WEAR_PER_HOUR := 30.0
 const ECONOMY_ALTITUDE_MIN_M := 350.0
@@ -67,6 +67,7 @@ var departure_authorized := true
 var prepared_airport_index := 0
 var prepared_reverse_direction := false
 var state := State.PARKED
+var world_exit_reached := false
 var airport_index := 0
 var message := "Самолёт подготовлен к вылету"
 var message_time_remaining := -1.0
@@ -442,7 +443,8 @@ func _update_simulation(delta: float, advance_world_weather: bool, include_storm
 	vertical_speed_mps = move_toward(vertical_speed_mps, target_vs, delta * vertical_response)
 
 	var direction: Vector2 = world.heading_vector(heading_deg)
-	_move_position((direction * speed_kmh + current_wind_kmh) / 3600.0 * delta)
+	var ground_displacement := (direction * speed_kmh + current_wind_kmh) / 3600.0 * delta
+	_move_position(ground_displacement)
 	var terrain: float = world.height_at(position_km)
 	var next_altitude: float = altitude_m + vertical_speed_mps * delta
 
@@ -467,6 +469,9 @@ func _update_simulation(delta: float, advance_world_weather: bool, include_storm
 
 	altitude_m = clamp(next_altitude, 0.0, ABSOLUTE_CEILING_M)
 	_update_angle_of_attack()
+	if advance_world_weather and state == State.FLYING and world.reached_exit(position_km, ground_displacement):
+		world_exit_reached = true
+		return
 	if position_km.x < 0 or position_km.y < 0 or position_km.x > FlightWorldScript.SIZE_KM or position_km.y > FlightWorldScript.SIZE_KM:
 		_crash("Самолёт покинул район полётов")
 		return

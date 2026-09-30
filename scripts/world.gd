@@ -1,5 +1,6 @@
 class_name FlightWorld
 extends RefCounted
+const StormGeometry = preload("res://scripts/storm_geometry.gd")
 
 const SIZE_KM := 200.0
 const REGION_SIZE_KM := 100.0
@@ -30,6 +31,9 @@ const WIND_ALTITUDES_M := [0.0, 250.0, 500.0, 700.0]
 const ROUTE_GRID_STEP_KM := 1.0
 const ROUTE_CEILING_M := 700.0
 const ROUTE_CLEARANCE_M := 150.0
+const EXIT_HALF_WIDTH_KM := 2.0
+const EDGE_INSET_KM := 2.0
+const EDGE_SIDES := ["right", "bottom", "left", "top"]
 
 var seed_value: int
 var noise := FastNoiseLite.new()
@@ -39,6 +43,8 @@ var wind_layers: Array[Dictionary] = []
 var storms: Array[Dictionary] = []
 var weather_time_seconds := 0.0
 var weather_generation := 0
+var level_index := 0
+var exit_portal: Dictionary = {}
 var _route_grid: AStarGrid2D
 var _route_distance_cache: Dictionary = {}
 
@@ -46,7 +52,8 @@ var _route_distance_cache: Dictionary = {}
 func snapshot() -> Dictionary:
 	return {"seed": seed_value, "airports": airports, "beacons": beacons,
 		"wind_layers": wind_layers, "storms": storms, "time": weather_time_seconds,
-		"weather_generation": weather_generation}.duplicate(true)
+		"weather_generation": weather_generation,
+		"level_index": level_index, "exit_portal": exit_portal}.duplicate(true)
 
 func restore_snapshot(data: Dictionary) -> void:
 	# SaveGame validates the schema and constructs this world using data.seed.
@@ -60,6 +67,8 @@ func restore_snapshot(data: Dictionary) -> void:
 	# counter. Their current weather is retained, and the next landing starts at
 	# the first reproducible post-start cycle.
 	weather_generation = maxi(0, int(data.get("weather_generation", 0)))
+	level_index = maxi(0, int(data.get("level_index", 0)))
+	exit_portal = data.get("exit_portal", {}).duplicate(true)
 	_invalidate_route_cache()
 
 func _init(requested_seed: int = 0) -> void:
@@ -134,14 +143,13 @@ func update_weather(delta: float) -> void:
 	weather_time_seconds += delta
 
 func storm_position(storm: Dictionary) -> Vector2:
-	var moved: Vector2 = storm.origin + Vector2(storm.drift_kmh) * weather_time_seconds / 3600.0
-	return Vector2(fposmod(moved.x, SIZE_KM), fposmod(moved.y, SIZE_KM))
+	# Weather cells leave the chart instead of reappearing at its opposite edge.
+	# Keep their real centre beyond the boundary until the next weather cycle;
+	# lobes that still overlap the map retain their physical effect.
+	return StormGeometry.position(storm, weather_time_seconds)
 
 func storm_lobes(storm: Dictionary) -> Array:
-	var lobes: Array = storm.get("radar_lobes", [])
-	if lobes.is_empty():
-		return [{"offset_km":Vector2.ZERO, "radius_scale":1.0, "strength":1.0}]
-	return lobes
+	return StormGeometry.lobes(storm)
 
 func wind_at(altitude_m: float) -> Vector2:
 	var lower: Dictionary = wind_layers[0]
@@ -159,16 +167,7 @@ func wind_at(altitude_m: float) -> Vector2:
 func storm_intensity_at(position_km: Vector2) -> float:
 	var result := 0.0
 	for storm in storms:
-		var storm_center := storm_position(storm)
-		for lobe in storm_lobes(storm):
-			var radius: float = float(storm.radius_km) * float(lobe.radius_scale)
-			if radius <= 0.0:
-				continue
-			var lobe_center: Vector2 = storm_center + Vector2(lobe.offset_km)
-			var ratio := position_km.distance_to(lobe_center) / radius
-			if ratio < 1.0:
-				var peak: float = float(storm.intensity) * float(lobe.strength)
-				result = maxf(result, peak * (1.0 - ratio * ratio))
+		result = maxf(result, StormGeometry.intensity_at(storm, storm_position(storm), position_km))
 	return result
 
 func weather_report(airport: Dictionary) -> String:
@@ -240,6 +239,102 @@ func all_airports_route_connected() -> bool:
 			if not is_finite(planned_route_distance_km(origin, destination)):
 				return false
 	return true
+
+func edge_position(side: String, coordinate: float, inset: float = EDGE_INSET_KM) -> Vector2:
+	match side:
+		"right": return Vector2(SIZE_KM - inset, coordinate)
+		"left": return Vector2(inset, coordinate)
+		"bottom": return Vector2(coordinate, SIZE_KM - inset)
+		"top": return Vector2(coordinate, inset)
+	return Vector2(-1.0, -1.0)
+
+static func opposite_edge(side: String) -> String:
+	match side:
+		"right": return "left"
+		"left": return "right"
+		"bottom": return "top"
+		"top": return "bottom"
+	return ""
+
+func _safe_edge_route(side: String, coordinate: float) -> bool:
+	var edge := edge_position(side, coordinate, 0.0)
+	var entry := edge_position(side, coordinate)
+	var limit := ROUTE_CEILING_M - ROUTE_CLEARANCE_M
+	if height_at(edge) > limit or height_at(edge.lerp(entry, 0.5)) > limit or height_at(entry) > limit:
+		return false
+	_ensure_route_grid()
+	var start := _route_grid_point(entry)
+	if _route_grid.is_point_solid(start):
+		return false
+	for airport in airports:
+		if not _route_grid.get_point_path(start, _route_grid_point(Vector2(airport.position))).is_empty():
+			return true
+	return false
+
+func find_entry_position(side: String, preferred_coordinate: float) -> Vector2:
+	# Search closest to the old map's crossing first, preserving the sense that
+	# the two charts meet along the same edge. A reachable lowland route is
+	# mandatory even if the preferred latitude/longitude is mountainous.
+	var base := clampi(roundi(preferred_coordinate), 10, 190)
+	for offset in 21:
+		for direction in [1, -1]:
+			var coordinate: int = base + offset * int(direction)
+			if coordinate < 10 or coordinate > 190:
+				continue
+			if _safe_edge_route(side, float(coordinate)):
+				return edge_position(side, float(coordinate))
+	return Vector2(-1.0, -1.0)
+
+func ensure_exit_portal() -> bool:
+	if not exit_portal.is_empty():
+		return true
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_value ^ 0x2E91C7
+	var sides := EDGE_SIDES.duplicate()
+	for index in range(sides.size() - 1, 0, -1):
+		var other := rng.randi_range(0, index)
+		var value = sides[index]
+		sides[index] = sides[other]
+		sides[other] = value
+	var coordinates: Array[int] = []
+	for coordinate in range(10, 191, 2):
+		coordinates.append(coordinate)
+	for side in sides:
+		for index in range(coordinates.size() - 1, 0, -1):
+			var other := rng.randi_range(0, index)
+			var value := coordinates[index]
+			coordinates[index] = coordinates[other]
+			coordinates[other] = value
+		for coordinate in coordinates:
+			if _safe_edge_route(side, float(coordinate)):
+				exit_portal = {"side": side, "coordinate": float(coordinate), "position": edge_position(side, float(coordinate))}
+				return true
+	return false
+
+func crossed_exit(position: Vector2) -> bool:
+	if exit_portal.is_empty():
+		return false
+	var side: String = exit_portal.side
+	var coordinate: float = exit_portal.coordinate
+	match side:
+		"right": return position.x > SIZE_KM and absf(position.y - coordinate) <= EXIT_HALF_WIDTH_KM
+		"left": return position.x < 0.0 and absf(position.y - coordinate) <= EXIT_HALF_WIDTH_KM
+		"bottom": return position.y > SIZE_KM and absf(position.x - coordinate) <= EXIT_HALF_WIDTH_KM
+		"top": return position.y < 0.0 and absf(position.x - coordinate) <= EXIT_HALF_WIDTH_KM
+	return false
+
+func reached_exit(position: Vector2, ground_displacement: Vector2) -> bool:
+	if exit_portal.is_empty():
+		return false
+	if crossed_exit(position):
+		return true
+	var outward := Vector2.ZERO
+	match String(exit_portal.side):
+		"right": outward = Vector2.RIGHT
+		"left": outward = Vector2.LEFT
+		"bottom": outward = Vector2.DOWN
+		"top": outward = Vector2.UP
+	return position.distance_to(Vector2(exit_portal.position)) <= 0.4 and ground_displacement.dot(outward) > 0.0
 
 func _route_grid_point(position: Vector2) -> Vector2i:
 	var maximum_cell := roundi(SIZE_KM / ROUTE_GRID_STEP_KM)

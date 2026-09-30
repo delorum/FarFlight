@@ -72,6 +72,13 @@ func _init() -> void:
 	assert(delivery.paid == expected and economy.money >= expected, "Delivery pay must not expire")
 	assert(economy.take_slot(1))
 	assert(economy.deliver_carried(int(second_parcel.destination)).paid == second_parcel.reward)
+	assert(economy.total_deliveries == 2, "Completed deliveries must count across the run")
+	var delivery_record = Economy.new()
+	assert(delivery_record.restore(economy.snapshot(), world) and delivery_record.total_deliveries == 2, "The run-wide delivery count must survive a save")
+	var old_delivery_record: Dictionary = economy.snapshot()
+	old_delivery_record.erase("total_deliveries")
+	var migrated_record = Economy.new()
+	assert(migrated_record.restore(old_delivery_record, world) and migrated_record.total_deliveries == economy.deliveries_on_map, "Older saves must recover the known deliveries on their current map")
 	var legacy_parcel: Dictionary = parcel.duplicate(true)
 	legacy_parcel.erase("reward")
 	legacy_parcel["normal_reward"] = 1
@@ -79,11 +86,14 @@ func _init() -> void:
 	legacy_parcel["urgent_deadline"] = 0.0
 	assert(economy.parcel_reward(legacy_parcel) == expected, "Saved orders from the old tariff must use the new unified price")
 	var legacy_mail_save: Dictionary = economy.snapshot()
+	legacy_mail_save.erase("remaining_destinations_by_airport")
+	legacy_mail_save.erase("deliveries_on_map")
 	legacy_mail_save.carried_item = legacy_parcel
 	legacy_mail_save.offers_by_airport[0] = [legacy_parcel]
 	var legacy_mail_restored = Economy.new()
 	assert(legacy_mail_restored.restore(legacy_mail_save, world))
 	assert(legacy_mail_restored.carried_item.reward == expected and not legacy_mail_restored.carried_item.has("urgent_deadline"))
+	assert(int(legacy_parcel.destination) not in legacy_mail_restored.remaining_destinations_by_airport[0], "Legacy accepted mail must be reserved under the finite stock rules")
 	assert(legacy_mail_restored.offers_at(0)[0].reward == expected and not legacy_mail_restored.offers_at(0)[0].has("urgent_reward"))
 	var old_offers: Array = economy.offers_at(0).duplicate(true)
 	economy.arrive_at_airport(0, world)

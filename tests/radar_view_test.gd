@@ -184,5 +184,21 @@ func _run() -> void:
 	check(scene._wind_arrow_description().ends_with("637 м"), "Current-altitude layer must show actual aircraft altitude")
 	scene.large_weather_radar = true
 	check(not scene._wind_arrow_hovered(scene.map_rect().get_center()), "Hidden map arrows must not be interactive on radar")
+	scene.large_weather_radar = false
+	scene.world.storms.clear()
+	scene.world.storms.append({
+		"origin": Vector2(196.0, 100.0), "radius_km": 10.0, "intensity": 1.0,
+		"drift_kmh": Vector2(5.0, 0.0),
+		"radar_lobes": [{"offset_km": Vector2.ZERO, "radius_scale": 0.5, "strength": 1.0}],
+	})
+	scene.world.weather_time_seconds = 3600.0
+	scene.navigation_map.refresh_weather_briefing()
+	scene.map_zoom = 16.0
+	scene.map_center = Vector2(200.0, 100.0)
+	scene._clamp_map_center()
+	check(scene.navigation_map.weather_briefing_storm_at(scene.world_to_screen(Vector2(199.0, 100.0))) == 0, "A departing storm's visible edge must remain hoverable")
+	scene.map_center = Vector2(0.0, 100.0)
+	scene._clamp_map_center()
+	check(scene.navigation_map.weather_briefing_storm_at(scene.world_to_screen(Vector2(1.0, 100.0))) == -1, "The weather report must not mirror a departing storm onto the opposite edge")
 	print("Radar switching, wind hover, map preservation and 1 Hz echo cache: ","FAIL" if failed else "OK")
 	quit(1 if failed else 0)

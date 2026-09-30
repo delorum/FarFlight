@@ -34,7 +34,7 @@ func advance_bed(seconds: float, economy, sleeping: bool) -> void:
 		economy.recover_aircraft_bed_unit()
 
 func advance(real_delta: float, flight, economy, recorder, sleeping: bool) -> Dictionary:
-	var events := {"elapsed": 0.0, "map_changed": false, "landed": false, "crashed": false}
+	var events := {"elapsed": 0.0, "map_changed": false, "landed": false, "crashed": false, "world_exit": false}
 	var real_remaining := maxf(0.0, real_delta)
 	while real_remaining > 0.000001 and flight.state != Flight.State.CRASHED:
 		if storm_turning(flight):
@@ -51,6 +51,10 @@ func advance(real_delta: float, flight, economy, recorder, sleeping: bool) -> Di
 			flight._crash(economy.game_over_reason)
 		else:
 			flight.update(step) # Owns weather evolution as well as aircraft physics.
+		if flight.world_exit_reached:
+			events.world_exit = true
+			events.elapsed += step
+			break
 		# The panel counter belongs to the current airborne leg. Reset it at the
 		# actual liftoff transition, not when the engine starts or the ground roll
 		# begins. A touch-and-go remains part of the same leg.

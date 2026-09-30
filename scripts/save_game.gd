@@ -9,6 +9,7 @@ const LEGACY_WEB_KEYS := ["farflight.save.v4", "farflight.save.v3"]
 const FlightCalculatorScript = preload("res://scripts/flight_calculator.gd")
 const NavigationMapScript = preload("res://scripts/navigation_map.gd")
 const FlightHistoryScript = preload("res://scripts/flight_history.gd")
+const MailStock = preload("res://scripts/mail_stock.gd")
 const SessionMode = preload("res://scripts/session_mode.gd")
 const ViewMode = preload("res://scripts/scene_modes.gd").ViewMode
 static var last_validation_error := ""
@@ -94,6 +95,13 @@ static func valid(data: Variant) -> bool:
 		return false
 	if world.has("weather_generation") and (not world.weather_generation is int or int(world.weather_generation) < 0):
 		return false
+	if world.has("level_index") and (not world.level_index is int or int(world.level_index) < 0):
+		return false
+	if world.has("exit_portal"):
+		if not world.exit_portal is Dictionary:
+			return false
+		if not world.exit_portal.is_empty() and (not world.exit_portal.get("side") in ["right", "left", "top", "bottom"] or not world.exit_portal.get("coordinate") is float or not world.exit_portal.get("position") is Vector2):
+			return false
 	for key in ["airports", "beacons", "wind_layers", "storms"]:
 		if not world.get(key) is Array:
 			return false
@@ -165,6 +173,8 @@ static func valid(data: Variant) -> bool:
 			if key == "flight_trajectory" and (not entry.get("position") is Vector2 or not entry.has_all(["time_seconds", "distance_km"])):
 				return false
 	if not data.economy.has_all(["money", "hunger", "fatigue", "inventory", "carried_item", "offers_by_airport", "fuel_airports", "food_airports", "hotel_airports"]):
+		return false
+	if not MailStock.valid_snapshot(data.economy, world.airports.size()):
 		return false
 	if data.economy.has("repair_airports") and (not data.economy.repair_airports is Array or data.economy.repair_airports.size() != 3):
 		return false
@@ -291,6 +301,8 @@ static func restore(game, data: Dictionary) -> bool:
 	game.world = new_world
 	game.flight = new_flight
 	game.economy = new_economy
+	if new_economy.deliveries_on_map >= game.EconomyScript.DELIVERIES_TO_UNLOCK_EXIT and new_world.exit_portal.is_empty():
+		new_world.ensure_exit_portal()
 	game.run_finish_save_attempted = bool(data.get("run_finished", new_flight.state == game.FlightModelScript.State.CRASHED))
 	game._set_view_mode(data.ui.view_mode)
 	for field in UI_FIELDS:

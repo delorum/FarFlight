@@ -37,6 +37,9 @@ func _run() -> void:
 	check("%s • %s" % [Localization.text("СТВОР"), Localization.text("НИЗКО")] == "LOCALIZER • LOW", "Composed ILS status must not retain Russian fragments")
 	check(Localization.text("VS -1.25 м/с • НУЖНО -1.40 м/с") == "VS -1.25 m/s • TARGET -1.40 m/s", "Large ILS target vertical speed must translate")
 	check(Localization.text("ОСЬ +200 м") == "AXIS +200 m" and Localization.text("НОС -16.5°") == "NOSE -16.5°", "Off-scale ILS arrows must translate their numeric labels")
+	check(Localization.text("пос. 7") == "mail 7" and Localization.text("Карта 2") == "Map 2", "Mail stock and level indicators must translate")
+	check(Localization.text("КАРТА 2 • Северный → Озёрный • ВСЕГО ПОЛЁТОВ: 3 • РЕКОРД СВЕРХУ").contains("MAP 2") and Localization.text("КАРТА 2 • Северный → Озёрный • ВСЕГО ПОЛЁТОВ: 3 • РЕКОРД СВЕРХУ").contains("TOTAL FLIGHTS: 3"), "Per-map flight records must translate")
+	check(Localization.text("Переход на новую карту • недоставленная почта останется здесь") == "Next map • undelivered mail stays behind", "The one-way exit warning must translate")
 	check(Localization.text("КАС. +0.09 км") == "TD +0.09 km" and Localization.text("БОК -1 м") == "LAT -1 m", "Compact touchdown and lateral forecast labels must translate")
 
 	var shell = load("res://scenes/game_shell.tscn").instantiate()
@@ -59,6 +62,9 @@ func _run() -> void:
 	await process_frame
 	game.set_process(false)
 	game.localization_changed()
+	var airport_screen: Vector2 = game.navigation_map.world_to_screen(Vector2(game.world.airports[0].position))
+	var airport_hover := Localization.text(game.navigation_map.map_footer_text_at(airport_screen))
+	check(airport_hover.contains("Northern") and airport_hover.contains("mail 7"), "The map's concise finite-mail count must translate in context")
 	var calculator_labels: Array[Node] = game.flight_calculator.find_children("*", "Label", true, false)
 	check(calculator_labels.any(func(label): return label.text == "FLIGHT CALCULATOR  ⋮⋮"), "The flight calculator must refresh into English")
 

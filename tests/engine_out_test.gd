@@ -66,6 +66,7 @@ func _run() -> void:
 	root.add_child(scene)
 	await process_frame
 	scene.set_process(false)
+	scene.regenerate_world(424242)
 	scene.world.storms.clear()
 	for layer in scene.world.wind_layers:
 		layer.speed_kmh = 0.0
