@@ -1,6 +1,7 @@
 extends PanelContainer
 const FlightPlanSolver = preload("res://scripts/flight_plan_solver.gd")
 const Localization = preload("res://scripts/localization.gd")
+const VisualTheme = preload("res://scripts/visual_theme.gd")
 
 const MAP_PAPER := Color("d7d0ad")
 const HOVER_PAPER := Color("cec6a2")
@@ -69,22 +70,22 @@ func _refresh_localized_controls(node: Node) -> void:
 	for child in node.get_children():
 		_refresh_localized_controls(child)
 
-func _ready() -> void:
-	values.merge({"track": 0.0, "heading": 0.0, "wind_from": 0.0, "wind_speed": 0.0})
-	mouse_filter = Control.MOUSE_FILTER_STOP
+func refresh_visual_theme() -> void:
+	var paper := Color("071012") if VisualTheme.dark else MAP_PAPER
+	var hover := Color("202b2f") if VisualTheme.dark else HOVER_PAPER
+	var pressed := Color("334044") if VisualTheme.dark else PRESSED_PAPER
+	var ink := MAP_PAPER if VisualTheme.dark else MAJOR_CONTOUR_COLOR
+	var border := MAP_PAPER.darkened(0.28) if VisualTheme.dark else CONTOUR_COLOR
 	var palette := Theme.new()
 	palette.default_font_size = 13
 	for type in ["Label", "Button", "OptionButton", "LineEdit", "SpinBox"]:
-		palette.set_color("font_color", type, MAJOR_CONTOUR_COLOR)
-		palette.set_color("font_hover_color", type, MAJOR_CONTOUR_COLOR)
-		palette.set_color("font_pressed_color", type, MAJOR_CONTOUR_COLOR)
-		palette.set_color("font_focus_color", type, MAJOR_CONTOUR_COLOR)
-		palette.set_color("caret_color", type, MAJOR_CONTOUR_COLOR)
-		palette.set_color("selection_color", type, Color(CONTOUR_COLOR, 0.28))
+		for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_uneditable_color", "font_selected_color", "caret_color"]:
+			palette.set_color(name, type, ink)
+		palette.set_color("selection_color", type, Color(border, 0.28))
 		for state in ["normal", "hover", "pressed", "focus"]:
 			var style := StyleBoxFlat.new()
-			style.bg_color = HOVER_PAPER if state == "hover" else (PRESSED_PAPER if state == "pressed" else MAP_PAPER)
-			style.border_color = MAJOR_CONTOUR_COLOR if state == "focus" else CONTOUR_COLOR
+			style.bg_color = hover if state == "hover" else (pressed if state == "pressed" else paper)
+			style.border_color = ink if state == "focus" else border
 			style.set_border_width_all(1)
 			style.content_margin_left = 6
 			style.content_margin_right = 6
@@ -93,11 +94,17 @@ func _ready() -> void:
 			palette.set_stylebox(state, type, style)
 	theme = palette
 	var panel := StyleBoxFlat.new()
-	panel.bg_color = MAP_PAPER
-	panel.border_color = CONTOUR_COLOR
+	panel.bg_color = paper
+	panel.border_color = border
 	panel.set_border_width_all(1)
 	panel.set_content_margin_all(8)
 	add_theme_stylebox_override("panel", panel)
+	_apply_validation_style(validation_reason)
+
+func _ready() -> void:
+	values.merge({"track": 0.0, "heading": 0.0, "wind_from": 0.0, "wind_speed": 0.0})
+	mouse_filter = Control.MOUSE_FILTER_STOP
+	refresh_visual_theme()
 	var column := VBoxContainer.new()
 	add_child(column)
 	var header := HBoxContainer.new()
@@ -667,9 +674,11 @@ func _show_error(reason: String, editing_key: String = "") -> void:
 
 func _apply_validation_style(reason: String) -> void:
 	validation_reason = reason
+	var ink := MAP_PAPER if VisualTheme.dark else MAJOR_CONTOUR_COLOR
+	var error_color := Color("ef645e") if VisualTheme.dark else Color("a3483f")
 	for key in fields:
 		fields[key].tooltip_text = Localization.text(reason)
-		fields[key].add_theme_color_override("font_color", MAJOR_CONTOUR_COLOR if reason.is_empty() else Color("a3483f"))
+		fields[key].add_theme_color_override("font_color", ink if reason.is_empty() else error_color)
 
 func _refresh_fields(editing_key: String = "") -> void:
 	for key in fields:

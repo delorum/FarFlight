@@ -382,7 +382,7 @@ func _resume_game() -> void:
 	game.show()
 	game.set_process(true)
 	game.set_process_input(true)
-	game.weather_radar_cache.invalidate()
+	game.invalidate_weather_radar_caches()
 	game._queue_map_redraw()
 	game.queue_redraw()
 

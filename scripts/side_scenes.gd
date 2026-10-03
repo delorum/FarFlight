@@ -22,6 +22,7 @@ var scene_notice := ""
 var scene_is_walking := false
 var propeller_phase := 0.0
 var cabin_terrain_zoom := 0
+const SIDE_BEACON_CORRIDOR_KM := 0.1
 var cabin_terrain_profile := PackedVector2Array()
 var cabin_terrain_timer := 0.0
 var cabin_rain_blue := true
@@ -39,6 +40,7 @@ var route_history_selected := 0
 var route_history_origin := -1
 var route_history_destination := -1
 var route_history_level := 0
+var route_history_destination_level := 0
 var route_history_records_cache: Array[Dictionary] = []
 var history_route_counts: Dictionary = {}
 var history_route_counts_size := -1
@@ -50,7 +52,7 @@ func _set_view_mode(next_mode: int) -> void:
 	cabin_table_seated = false
 	if next_mode != ViewMode.CABIN:
 		host._stop_cabin_sleep()
-	host.weather_radar_cache.invalidate()
+	host.invalidate_weather_radar_caches()
 	cabin_terrain_zoom = 0
 	view_mode = next_mode
 	if view_mode != ViewMode.CABIN:
@@ -107,13 +109,28 @@ func _scene_walk_bounds() -> Vector2:
 	return Vector2(34,host.size.x-34)
 
 func _cabin_player_position() -> Vector2:
-	var local_x = (scene_player_x - _aircraft_origin().x) / _aircraft_scale()
-	if _aircraft_mirrored():
-		local_x = 1000.0 - local_x
+	var local_x := _cabin_player_local_x()
 	var position = _aircraft_point(Vector2(local_x, AircraftArt.cabin_floor_y(local_x)))
 	if in_fuel_bay:
 		position = _aircraft_point(Vector2(local_x, AircraftArt.FLOOR_Y))
 	return position
+
+func _cabin_player_local_x() -> float:
+	var local_x: float = (scene_player_x - _aircraft_origin().x) / _aircraft_scale()
+	return 1000.0 - local_x if _aircraft_mirrored() else local_x
+
+func _on_cabin_ramp() -> bool:
+	var local_x := _cabin_player_local_x()
+	return local_x >= AircraftArt.COCKPIT_RAMP_TOP_X and local_x <= AircraftArt.COCKPIT_RAMP_BOTTOM_X
+
+func _leave_under_ramp_if_clear() -> void:
+	# Keep the lower floor until the entire pilot, not just their feet, has
+	# passed the cargo-side end. Returning then uses the normal ramp again.
+	# Walking feet reach 18 units from the anchor, plus their stroke width.
+	var half_width := 20.0 * AircraftArt.PILOT_SCALE
+	if in_fuel_bay and _cabin_player_local_x() - half_width > AircraftArt.COCKPIT_RAMP_BOTTOM_X:
+		in_fuel_bay = false
+		dragging_fuel_slider = false
 
 func _airport_exit_x() -> float:
 	return host.size.x - 48.0 if apron_aircraft_on_left else 48.0
@@ -147,16 +164,21 @@ func _nearby_scene_hotspot() -> Dictionary:
 			return spot
 	return {}
 
-func _draw_scene_hotspots() -> void:
+func _draw_scene_hotspots(background_only: bool = false) -> void:
 	if host.flight.state == FlightModelScript.State.CRASHED:
 		return
 	var pose = _cabin_pose()
 	host.draw_set_transform_matrix(pose)
 	var mouse_position = pose.affine_inverse() * host.get_local_mouse_position()
 	for spot in _scene_hotspots():
+		var background: bool = spot.get("id", "") == "seat" and in_fuel_bay
+		if background != background_only:
+			continue
 		var rect: Rect2 = spot.rect
 		var active = host.cabin_interactions.active(spot.id) if spot.has("id") else (rect.has_point(mouse_position) or _scene_hotspot_is_near(spot))
 		var color = Color("#785022") if active else AircraftArt.INK
+		if background:
+			color = AircraftArt.INK.lerp(AircraftArt.PAPER, 0.72)
 		var label: String = Localization.text(spot.label)
 		var width = ThemeDB.fallback_font.get_string_size(label,HORIZONTAL_ALIGNMENT_LEFT,-1,12).x+20
 		var x = clampf(float(spot.get("label_x", spot.x))-width*0.5,12,host.size.x-width-12)
@@ -179,9 +201,6 @@ func _click_side_scene(position: Vector2) -> void:
 	if view_mode == ViewMode.CABIN and host.cabin_interactions.click(position):
 		host.queue_redraw()
 		return
-	if in_fuel_bay:
-		in_fuel_bay = false
-		dragging_fuel_slider = false
 	if cabin_sleeping:
 		host._stop_cabin_sleep()
 	var interact = false
@@ -195,6 +214,8 @@ func _click_side_scene(position: Vector2) -> void:
 			interact = true
 			break
 	scene_player_x = destination
+	if view_mode == ViewMode.CABIN:
+		_leave_under_ramp_if_clear()
 	scene_is_walking = false
 	scene_notice = ""
 	if interact:
@@ -216,10 +237,6 @@ func _update_scene_walking(delta: float) -> void:
 	if cabin_terrain_zoom > 0:
 		scene_is_walking = false
 		return
-	if in_fuel_bay:
-		scene_is_walking = false
-		scene_player_facing = 1.0
-		return
 	if host.flight.state == FlightModelScript.State.CRASHED:
 		return
 	if view_mode not in [ViewMode.CABIN, ViewMode.APRON, ViewMode.AIRPORT]:
@@ -234,6 +251,8 @@ func _update_scene_walking(delta: float) -> void:
 		host._reset_time_scale_for_action()
 		scene_player_facing = signf(movement)
 		scene_player_x = clampf(scene_player_x + movement * 190.0 * delta, bounds.x, bounds.y)
+		if view_mode == ViewMode.CABIN:
+			_leave_under_ramp_if_clear()
 		scene_is_walking = true
 	if scene_is_walking:
 		scene_walk_phase += delta * 11.0
@@ -512,7 +531,7 @@ func _draw_cabin_fuel_device() -> void:
 	host.draw_line(Vector2(44,16),Vector2(52,8),ink,1.5,true)
 	host.draw_line(Vector2(5,45),Vector2(5,50),ink,2,true)
 	host.draw_line(Vector2(34,45),Vector2(34,50),ink,2,true)
-	var active = in_fuel_bay or host.cabin_interactions.active("fuel")
+	var active = host.cabin_interactions.active("fuel")
 	var label_color = Color("#785022") if active else ink
 	host.draw_localized_string(ThemeDB.fallback_font, Vector2(-10,64), "ЗАПРАВКА", HORIZONTAL_ALIGNMENT_CENTER, 65, 8, label_color)
 	if active:
@@ -577,7 +596,7 @@ func _carried_item_caption(item: Dictionary) -> String:
 	return ""
 
 func _handle_inventory_click(position: Vector2) -> bool:
-	if in_fuel_bay and _set_fuel_amount_from_mouse(position, Vector2(36, host.size.y - 152)):
+	if host.cabin_interactions.can_refuel() and _set_fuel_amount_from_mouse(position, Vector2(36, host.size.y - 152)):
 		scene_notice = ""
 		return true
 	if not host.economy.carried_item.is_empty():
@@ -589,7 +608,7 @@ func _handle_inventory_click(position: Vector2) -> bool:
 			_eat_at_table()
 			return true
 		if carried_type == "canister" and _carried_action_rect(1).has_point(position):
-			if in_fuel_bay:
+			if host.cabin_interactions.can_refuel():
 				host._refuel_from_carried_canister()
 			else:
 				scene_notice = "Подойдите к лестнице и нажмите ↓, чтобы заправить самолёт"
@@ -638,7 +657,7 @@ func _draw_carried_actions() -> void:
 		entries.insert(1, [1, middle_action])
 	for entry in entries:
 		_draw_menu_button(_carried_action_rect(entry[0]), entry[1], 13)
-	if in_fuel_bay:
+	if host.cabin_interactions.can_refuel():
 		_draw_fuel_amount_slider(Vector2(36, host.size.y - 152))
 
 func _fuel_slider_rect(origin: Vector2 = Vector2.INF) -> Rect2:
@@ -653,7 +672,7 @@ func _draw_fuel_amount_slider(origin: Vector2 = Vector2.INF) -> void:
 	var knob_x = lerpf(track.position.x, track.end.x, clampf(fuel_amount_litres / maximum, 0.0, 1.0) if maximum > 0.0 else 0.0)
 	host.draw_circle(Vector2(knob_x, track.get_center().y), 6, AircraftArt.INK)
 	var label = "Объём: %.1f л • клик или перетаскивание" % fuel_amount_litres
-	if view_mode == ViewMode.CABIN and in_fuel_bay and host.economy.carried_item.get("type", "") == "canister":
+	if host.cabin_interactions.can_refuel() and host.economy.carried_item.get("type", "") == "canister":
 		var canister_after = maxf(0.0, float(host.economy.carried_item.get("fuel_l", 0.0)) - fuel_amount_litres)
 		var tank_after = minf(host.flight.fuel_capacity_l, host.flight.fuel_l + fuel_amount_litres)
 		label = "Заправить %.1f л • останется %.1f л • бак %.1f/%.0f л" % [fuel_amount_litres, canister_after, tank_after, host.flight.fuel_capacity_l]
@@ -684,10 +703,10 @@ func _set_default_fuel_amount() -> void:
 	fuel_amount_litres = _fuel_slider_maximum()
 
 func _active_fuel_slider_origin() -> Vector2:
-	return Vector2(36, host.size.y - 152) if view_mode == ViewMode.CABIN and in_fuel_bay else Vector2.INF
+	return Vector2(36, host.size.y - 152) if host.cabin_interactions.can_refuel() else Vector2.INF
 
 func _fuel_slider_is_active() -> bool:
-	return (view_mode == ViewMode.CABIN and in_fuel_bay) or view_mode == ViewMode.FUEL
+	return host.cabin_interactions.can_refuel() or view_mode == ViewMode.FUEL
 func _draw_scene_background(title: String) -> float:
 	host.draw_rect(Rect2(Vector2.ZERO, host.size), AircraftArt.PAPER, true)
 	var ground_y = host.size.y * 0.76
@@ -713,6 +732,7 @@ func _draw_cabin_scene() -> void:
 	_draw_cabin_weather(true)
 	AircraftArt.draw_aircraft(host, _aircraft_origin(), _aircraft_scale(), _aircraft_mirrored(), true, host.flight.engine_running, propeller_phase, _cabin_pitch())
 	_draw_cabin_economy_objects()
+	_draw_scene_hotspots(true)
 	if cabin_sleeping:
 		_draw_sleeping_pilot()
 	else:
@@ -795,6 +815,8 @@ func _draw_cabin_terrain() -> void:
 	var airport_view = _cabin_visible_airport()
 	if ground_visible and not airport_view.is_empty():
 		_draw_distant_airport(airport_view, rect, anchor, pixels_per_m)
+	if ground_visible:
+		_draw_side_beacons(rect, anchor, pixels_per_m)
 	for i in cabin_terrain_profile.size():
 		var sample = cabin_terrain_profile[i]
 		var point = anchor + Vector2(sample.x, host.flight.altitude_m - sample.y) * pixels_per_m
@@ -818,8 +840,6 @@ func _draw_cabin_airport_close_view() -> void:
 	if not _cabin_ground_visible():
 		return
 	var airport_view = _cabin_visible_airport()
-	if airport_view.is_empty():
-		return
 	var rect = Rect2(36, 115, host.size.x - 72, host.size.y - 200)
 	# The landscape keeps the 500 m overview scale behind the full-size cutaway.
 	# Its ground reference is the aircraft's wheels, so the runway sits beneath
@@ -827,7 +847,53 @@ func _draw_cabin_airport_close_view() -> void:
 	var pixels_per_m = minf(rect.size.x / _cabin_terrain_span_m(), rect.size.y / 190.0)
 	var wheel_ground_y = _aircraft_origin().y + AircraftArt.GROUND_Y * _aircraft_scale()
 	var anchor = Vector2(rect.get_center().x, wheel_ground_y)
-	_draw_side_runway(airport_view, rect, anchor, pixels_per_m)
+	if not airport_view.is_empty():
+		_draw_side_runway(airport_view, rect, anchor, pixels_per_m)
+	_draw_side_beacons(rect, anchor, pixels_per_m)
+
+func _cabin_visible_beacons() -> Array[Dictionary]:
+	var visible: Array[Dictionary] = []
+	if not _cabin_ground_visible():
+		return visible
+	var direction: Vector2 = _cabin_ground_direction() * (1.0 if _aircraft_mirrored() else -1.0)
+	var half_span_km: float = _cabin_terrain_span_m() / 2000.0
+	for beacon in host.world.beacons:
+		if int(beacon.get("runway", -1)) >= 0:
+			continue
+		var offset: Vector2 = Vector2(beacon.position) - host.flight.position_km
+		var along: float = offset.dot(direction)
+		if absf(offset.cross(direction)) <= SIDE_BEACON_CORRIDOR_KM and absf(along) <= half_span_km + 0.03:
+			visible.append({"centre_m": along * 1000.0, "position": Vector2(beacon.position)})
+	return visible
+
+func _draw_side_beacons(rect: Rect2, anchor: Vector2, pixels_per_m: float) -> void:
+	var ink := AircraftArt.INK.lerp(AircraftArt.PAPER, 0.35)
+	var fill := AircraftArt.LIGHT.lerp(AircraftArt.PAPER, 0.35)
+	for beacon in _cabin_visible_beacons():
+		var x: float = anchor.x + float(beacon.centre_m) * pixels_per_m
+		var y: float = anchor.y + (host.flight.altitude_m - host.world.height_at(beacon.position)) * pixels_per_m
+		var top: float = y - 20.0 * pixels_per_m
+		var half_width: float = 3.0 * pixels_per_m
+		_draw_side_clipped_line(Vector2(x - half_width, y), Vector2(x, top), ink, 1.2, rect)
+		_draw_side_clipped_line(Vector2(x + half_width, y), Vector2(x, top), ink, 1.2, rect)
+		for brace in 4:
+			var lower: float = y - 20.0 * pixels_per_m * brace / 4.0
+			var upper: float = y - 20.0 * pixels_per_m * (brace + 1.0) / 4.0
+			var lower_width: float = half_width * (4 - brace) / 4.0
+			var upper_width: float = half_width * (3 - brace) / 4.0
+			_draw_side_clipped_line(Vector2(x - lower_width, lower), Vector2(x + upper_width, upper), ink, 0.8, rect)
+			_draw_side_clipped_line(Vector2(x + lower_width, lower), Vector2(x - upper_width, upper), ink, 0.8, rect)
+		_draw_side_clipped_line(Vector2(x, top), Vector2(x, top - 3.0 * pixels_per_m), ink, 1.2, rect)
+		var body := Rect2(x + 7.0 * pixels_per_m, y - 5.0 * pixels_per_m, 10.0 * pixels_per_m, 5.0 * pixels_per_m)
+		if body.intersects(rect):
+			host.draw_rect(body.intersection(rect), fill, true)
+		for edge in [[body.position, Vector2(body.end.x, body.position.y)], [Vector2(body.end.x, body.position.y), body.end], [body.end, Vector2(body.position.x, body.end.y)], [Vector2(body.position.x, body.end.y), body.position]]:
+			_draw_side_clipped_line(edge[0], edge[1], ink, 1.0, rect)
+		var roof_peak := Vector2(body.get_center().x, body.position.y - 2.0 * pixels_per_m)
+		_draw_side_clipped_line(body.position, roof_peak, ink, 1.0, rect)
+		_draw_side_clipped_line(roof_peak, Vector2(body.end.x, body.position.y), ink, 1.0, rect)
+		var door_x: float = body.get_center().x
+		_draw_side_clipped_line(Vector2(door_x, y), Vector2(door_x, y - 3.0 * pixels_per_m), ink, 1.0, rect)
 
 func _cabin_visible_airport() -> Dictionary:
 	var screen_world_direction = _cabin_ground_direction() * (1.0 if _aircraft_mirrored() else -1.0)
@@ -989,10 +1055,10 @@ func _cabin_weather_scale() -> float:
 		return _aircraft_scale() * 1000.0 / 12.0
 	return minf((host.size.x - 72.0) / _cabin_terrain_span_m(), (host.size.y - 200.0) / 190.0)
 
-func _cabin_cloud_base_y(fraction: float) -> float:
+func _cabin_cloud_base_y(fraction: float, ground_m: float = NAN) -> float:
 	var scale_y = _cabin_weather_scale()
 	var reference_y = _aircraft_origin().y + AircraftArt.GROUND_Y * _aircraft_scale()
-	var terrain: float = host.world.height_at(host.flight.position_km)
+	var terrain: float = host.world.height_at(host.flight.position_km) if is_nan(ground_m) else ground_m
 	if cabin_terrain_zoom > 0:
 		reference_y = 115.0 + (host.size.y - 200.0) * 0.28
 		if not cabin_terrain_profile.is_empty():
@@ -1004,6 +1070,7 @@ func _cabin_cloud_base_y(fraction: float) -> float:
 	return reference_y + (host.flight.altitude_m - terrain - 100.0 + 0.25 * sin(world_x * TAU / 30.0 + host.status_timer * 0.2)) * scale_y
 
 func _draw_cabin_weather(foreground: bool) -> void:
+	var ground_m: float = host.world.height_at(host.flight.position_km)
 	var rect = Rect2(36, 115, host.size.x - 72, host.size.y - 200)
 	var severity: float = host.flight.storm_intensity
 	var time = host.status_timer
@@ -1012,7 +1079,7 @@ func _draw_cabin_weather(foreground: bool) -> void:
 		var edge = PackedVector2Array()
 		for i in range(121):
 			var fraction = i / 120.0
-			var y = _cabin_cloud_base_y(fraction)
+			var y = _cabin_cloud_base_y(fraction, ground_m)
 			edge.append(Vector2(lerpf(rect.position.x, rect.end.x, fraction), clampf(y, rect.position.y, rect.end.y)))
 		var fill = PackedVector2Array([rect.position, Vector2(rect.end.x, rect.position.y)])
 		for i in range(edge.size() - 1, -1, -1):
@@ -1026,7 +1093,7 @@ func _draw_cabin_weather(foreground: bool) -> void:
 		return
 	var fog_bottom = PackedFloat32Array()
 	for i in range(61):
-		fog_bottom.append(_cabin_cloud_base_y(i / 60.0))
+		fog_bottom.append(_cabin_cloud_base_y(i / 60.0, ground_m))
 	if fog_bottom[30] > rect.position.y or fog_bottom[0] > rect.position.y or fog_bottom[60] > rect.position.y:
 		# Light translucent fog ribbons leave the schematic cabin legible.
 		for row in range(7):
@@ -1163,7 +1230,7 @@ func _draw_menu_button(rect: Rect2, text: String, font_size: int = 14) -> void:
 	UIButton.draw(host, rect, text, true, font_size)
 
 func _draw_operations_scene() -> void:
-	var floor_y = _draw_scene_background("ЛЁТНАЯ СЛУЖБА")
+	var floor_y = _draw_scene_background("ЛЁТНАЯ СЛУЖБА • МИР %d" % (host.world.level_index + 1))
 	_draw_building(host.size.x * 0.25, floor_y, Vector2(host.size.x * 0.35, minf(SERVICE_BUILDING_HEIGHT, floor_y - 200.0)), "ЛЁТНАЯ СЛУЖБА", AircraftArt.PAPER)
 	host.draw_localized_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.52, 120), "ОБСЛУЖИВАНИЕ САМОЛЁТА", HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.44, 18, Color("34372f"))
 	var status_color = Color("567044") if host.flight.departure_authorized else Color("a3483f")
@@ -1201,31 +1268,31 @@ func _history_visible_rows() -> int:
 func _active_history_records() -> Array[Dictionary]:
 	if view_mode == ViewMode.ROUTE_HISTORY:
 		return route_history_records_cache
-	return host.simulation.flight_history.records
+	return host.simulation.flight_history.journal_rows()
 
 func _history_record_at(display_index: int) -> Dictionary:
 	var records := _active_history_records()
 	if view_mode == ViewMode.ROUTE_HISTORY:
 		return records[display_index]
-	# Storage remains append-only; translate the visible row instead of copying
-	# and reversing the full journal on every redraw or input event.
+	# The model caches chronological rows including crossings. Translate the
+	# visible index instead of reversing the full journal on every redraw.
 	return records[records.size() - 1 - display_index]
 
-func _history_route_key(origin: int, destination: int, level: int = 0) -> String:
-	return "%d:%d:%d" % [level, origin, destination]
+func _history_route_key(origin: int, destination: int, level: int = 0, destination_level: int = -1) -> String:
+	return "%d:%d:%d:%d" % [level, origin, destination_level if destination_level >= 0 else level, destination]
 
-func _history_route_count(origin: int, destination: int, level: int = 0) -> int:
+func _history_route_count(origin: int, destination: int, level: int = 0, destination_level: int = -1) -> int:
 	var records: Array[Dictionary] = host.simulation.flight_history.records
 	if history_route_counts_size != records.size():
 		history_route_counts.clear()
 		for record in records:
-			var key := _history_route_key(int(record.origin), int(record.destination), int(record.get("level", 0)))
+			var key := _history_route_key(int(record.origin), int(record.destination), int(record.get("level", 0)), int(record.get("destination_level", record.get("level", 0))))
 			history_route_counts[key] = int(history_route_counts.get(key, 0)) + 1
 		history_route_counts_size = records.size()
-	return int(history_route_counts.get(_history_route_key(origin, destination, level), 0))
+	return int(history_route_counts.get(_history_route_key(origin, destination, level, destination_level), 0))
 
 func _clamp_history_selection(route_details: bool) -> void:
-	var records: Array[Dictionary] = route_history_records_cache if route_details else host.simulation.flight_history.records
+	var records: Array[Dictionary] = route_history_records_cache if route_details else host.simulation.flight_history.journal_rows()
 	var maximum := maxi(0, records.size() - 1)
 	if route_details:
 		route_history_selected = clampi(route_history_selected, 0, maximum)
@@ -1318,13 +1385,16 @@ func _open_selected_history_route() -> void:
 	if records.is_empty() or history_selected < 0 or history_selected >= records.size():
 		return
 	var record: Dictionary = _history_record_at(history_selected)
-	var count: int = _history_route_count(int(record.origin), int(record.destination), int(record.get("level", 0)))
+	if record.get("kind", "") == "world_transition":
+		return
+	var count: int = _history_route_count(int(record.origin), int(record.destination), int(record.get("level", 0)), int(record.get("destination_level", record.get("level", 0))))
 	if count < 2:
 		return
 	route_history_origin = int(record.origin)
 	route_history_destination = int(record.destination)
 	route_history_level = int(record.get("level", 0))
-	route_history_records_cache = host.simulation.flight_history.route_records(route_history_origin, route_history_destination, route_history_level)
+	route_history_destination_level = int(record.get("destination_level", route_history_level))
+	route_history_records_cache = host.simulation.flight_history.route_records(route_history_origin, route_history_destination, route_history_level, route_history_destination_level)
 	route_history_selected = 0
 	route_history_scroll = 0
 	_set_view_mode(ViewMode.ROUTE_HISTORY)
@@ -1339,13 +1409,26 @@ func _format_history_timestamp(seconds_value: float) -> String:
 	var within_day := total % 86400
 	return "день %d %02d:%02d:%02d" % [day, within_day / 3600, (within_day % 3600) / 60, within_day % 60]
 
+func _format_history_details(record: Dictionary) -> String:
+	var duration := float(record.duration_seconds)
+	var distance := float(record.distance_km)
+	var average := "%.1f" % (distance * 3600.0 / duration) if duration > 0.0 else "—"
+	return "%.1f км • %s • СР. %s км/ч • %s → %s" % [distance, _format_history_duration(duration), average, _format_history_timestamp(float(record.start_seconds)), _format_history_timestamp(float(record.end_seconds))]
+
+func _history_world_label(origin_level: int, destination_level: int) -> String:
+	return Localization.text("Мир %d" % (origin_level + 1)) if origin_level == destination_level else Localization.text("Мир %d → %d" % [origin_level + 1, destination_level + 1])
+
+func _history_airport_name(record: Dictionary, endpoint: String) -> String:
+	var stored := String(record.get(endpoint + "_name", ""))
+	return stored if not stored.is_empty() else String(host.world.airports[int(record[endpoint])].name)
+
 func _draw_flight_history_scene() -> void:
 	var route_details := view_mode == ViewMode.ROUTE_HISTORY
-	_draw_scene_background("СТАТИСТИКА ПОЛЁТОВ")
+	_draw_scene_background("СТАТИСТИКА ПОЛЁТОВ • МИР %d" % (host.world.level_index + 1))
 	var records := _active_history_records()
 	var title := "ИСТОРИЯ ПОЛЁТОВ • НОВЫЕ СВЕРХУ"
 	if route_details and route_history_origin in range(host.world.airports.size()) and route_history_destination in range(host.world.airports.size()):
-		title = "КАРТА %d • %s → %s • ВСЕГО ПОЛЁТОВ: %d • РЕКОРД СВЕРХУ" % [route_history_level + 1, host.world.airports[route_history_origin].name, host.world.airports[route_history_destination].name, records.size()]
+		title = "%s • %s → %s • ВСЕГО ПОЛЁТОВ: %d • РЕКОРД СВЕРХУ" % [_history_world_label(route_history_level, route_history_destination_level), _history_airport_name(records[0], "origin") if not records.is_empty() else host.world.airports[route_history_origin].name, _history_airport_name(records[0], "destination") if not records.is_empty() else host.world.airports[route_history_destination].name, records.size()]
 	var back_rect := get_history_back_rect()
 	host.draw_localized_string(ThemeDB.fallback_font, Vector2(_history_left_margin(), 139), title, HORIZONTAL_ALIGNMENT_LEFT, maxf(100.0, back_rect.position.x - _history_left_margin() - 18.0), 17, AircraftArt.INK)
 	_draw_menu_button(get_history_back_rect(), "НАЗАД")
@@ -1365,16 +1448,23 @@ func _draw_flight_history_scene() -> void:
 		var row_rect := Rect2(list_rect.position + Vector2(5, (record_index - scroll) * 64.0 + 4), Vector2(list_rect.size.x - 10, 56))
 		if record_index == selected:
 			host.draw_rect(row_rect, Color("c4ba91"), true)
-		var origin_name: String = host.world.airports[int(record.origin)].name
-		var destination_name: String = host.world.airports[int(record.destination)].name
+		if record.get("kind", "") == "world_transition":
+			host.draw_line(row_rect.position + Vector2(10, 4), Vector2(row_rect.end.x - 10, row_rect.position.y + 4), AircraftArt.INK, 1.0)
+			host.draw_localized_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 25), "ПЕРЕХОД: МИР %d → МИР %d" % [int(record.from_level) + 1, int(record.to_level) + 1], HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 15, AircraftArt.INK)
+			var transition_time := _format_history_timestamp(float(record.time_seconds)) if bool(record.get("time_known", true)) else "Время перехода не записано"
+			host.draw_localized_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 46), transition_time, HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 13, Color("6f5b3e"))
+			continue
+		var origin_name: String = _history_airport_name(record, "origin")
+		var destination_name: String = _history_airport_name(record, "destination")
 		var level := int(record.get("level", 0))
-		var count: int = _history_route_count(int(record.origin), int(record.destination), level)
+		var destination_level := int(record.get("destination_level", level))
+		var count: int = _history_route_count(int(record.origin), int(record.destination), level, destination_level)
 		var count_text := Localization.text(" • всего полётов: %d • Enter: рекорды" % count) if not route_details and count > 1 else ""
 		var rank_text := "%d. " % (record_index + 1) if route_details else ""
 		if route_details and record_index == 0:
 			rank_text += Localization.text("РЕКОРД • ")
-		host.draw_localized_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 21), "%s%s • %s → %s%s" % [rank_text, Localization.text("Карта %d" % (level + 1)), origin_name, destination_name, count_text], HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 15, AircraftArt.INK)
-		var details := "%.1f км • %s • %s → %s" % [float(record.distance_km), _format_history_duration(float(record.duration_seconds)), _format_history_timestamp(float(record.start_seconds)), _format_history_timestamp(float(record.end_seconds))]
+		host.draw_localized_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 21), "%s%s • %s → %s%s" % [rank_text, _history_world_label(level, destination_level), origin_name, destination_name, count_text], HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 15, AircraftArt.INK)
+		var details := _format_history_details(record)
 		host.draw_localized_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 43), details, HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 13, Color("6f5b3e"))
 	if records.size() > _history_visible_rows():
 		var bar := Rect2(list_rect.end.x - 7, list_rect.position.y + 4, 3, list_rect.size.y - 8)

@@ -141,7 +141,7 @@ func _run() -> void:
 	check(cache.refresh_count == count_before + 1, "Turning at 60 fps must only rasterize echoes once per second")
 	check(cache.snapshot.heading_deg == 0.0, "Echo texture must stay north-up for independent smooth rotation")
 	cache.update_cache(scene.world, scene.flight, 11.0)
-	check(cache.refresh_count == count_before + 2, "Next simulation second must refresh echoes")
+	check(cache.refresh_count == count_before + 2, "Next real second must refresh echoes")
 	for frame in 60:
 		cache.update_cache(scene.world, scene.flight, 11.0)
 	check(cache.refresh_count == count_before + 2, "Paused simulation must not refresh cached weather")

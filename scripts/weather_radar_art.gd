@@ -39,7 +39,7 @@ static func draw_echoes(canvas: CanvasItem, world, flight, center: Vector2, radi
 					canvas.draw_circle(echo_center,echo_radius,zone.color)
 				else:
 					for clipped in Geometry2D.intersect_polygons(_circle(echo_center,echo_radius,48),boundary):
-						if clipped.size() >= 3:
+						if clipped.size() >= 3 and not Geometry2D.triangulate_polygon(clipped).is_empty():
 							canvas.draw_colored_polygon(clipped,zone.color)
 
 static func scope_radius(rect: Rect2) -> float:
@@ -156,15 +156,17 @@ static func storm_motion_label_rect(rect: Rect2, origin: Vector2, tip: Vector2, 
 
 static func draw_map_button(canvas: CanvasItem, rect: Rect2, title := "КАРТА [B]") -> void:
 	# A paper-map icon, deliberately without aircraft position or live navigation.
-	canvas.draw_rect(rect,Color("d7d0ad"))
-	canvas.draw_rect(rect,Color("8b8263"),false,1.5)
+	var dark: bool = preload("res://scripts/visual_theme.gd").dark
+	var ink := Color("d7d0ad") if dark else Color("968260")
+	canvas.draw_rect(rect,Color("071012") if dark else Color("d7d0ad"))
+	canvas.draw_rect(rect,ink if dark else Color("8b8263"),false,1.5)
 	for fraction in [0.33,0.66]:
 		var x: float = rect.position.x+rect.size.x*fraction
-		canvas.draw_line(Vector2(x,rect.position.y+18),Vector2(x,rect.end.y-4),Color("b9b08b"),1)
+		canvas.draw_line(Vector2(x,rect.position.y+18),Vector2(x,rect.end.y-4),Color(ink, 0.35) if dark else Color("b9b08b"),1)
 	for row in 3:
 		var points := PackedVector2Array()
 		for step in 24:
 			var u := step/23.0
 			points.append(rect.position+Vector2(5+u*(rect.size.x-10),28+row*10+sin(u*TAU+row*0.7)*4))
-		canvas.draw_polyline(points,Color("968260"),1,true)
-	Localization.draw_string(canvas,ThemeDB.fallback_font,rect.position+Vector2(7,13),title,HORIZONTAL_ALIGNMENT_LEFT,rect.size.x-14,10,Color("5c5138"))
+		canvas.draw_polyline(points,ink,1,true)
+	Localization.draw_string(canvas,ThemeDB.fallback_font,rect.position+Vector2(7,13),title,HORIZONTAL_ALIGNMENT_LEFT,rect.size.x-14,10,ink if dark else Color("5c5138"))

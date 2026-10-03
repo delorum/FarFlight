@@ -207,13 +207,19 @@ func _run() -> void:
 	var left := InputEventKey.new()
 	left.keycode = KEY_LEFT
 	left.pressed = true
+	var fuel_bay_x: float = scene.scene_player_x
 	scene._input(left)
-	check(not scene.in_fuel_bay and scene.scene_player_x < scene._aircraft_point(Vector2(scene.AircraftArt.COCKPIT_RAMP_BOTTOM_X, 0)).x, "Left must exit past the ramp into the cabin")
+	check(scene.in_fuel_bay and is_equal_approx(scene.scene_player_x, fuel_bay_x), "Left must not teleport out of the fuel bay")
+	Input.action_press("ui_left")
+	scene._update_scene_walking(1.0)
+	Input.action_release("ui_left")
+	check(not scene.in_fuel_bay and scene.scene_player_x < scene._aircraft_point(Vector2(scene.AircraftArt.COCKPIT_RAMP_BOTTOM_X, 0)).x, "Walking fully past the ramp must restore normal cabin movement")
 	scene.scene_player_x = scene._aircraft_point(Vector2(355, 0)).x
 	scene._interact_in_scene()
 	check(scene.in_fuel_bay, "Enter near the cockpit ramp must open the same fuel interaction as Down and mouse click")
 	scene._input(left)
 	var fuel_device_click: Vector2 = scene._fuel_device_transform() * Vector2(20.0, 20.0)
+	scene.in_fuel_bay = false
 	var fuel_device_scene_x: float = (scene._cabin_pose().affine_inverse() * fuel_device_click).x
 	scene.scene_player_x = fuel_device_scene_x - 60.0
 	scene.scene_player_facing = -1.0
@@ -221,12 +227,13 @@ func _run() -> void:
 	check(scene.in_fuel_bay, "Clicking the cabin fuel device must enter the fuel bay")
 	check(scene.scene_player_facing > 0.0, "Entering the fuel bay must face the fuel device")
 	scene.scene_player_x = fuel_device_scene_x + 80.0
+	scene.in_fuel_bay = false
 	scene.scene_player_facing = -1.0
 	scene._click_side_scene(fuel_device_click)
 	check(scene.in_fuel_bay and scene.scene_player_facing > 0.0, "Clicking the fuel device from its right must still face the tank after entering")
 	scene.scene_player_facing = -1.0
 	scene._update_scene_walking(0.1)
-	check(scene.scene_player_facing > 0.0, "A restored fuel-bay pose must also face the tank")
+	check(scene.scene_player_facing < 0.0, "An idle pilot below the ramp must keep the chosen facing direction")
 	var cabin_destination: Vector2 = scene._aircraft_point(Vector2(500.0, scene.AircraftArt.FLOOR_Y))
 	scene._click_side_scene(scene._cabin_pose() * cabin_destination)
 	check(not scene.in_fuel_bay and is_equal_approx(scene.scene_player_x, cabin_destination.x), "Clicking elsewhere must leave the fuel bay and move the pilot")

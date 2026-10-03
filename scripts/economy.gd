@@ -279,7 +279,7 @@ func offers_at(airport_index: int) -> Array:
 func accept_offer(airport_index: int, offer_index: int) -> Dictionary:
 	if not carried_item.is_empty():
 		return {}
-	var parcel: Dictionary = mail.accept_offer(airport_index, offer_index, world_ref, elapsed_seconds, _make_mail_offer)
+	var parcel: Dictionary = mail.accept_offer(airport_index, offer_index)
 	if parcel.is_empty():
 		return {}
 	carried_item = parcel

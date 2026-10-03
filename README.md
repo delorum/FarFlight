@@ -111,6 +111,12 @@ The small arrow to the right of the attitude indicator shows the resulting nose 
 
 Clicking the door, seat, table, or chair performs the interaction immediately. Merely walking past an object does not activate it.
 
+Below 100 m above ground, standalone radio beacons appear in both cabin side views as a radio tower with a small building. They are visible within 100 m of the ground-track axis and the current view span; they move behind the aircraft as it passes. Airport beacons are not drawn a second time.
+
+### Display theme
+
+The second row of buttons below Cabin / Trajectory / Storms switches between light and dark themes. Dark mode uses the weather-radar background with beige map lines and text, and also applies to the flight calculator and side-view scenes. Weather and warning colours remain distinct. The choice is saved as an interface preference, separately from campaign saves.
+
 ### Time and pause
 
 - `Shift+Z` — cycle through 1×, 2×, 4×, 8×, and 16×;
@@ -150,7 +156,9 @@ The radio altimeter works with power on up to and including 750 m. Outside its r
 
 ### Airframe wear
 
-The airframe begins with 100 condition points and loses 20 points—one of five condition squares—per hour of ordinary flight. Above safe speed, wear grows quadratically; inside a storm it increases toward the core. Reaching zero condition destroys the aircraft.
+The airframe begins with 100 condition points and loses one of six condition squares (about 16.7 points) per hour of ordinary flight. Above safe speed, wear grows quadratically; inside a storm it increases toward the core. Reaching zero condition destroys the aircraft.
+
+Hard runway touchdowns also damage the airframe: a 2 m/s descent costs 2 condition points, increasing linearly to approximately 20 just below the 5.5 m/s limit. Softer touchdowns cause no impact damage. An impact that exhausts the remaining condition destroys the airframe; a descent of 5.5 m/s or faster is fatal regardless of condition. The hard-touchdown message shows the condition lost.
 
 The panel shows integrity and wear per game minute. Side scenes use a compact indicator. Repairs are available in dedicated hangars.
 
@@ -178,13 +186,13 @@ En-route NDBs have a 30 km range; approach beacons have a 15 km range. NDBs are 
 
 ### ILS and landing
 
-ILS uses receiver 1. Tune an approach beacon: the instrument activates within 15 km, inside the forward sector, and with a suitable aircraft heading. The vertical needle shows localizer deviation and the horizontal needle shows deviation from the 3.3° glideslope. Green indicates capture within tolerance.
+ILS uses receiver 1. Tune an approach beacon: the instrument activates within 15 km, inside the forward sector, and with a suitable aircraft heading. The vertical needle shows localizer deviation and the horizontal needle shows deviation from the 3° glideslope. Green indicates capture within tolerance.
 
-The small ILS also shows course error, distance, and predicted touchdown distance. Press `I` or click it to open the large display. In its single square window, runway perspective is calculated from the real 2 km × 50 m dimensions, current altitude, signed distance to the threshold, and a fixed field of view. It therefore remains appropriately small on a distant final and moves backwards out of the window at touchdown. Centreline dashes have fixed positions on the runway: they move in perspective as the aircraft advances and pass behind it. The larger coloured cross shows the aircraft's localizer and glideslope position, just like the moving cross on the small ILS. Its short arrow indicates the current ground-track trend; a compact cyan cross separately shows nose direction relative to runway heading and the glideslope-aligned viewing direction. When either cross exceeds the horizontal display range, it becomes an outward-pointing edge arrow labelled with the aircraft's lateral distance from the runway axis in metres or the nose's heading difference in degrees; the arrows remain distinct if both reach the same side. The diamond shows where the aircraft will reach the ground if throttle and longitudinal yoke remain unchanged and the lateral yoke is released. Twice per real second, an isolated aircraft copy is simulated with changing speed and vertical speed, fuel burn, and altitude-dependent wind; thunderstorms are currently excluded. The diamond and numerical forecast disappear after touchdown or whenever the unchanged-control trajectory predicts no contact. Precise readings are placed directly beside the window. The two large displays are mutually exclusive: opening large ILS closes the weather radar and vice versa.
+The small ILS also shows course error, distance, and predicted touchdown distance. Press `I` or click it to open the large display. In its single square window, runway perspective is calculated from the real 2 km × 50 m dimensions, current altitude, signed distance to the threshold, and a fixed field of view. It therefore remains appropriately small on a distant final and moves backwards out of the window at touchdown. Centreline dashes have fixed positions on the runway: they move in perspective as the aircraft advances and pass behind it. The larger coloured cross shows the aircraft's localizer and glideslope position, just like the moving cross on the small ILS. Its short arrow indicates the current ground-track trend; a compact cyan cross separately shows nose direction relative to runway heading and the glideslope-aligned viewing direction. When either cross exceeds the horizontal display range, it becomes an outward-pointing edge arrow labelled with the aircraft's lateral distance from the runway axis in metres or the nose's heading difference in degrees; the arrows remain distinct if both reach the same side. The diamond estimates where the current trajectory aims: twice per real second, an isolated aircraft copy simulates four seconds of inertia with unchanged throttle and longitudinal yoke and a released lateral yoke, then extrapolates the resulting ground velocity and descent straight to runway elevation. It does not anticipate later wind layers or changes in speed and descent. The shared estimate is lightly smoothed; thunderstorms are excluded. This is an aiming aid, not a guarantee of the eventual touchdown. The diamond and numerical forecast disappear after touchdown or whenever the unchanged-control trajectory predicts no contact. Precise readings are placed directly beside the window. The two large displays are mutually exclusive: opening large ILS closes the weather radar and vice versa.
 
 Both ILS readouts place the touchdown forecast on one line: `TD` is the distance from the threshold, and `LAT` is the lateral offset from the runway centreline. The small ILS also groups its other readings into compact rows.
 
-At the two most detailed map scales, dashed lines show the capture sector: side boundaries begin at the far runway end and the outer arc lies 15 km from the beacon. Each airfield has approach markers with distance and required altitude. Both ILS sizes show the current descent angle calculated from vertical speed and ground speed along the runway; the 3.3° target is exceeded in yellow and substantially exceeded in red. A shallower angle is neutral rather than presented as a correct approach.
+At the two most detailed map scales, dashed lines show the capture sector: side boundaries begin at the far runway end and the outer arc lies 15 km from the beacon. Each airfield has approach markers with distance and required altitude. Both ILS sizes show the current descent angle calculated from vertical speed and ground speed along the runway; the 3° target is exceeded in yellow and substantially exceeded in red. A shallower angle is neutral rather than presented as a correct approach.
 
 As a throttle reference, join the runway extension 6 km from the far beacon at about 230 m and 100 km/h, set neutral pitch and 30% throttle. Reduce to 10% about 2.05 km from the beacon. The stable segment runs at 90–92 km/h on a roughly 3° glide path.
 
@@ -232,7 +240,7 @@ Starting money is 160 coins. After visiting at least two buildings of one type, 
 
 ### Mail
 
-Each airfield has exactly one parcel for each of the other seven airfields. The post office displays three random destinations from its remaining stock; accepting one reserves that origin–destination parcel and replenishes the displayed choices. The post office and the map hover hint show how many parcels remain there. Job distance follows the shortest passable route under the 700 m ceiling with 150 m terrain clearance.
+Each airfield has exactly one parcel for each of the other seven airfields. The post office displays up to three random destinations from its remaining stock. Accepting a parcel reserves that origin–destination route and removes its offer without immediately replacing it. The assortment refreshes only when you land here after landing at a different airfield; landing here again without visiting another airfield does not refresh it. The post office and the map hover hint show how many parcels remain there. Job distance follows the shortest passable route under the 700 m ceiling with 150 m terrain clearance.
 
 Discarding an undelivered parcel cancels that order and returns its destination to the originating post office's stock; only a delivered parcel is permanently completed.
 
@@ -244,7 +252,7 @@ Deliver 16 parcels on a map to reveal a one-way exit near a reachable lowland ed
 
 Parcels, food, and 20-litre fuel cans must be carried into the aircraft. The cabin has six cargo slots: clicking an empty slot stores an item, while clicking an occupied one retrieves it. A carried item can be stored or discarded.
 
-The fuel station sells the can and fuel separately. Sliders use 0.1 L increments. In the technical bay, fuel can be transferred to the tank; the last partial increment fills it exactly. Enter the bay with the down arrow near the cockpit ladder or by clicking the refuelling device.
+The fuel station sells the can and fuel separately. Sliders use 0.1 L increments. In the technical bay, fuel can be transferred to the tank; the last partial increment fills it exactly. Press the down arrow anywhere on the cockpit ladder to drop onto the lower floor without changing horizontal position, or click the refuelling device. Walk freely beneath the ladder to approach or leave the tank. Refuelling controls and the Enter action are available only beside the device. While beneath the ladder, the pilot-seat label remains faint and drawn behind the character, with an underline only on mouse hover. Clicking the seat still enters the cockpit; Enter does not select the seat from below. Once the pilot has completely cleared the ladder to the left, returning to it climbs toward the cockpit again.
 
 ### Hunger and energy
 
@@ -264,7 +272,7 @@ Entering the cabin on the ground stops the engine but does not cancel preparatio
 
 Touchdown does not complete a flight. Until the aircraft stops, you may add power and perform a touch-and-go; weather and clearance remain unchanged.
 
-Flight service keeps flight records. The main log shows the newest flights first, with airfields, actual distance, duration, start time, and end time. Repeated routes have a fastest-to-slowest record list.
+Flight service and the history screen show the current world number, starting at 1. The history spans all worlds and shows the newest flights first, with world numbers, airfields, actual distance, duration, average ground speed (distance divided by duration), start time, and end time. World transitions appear as separate timestamped rows. A flight crossing into another world remains one flight with its full distance and duration. Repeated routes have a fastest-to-slowest record list, keeping routes from different worlds separate. For older saves, transition separators are reconstructed without claiming an exact crossing time.
 
 Flight continues while you walk through the cabin. A warning appears at a high angle of attack or during a stall. After a crash or fatal exhaustion, the map opens with the cause, distance, flight time, total play time, delivery count, and track. On the game-over screen, Show flight track (or Enter) collapses the results into a draggable panel; use Expand to reopen it. The slot is replaced by a completed-run save: its history, seed, and route remain viewable, but the flight cannot continue.
 
@@ -320,12 +328,13 @@ References: [Godot Web export](https://docs.godotengine.org/en/stable/tutorials/
 - `main.gd` coordinates models and scenes; `cockpit_input.gd` handles flight controls;
 - session mode rules and landing practice setup live in `session_mode.gd` and `landing_practice.gd`;
 - `ils_display_state.gd` supplies the same guidance and forecast readouts to both ILS sizes;
+- `ils_prediction_scheduler.gd` owns the forecast lifecycle and frame budget; `map_geometry_cache.gd` owns contour indexing and cached storm outlines without UI dependencies;
 - the map, instrument panel, and side scenes live in separate modules;
 - `aircraft_art.gd` draws the aircraft externally and in cutaway view.
 
 More detail is available in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-Rendering is limited to 60 FPS with VSync. The map is cached and redrawn after generation, resize, zoom, pan, or line changes. Instruments update separately. The terrain profile refreshes ten times per second and weather radar once per second.
+Rendering is limited to 60 FPS with VSync. The map has separate base and annotation layers: changing a hint or line does not redraw terrain or storms. Contours use spatial culling and batched drawing; storm outlines are cached in world coordinates. Instruments update separately. The terrain profile and line-preview terrain samples refresh at most ten times per second; finalized lines are sampled immediately. Both weather-radar echo textures refresh at most once per real second, independently of time acceleration. The touchdown forecast keeps its physics resolution but spreads computation across frames with an approximately 1 ms frame budget; both ILS displays share the completed result.
 
 Title artwork: `assets/title_screen.png`; original prompt: `assets/title_screen_prompt.md`.
 

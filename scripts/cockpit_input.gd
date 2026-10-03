@@ -25,7 +25,7 @@ func handle_key(event: InputEvent) -> bool:
 		return false
 	if event.pressed and not event.echo and not event.ctrl_pressed and (event.keycode == KEY_P or event.physical_keycode == KEY_P):
 		host.flight.toggle_electrical_power()
-		host.weather_radar_cache.invalidate()
+		host.invalidate_weather_radar_caches()
 		host._queue_map_redraw()
 		return true
 	if event.pressed and not event.echo and event.keycode == KEY_M:

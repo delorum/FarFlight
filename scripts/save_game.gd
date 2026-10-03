@@ -291,6 +291,8 @@ static func restore(game, data: Dictionary) -> bool:
 		return false
 	if not data.has("flight_history"):
 		game.simulation.flight_history.reset()
+	if not data.get("flight_history", {}).has("transitions"):
+		game.simulation.flight_history.recover_legacy_transitions(new_world.level_index, new_economy.elapsed_seconds)
 	for field in UI_FIELDS:
 		if not data.ui.has(field):
 			continue
@@ -331,6 +333,8 @@ static func restore(game, data: Dictionary) -> bool:
 					origin = airport_index
 		game.simulation.flight_history.active = true
 		game.simulation.flight_history.active_origin = origin
+		game.simulation.flight_history.active_level = new_world.level_index
+		game.simulation.flight_history.active_origin_name = String(new_world.airports[origin].name)
 		game.simulation.flight_history.active_start_seconds = maxf(0.0, new_economy.elapsed_seconds - game.trajectory_elapsed_seconds)
 		game.simulation.flight_history.active_distance_km = maxf(0.0, game.trajectory_distance_km)
 	game.navigation_map.ensure_measurement_line_ids()
@@ -359,7 +363,7 @@ static func restore(game, data: Dictionary) -> bool:
 	game._update_ils_touchdown_prediction()
 	game._update_cabin_terrain_profile()
 	game._update_crash_overlay()
-	game.weather_radar_cache.invalidate()
+	game.invalidate_weather_radar_caches()
 	game._queue_map_redraw()
 	game.queue_redraw()
 	return true

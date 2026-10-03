@@ -8,7 +8,6 @@ const ILSDisplayState = preload("res://scripts/ils_display_state.gd")
 const BACKGROUND := Color("071012")
 const SCOPE_BACKGROUND := Color("0a0e10")
 const FRAME := Color("6f7f85")
-const GRID := Color("66878a")
 const NOSE_MARKER := Color("76b8bd")
 const TEXT := Color("d2dde0")
 const MUTED_TEXT := Color("b8c5c8")
@@ -34,8 +33,7 @@ static func draw_large(canvas: CanvasItem, rect: Rect2, state: Dictionary) -> vo
 	if not bool(state.signal_available):
 		_draw_unavailable(canvas, rect, "НЕТ СИГНАЛА")
 		return
-	# Forward simulation is deliberately cached: it is substantially more useful
-	# than the old linear projection, but does not need to run every rendered frame.
+	# Both instrument sizes consume the same scheduled aiming estimate.
 	var prediction: Dictionary = state.prediction
 	var display_guidance: Dictionary = state.projection
 	var layout := display_layout(rect)
@@ -71,14 +69,6 @@ static func _draw_combined_scope(canvas: CanvasItem, scope: Rect2, guidance: Dic
 	canvas.draw_rect(scope, SCOPE_BACKGROUND, true)
 	canvas.draw_rect(scope, FRAME, false, 1.5)
 	var inner := scope.grow(-18.0)
-	var fixed_center := scope.get_center()
-	# Sparse scale ticks provide orientation without the old fixed ILS cross.
-	for tick in range(-4, 5):
-		if tick == 0:
-			continue
-		var offset := tick * inner.size.x / 10.0
-		canvas.draw_line(Vector2(fixed_center.x + offset, fixed_center.y - 4), Vector2(fixed_center.x + offset, fixed_center.y + 4), Color(GRID, 0.5), 1.0)
-		canvas.draw_line(Vector2(fixed_center.x - 4, fixed_center.y + offset), Vector2(fixed_center.x + 4, fixed_center.y + offset), Color(GRID, 0.5), 1.0)
 	var geometry := projected_runway_geometry(inner, guidance)
 	_draw_projected_runway(canvas, geometry)
 	# The large aircraft cross uses exactly the same localizer/glideslope errors
@@ -218,7 +208,7 @@ static func nose_marker_position(view: Rect2, guidance: Dictionary) -> Vector2:
 	var half_fov := DISPLAY_VERTICAL_FOV_DEG * 0.5
 	var heading_offset := clampf(float(guidance.get("heading_error_deg", 0.0)) / half_fov, -1.0, 1.0)
 	# The centre of the projection looks down the nominal glideslope. A nose at
-	# -3.3 degrees therefore sits in the middle; a higher pitch moves it upward.
+	# Negative target glideslope therefore sits in the middle; a higher pitch moves it upward.
 	var pitch_from_view := float(guidance.get("aircraft_pitch_deg", -FlightModel.GLIDE_SLOPE_DEG)) + FlightModel.GLIDE_SLOPE_DEG
 	var pitch_offset := clampf(pitch_from_view / half_fov, -1.0, 1.0)
 	return Vector2(

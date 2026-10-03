@@ -2,7 +2,7 @@ class_name FlightModel
 extends RefCounted
 
 const FlightWorldScript = preload("res://scripts/world.gd")
-const GLIDE_SLOPE_DEG := 3.3
+const GLIDE_SLOPE_DEG := 3.0
 const GLIDE_TOUCHDOWN_OFFSET_KM := FlightWorldScript.ILS_AIM_OFFSET_KM
 const STALL_WARNING_AOA_DEG := 12.0
 const STALL_AOA_DEG := 15.0
@@ -19,7 +19,11 @@ const VNE_KMH := 250.0
 const BREAKUP_SPEED_KMH := 280.0
 const MAX_AIRFRAME_STRESS := 100.0
 const MAX_AIRFRAME_CONDITION := 100.0
-const NORMAL_WEAR_PER_HOUR := 20.0
+const HARD_TOUCHDOWN_SINK_MPS := 2.0
+const FATAL_TOUCHDOWN_SINK_MPS := 5.5
+const MIN_TOUCHDOWN_DAMAGE := 2.0
+const MAX_TOUCHDOWN_DAMAGE := 20.0
+const NORMAL_WEAR_PER_HOUR := MAX_AIRFRAME_CONDITION / 6.0
 const OVERSPEED_WEAR_PER_HOUR := 18.0
 const STORM_WEAR_PER_HOUR := 30.0
 const ECONOMY_ALTITUDE_MIN_M := 350.0
@@ -511,7 +515,7 @@ func _try_land() -> bool:
 		# eligibility is based on being over the runway, not on a fixed nose-angle
 		# limit. Direction still matters during the ground roll because the player
 		# must keep the aircraft inside the runway boundaries.
-		if abs(coords.x) <= FlightWorldScript.RUNWAY_LENGTH_KM * 0.5 and abs(coords.y) <= FlightWorldScript.RUNWAY_WIDTH_KM * 0.5 and vertical_speed_mps <= 0.0 and vertical_speed_mps > -5.5:
+		if abs(coords.x) <= FlightWorldScript.RUNWAY_LENGTH_KM * 0.5 and abs(coords.y) <= FlightWorldScript.RUNWAY_WIDTH_KM * 0.5 and vertical_speed_mps <= 0.0 and vertical_speed_mps > -FATAL_TOUCHDOWN_SINK_MPS:
 			var touchdown_vertical_speed := vertical_speed_mps
 			state = State.ROLLING
 			airport_index = i
@@ -522,10 +526,22 @@ func _try_land() -> bool:
 			stalled = false
 			stall_recovery_time = 0.0
 			wheel_brakes_applied = false
-			var touchdown_description := "Жёсткое касание" if touchdown_vertical_speed <= -2.0 else "Касание"
+			var damage := touchdown_damage(touchdown_vertical_speed)
+			airframe_condition = maxf(0.0, airframe_condition - damage)
+			if airframe_condition <= 0.0:
+				_crash("Разрушение планера при жёстком касании: прочность исчерпана")
+				return true
+			var touchdown_description := "Жёсткое касание • планер −%.1f%%" % damage if damage > 0.0 else "Касание"
 			_show_message("%s ВПП «%s» на %.1f км/ч — газ 0%%, удерживайте S для торможения" % [touchdown_description, airport.name, speed_kmh], -1.0)
 			return true
 	return false
+
+static func touchdown_damage(vertical_speed: float) -> float:
+	var sink := -vertical_speed
+	if sink < HARD_TOUCHDOWN_SINK_MPS:
+		return 0.0
+	var severity := clampf(inverse_lerp(HARD_TOUCHDOWN_SINK_MPS, FATAL_TOUCHDOWN_SINK_MPS, sink), 0.0, 1.0)
+	return lerpf(MIN_TOUCHDOWN_DAMAGE, MAX_TOUCHDOWN_DAMAGE, severity)
 
 func _update_ground_roll(delta: float) -> void:
 	var airport: Dictionary = world.airports[airport_index]
@@ -601,7 +617,7 @@ func _landing_failure_reason() -> String:
 	if absf(nearest_coords.y) > FlightWorldScript.RUNWAY_WIDTH_KM * 0.5:
 		return "Касание вне ВПП «%s»: боковое отклонение %.0f м" % [nearest_airport.name, absf(nearest_coords.y) * 1000.0]
 	var failures: Array[String] = []
-	if vertical_speed_mps <= -5.5:
+	if vertical_speed_mps <= -FATAL_TOUCHDOWN_SINK_MPS:
 		failures.append("жёсткое касание %+.2f м/с" % vertical_speed_mps)
 	if failures.is_empty():
 		return "Посадка не засчитана на ВПП «%s»" % nearest_airport.name
@@ -789,7 +805,7 @@ func landing_guidance(index: int, signal_available_override: Variant = null) -> 
 	var near_threshold: Vector2 = airport.position - forward * (FlightWorldScript.RUNWAY_LENGTH_KM * 0.5)
 	var actual_distance_to_threshold_km: float = position_km.distance_to(near_threshold)
 	# The ideal glide path intersects the runway 60 m beyond the threshold, not
-	# at its edge. At the threshold it therefore still commands about 3.5 m AGL.
+	# at its edge. At the threshold it therefore still commands about 3.1 m AGL.
 	var glide_distance_km: float = maxf(0.0, -FlightWorldScript.RUNWAY_LENGTH_KM * 0.5 + GLIDE_TOUCHDOWN_OFFSET_KM - along)
 	var desired_altitude_m: float = glide_distance_km * 1000.0 * tan(deg_to_rad(GLIDE_SLOPE_DEG))
 	var localizer_tolerance_km: float = maxf(FlightWorldScript.RUNWAY_WIDTH_KM * 0.5, distance_to_threshold_km * 0.08)

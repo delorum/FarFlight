@@ -12,6 +12,7 @@ const RADAR_COURSE_LINE_LENGTH_KM := 30.0
 const RADAR_AIRCRAFT_CLICK_RADIUS_PX := 16.0
 const WeatherRadarArt = preload("res://scripts/weather_radar_art.gd")
 const StormGeometry = preload("res://scripts/storm_geometry.gd")
+const MapGeometryCache = preload("res://scripts/map_geometry_cache.gd")
 const FlightWorldScript = preload("res://scripts/world.gd")
 const FlightModelScript = preload("res://scripts/flight_model.gd")
 const WIND_OVERLAY_ALTITUDES = FlightWorldScript.WIND_ALTITUDES_M
@@ -28,6 +29,7 @@ var host: Control
 var map_zoom := 1.0
 var map_center := Vector2.ONE * FlightWorldScript.SIZE_KM * 0.5
 var contour_segments: Array[Dictionary] = []
+var geometry_cache := MapGeometryCache.new()
 var terrain_peaks: Array[Dictionary] = []
 var measurement_lines: Array[Dictionary] = []
 var next_measurement_line_id := 1
@@ -67,11 +69,20 @@ var weather_briefing_storms: Array[Dictionary] = []
 var weather_briefing_time_seconds := 0.0
 var weather_briefing_visible := true
 var weather_briefing_age_minute := -1
+var preview_height_m := -1.0
+var preview_origin := Vector2.INF
+var preview_height_next_msec := 0
+var drag_height_next_msec := 0
 
 func _init(controller: Control) -> void:
 	host = controller
 
 func refresh_weather_briefing() -> void:
+	geometry_cache.invalidate_weather()
+	preview_height_m = -1.0
+	host.invalidate_weather_radar_caches()
+	if host.map_render_layer != null:
+		host.map_render_layer.invalidate_base()
 	weather_briefing_storms.clear()
 	for storm in host.world.storms:
 		weather_briefing_storms.append({
@@ -115,6 +126,9 @@ func restore_weather_briefing(data: Dictionary) -> bool:
 	if not valid_weather_briefing(data):
 		return false
 	weather_briefing_storms.assign(data.storms.duplicate(true))
+	geometry_cache.invalidate_weather()
+	if host.map_render_layer != null:
+		host.map_render_layer.invalidate_base()
 	weather_briefing_time_seconds = data.time_seconds
 	weather_briefing_visible = data.visible
 	weather_briefing_age_minute = floori(weather_briefing_age_seconds() / 60.0)
@@ -150,7 +164,7 @@ func _draw_map_on(canvas: Control) -> void:
 		host._draw_economy_hud(canvas, false)
 	elif large_weather_radar:
 		if host.flight.electrical_power:
-			host.weather_radar_cache.update_cache(host.world, host.flight, host.status_timer, RADAR_RANGES_KM[radar_range_index])
+			host.weather_radar_cache.update_cache(host.world, host.flight, Time.get_ticks_msec() / 1000.0, RADAR_RANGES_KM[radar_range_index])
 		WeatherRadarArt.draw_large(canvas,map_rect(),host.world,host.flight,host.weather_radar_cache.get_texture(),RADAR_RANGES_KM[radar_range_index])
 		WeatherRadarArt.draw_storm_motion(canvas, map_rect(), host.world, host.flight, host.get_local_mouse_position(), RADAR_RANGES_KM[radar_range_index])
 		if host.flight.electrical_power:
@@ -162,7 +176,7 @@ func _draw_map_on(canvas: Control) -> void:
 	map_canvas = null
 
 func _toggle_weather_radar() -> void:
-	host.weather_radar_cache.invalidate()
+	host.invalidate_weather_radar_caches()
 	var opening: bool = not large_weather_radar or bool(host.large_ils)
 	host.large_ils = false
 	large_weather_radar = opening
@@ -346,9 +360,23 @@ func _handle_radar_mouse_button(event: InputEventMouseButton) -> void:
 
 func _queue_map_redraw() -> void:
 	if host.map_render_layer != null:
-		host.map_render_layer.queue_redraw()
+		host.map_render_layer.refresh()
+
+func draw_base_on(canvas: Control) -> void:
+	map_canvas = canvas
+	_draw_map_base()
+	map_canvas = null
+
+func draw_overlay_on(canvas: Control) -> void:
+	map_canvas = canvas
+	_draw_map_overlay()
+	map_canvas = null
 
 func _draw_map() -> void:
+	_draw_map_base()
+	_draw_map_overlay()
+
+func _draw_map_base() -> void:
 	var rect = map_rect()
 	map_canvas.draw_rect(rect, Color("d7d0ad"), true)
 	map_canvas.draw_rect(rect, Color("6d6751"), false, 2.0)
@@ -361,11 +389,7 @@ func _draw_map() -> void:
 		b = world_to_screen(Vector2(FlightWorldScript.SIZE_KM, k))
 		_draw_clipped_map_line(a, b, Color(0.25, 0.28, 0.22, 0.18), 1.0)
 	_draw_weather_briefing(rect)
-	for segment in contour_segments:
-		var level: float = segment.level
-		var color = Color("806f4b") if int(level) % 500 != 0 else Color("5c4b31")
-		var width = 1.0 if int(level) % 500 != 0 else 1.7
-		_draw_clipped_map_line(world_to_screen(segment.a), world_to_screen(segment.b), color, width)
+	_draw_contours_batched(rect)
 	_draw_wind_overlay(rect)
 	_draw_contour_labels(rect)
 	_draw_terrain_peaks(rect)
@@ -374,6 +398,9 @@ func _draw_map() -> void:
 		_draw_approach_point(airport)
 	for beacon in host.world.beacons:
 		_draw_beacon(beacon)
+
+func _draw_map_overlay() -> void:
+	var rect := map_rect()
 	ensure_measurement_line_ids()
 	var highlighted_line_id: int = host.flight_calculator.highlighted_line_id()
 	for line in measurement_lines:
@@ -413,6 +440,39 @@ func _draw_map() -> void:
 	var scale_start = rect.end - Vector2(scale_px + 18, 18)
 	map_canvas.draw_line(scale_start, scale_start + Vector2(scale_px, 0), Color("25271f"), 3)
 	Localization.draw_string(map_canvas,ThemeDB.fallback_font, scale_start - Vector2(0, 6), "10 км", HORIZONTAL_ALIGNMENT_CENTER, scale_px, 12, Color("25271f"))
+
+func _draw_contours_batched(rect: Rect2) -> void:
+	# One transform and two draw calls, rather than repeated layout queries and
+	# thousands of individual CanvasItem commands. Cull before transforming.
+	var scale := pixels_per_km()
+	var offset := rect.get_center() - map_center * scale
+	var visible := Rect2((rect.position - offset) / scale, rect.size / scale).grow(1.5)
+	var minor := PackedVector2Array()
+	var major := PackedVector2Array()
+	for segment in _visible_contour_segments(rect):
+		var a: Vector2 = segment.a
+		var b: Vector2 = segment.b
+		if not Rect2(a.min(b), (a - b).abs()).grow(0.001).intersects(visible):
+			continue
+		var screen_a := a * scale + offset
+		var screen_b := b * scale + offset
+		var clipped := PackedVector2Array([screen_a, screen_b]) if rect.has_point(screen_a) and rect.has_point(screen_b) else _clip_line_to_rect(screen_a, screen_b, rect)
+		if clipped.is_empty():
+			continue
+		if int(segment.level) % 500 == 0:
+			major.append(clipped[0])
+			major.append(clipped[1])
+		else:
+			minor.append(clipped[0])
+			minor.append(clipped[1])
+	if not minor.is_empty():
+		map_canvas.draw_multiline(minor, Color("806f4b"), 1.0)
+	if not major.is_empty():
+		map_canvas.draw_multiline(major, Color("5c4b31"), 1.7)
+
+func _visible_contour_segments(rect: Rect2) -> Array[Dictionary]:
+	var scale := pixels_per_km()
+	return geometry_cache.visible_contours(Rect2(map_center - rect.size / scale * 0.5, rect.size / scale))
 
 func _draw_exit_portal() -> void:
 	if host.world.exit_portal.is_empty():
@@ -456,7 +516,9 @@ func map_footer_text_at(screen_position: Vector2) -> String:
 	var airport_index := _airport_hover_index(screen_position)
 	if airport_index >= 0:
 		var airport: Dictionary = host.world.airports[airport_index]
-		return "%s: %s • %s" % [airport.name, ", ".join(host.economy.services_at(airport_index)), Localization.text("пос. %d" % host.economy.remaining_parcels_at(airport_index))]
+		var services: Array[String] = host.economy.services_at(airport_index)
+		services[0] = "почта (%d)" % host.economy.remaining_parcels_at(airport_index)
+		return "%s: %s" % [airport.name, ", ".join(services)]
 	if not host.world.exit_portal.is_empty() and world_to_screen(Vector2(host.world.exit_portal.position)).distance_to(screen_position) <= 13.0:
 		return Localization.text("Переход на новую карту • недоставленная почта останется здесь")
 	var line_text := measurement_line_description_at(screen_position)
@@ -522,25 +584,12 @@ func _draw_hovered_weather_storm_motion(rect: Rect2) -> void:
 		Localization.draw_string(map_canvas,ThemeDB.fallback_font, label_rect.position + Vector2(4, 13), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, color)
 
 func _weather_briefing_contour(storm: Dictionary, center: Vector2) -> PackedVector2Array:
-	var points := PackedVector2Array()
-	for sample_index in 48:
-		var direction := Vector2.RIGHT.rotated(TAU * sample_index / 48.0)
-		var extent := 0.0
-		for lobe in storm.radar_lobes:
-			var offset := Vector2(lobe.offset_km)
-			var lobe_radius := StormGeometry.lobe_radius(storm, lobe)
-			var projection := direction.dot(offset)
-			var discriminant := projection * projection - (offset.length_squared() - lobe_radius * lobe_radius)
-			if discriminant >= 0.0:
-				extent = maxf(extent, projection + sqrt(discriminant))
-		points.append(world_to_screen(center + direction * extent))
-	return points
+	var scale := pixels_per_km()
+	var transform := Transform2D(0.0, Vector2.ONE * scale, 0.0, map_rect().get_center() - map_center * scale)
+	return transform * geometry_cache.storm_contour(storm, center)
 
 func _weather_briefing_circle(center: Vector2, radius: float) -> PackedVector2Array:
-	var points := PackedVector2Array()
-	for point_index in 40:
-		points.append(center + Vector2.RIGHT.rotated(TAU * point_index / 40.0) * radius)
-	return points
+	return geometry_cache.circle(center, radius)
 
 func _weather_briefing_maximum_extent_km(storm: Dictionary) -> float:
 	return StormGeometry.maximum_extent_km(storm)
@@ -571,7 +620,8 @@ func _draw_weather_briefing_echoes(rect: Rect2, clip_polygon: PackedVector2Array
 					map_canvas.draw_circle(echo_center, echo_radius, zone_color)
 				else:
 					for clipped_polygon in Geometry2D.intersect_polygons(_weather_briefing_circle(echo_center, echo_radius), clip_polygon):
-						map_canvas.draw_colored_polygon(clipped_polygon, zone_color)
+						if not Geometry2D.triangulate_polygon(clipped_polygon).is_empty():
+							map_canvas.draw_colored_polygon(clipped_polygon, zone_color)
 
 func _draw_weather_briefing(rect: Rect2) -> void:
 	if not weather_briefing_visible:
@@ -776,9 +826,13 @@ func _draw_map_aircraft(position: Vector2, heading_deg: float, color: Color) -> 
 func _draw_contour_labels(rect: Rect2) -> void:
 	var placed_by_level: Dictionary = {}
 	var safe_rect = rect.grow(-28.0)
-	for segment in contour_segments:
+	var scale := pixels_per_km()
+	var offset := rect.get_center() - map_center * scale
+	for segment in _visible_contour_segments(rect):
 		var level = int(segment.level)
-		var midpoint: Vector2 = (world_to_screen(segment.a) + world_to_screen(segment.b)) * 0.5
+		if placed_by_level.has(level) and placed_by_level[level].size() >= 3:
+			continue
+		var midpoint: Vector2 = (Vector2(segment.a) + Vector2(segment.b)) * (0.5 * scale) + offset
 		if not safe_rect.has_point(midpoint):
 			continue
 		if not placed_by_level.has(level):
@@ -968,7 +1022,24 @@ func _measurement_label_text(a_world: Vector2, b_world: Vector2, cached_max_heig
 	var bearing: float = host.world.vector_heading(b_world - a_world)
 	var direct_course := int(round(bearing)) % 360
 	var reverse_course := (direct_course + 180) % 360
-	var max_height: float = cached_max_height if cached_max_height >= 0.0 else _maximum_terrain_height_on_line(a_world, b_world)
+	var max_height: float = cached_max_height
+	if max_height < 0.0:
+		if line_id >= 0 or pending_measure == null:
+			# Legacy lines without a stored height get an exact, per-line cache.
+			max_height = _maximum_terrain_height_on_line(a_world, b_world)
+			for line in measurement_lines:
+				if int(line.get("id", -1)) == line_id and line_id >= 0:
+					line.max_height_m = max_height
+					break
+		else:
+			# Preview geometry still follows the pointer immediately; only its
+			# terrain annotation is sampled at 10 Hz.
+			var now := Time.get_ticks_msec()
+			if preview_height_m < 0.0 or preview_origin != a_world or now >= preview_height_next_msec:
+				preview_height_m = _maximum_terrain_height_on_line(a_world, b_world)
+				preview_origin = a_world
+				preview_height_next_msec = now + 100
+			max_height = preview_height_m
 	var linked_time: float = host.flight_calculator.line_time_minutes(line_id) if line_id >= 0 else -1.0
 	var time_text := "%.1f мин" % linked_time if linked_time >= 0.0 else measurement_time_text(distance)
 	# The rotated label can flip to stay upright, so its arrow is represented
@@ -1253,16 +1324,21 @@ func _maximum_terrain_height_on_line(a: Vector2, b: Vector2) -> float:
 	# much smaller than a contour interval and is not a safe-flight altitude.
 	return maximum_height + 8.0
 
-func _refresh_measurement_max_heights(connections: Array[Dictionary]) -> void:
+func _refresh_measurement_max_heights(connections: Array[Dictionary], throttle_terrain := false) -> void:
 	if large_weather_radar:
 		return # Radar annotations neither need nor reveal terrain heights.
 	var refreshed: Dictionary = {}
+	var now := Time.get_ticks_msec()
+	var refresh_terrain := not throttle_terrain or now >= drag_height_next_msec
+	if refresh_terrain:
+		drag_height_next_msec = now + 100
 	for connection in connections:
 		var line_index: int = connection.line_index
 		if refreshed.has(line_index) or line_index < 0 or line_index >= measurement_lines.size():
 			continue
 		var line: Dictionary = measurement_lines[line_index]
-		line.max_height_m = _maximum_terrain_height_on_line(line.a, line.b)
+		if refresh_terrain:
+			line.max_height_m = _maximum_terrain_height_on_line(line.a, line.b)
 		host.flight_calculator.measurement_line_changed(line)
 		refreshed[line_index] = true
 
@@ -1355,6 +1431,8 @@ func _snap_map_point(screen_position: Vector2) -> Vector2:
 	return closest_world
 
 func _build_contours() -> void:
+	if host.map_render_layer != null:
+		host.map_render_layer.invalidate_base()
 	contour_segments.clear()
 	terrain_peaks.clear()
 	var cell: float = FlightWorldScript.SIZE_KM / SAMPLE_GRID
@@ -1386,6 +1464,8 @@ func _build_contours() -> void:
 					contour_segments.append({"a": points[0], "b": points[1], "level": float(level)})
 				if points.size() == 4:
 					contour_segments.append({"a": points[2], "b": points[3], "level": float(level)})
+	geometry_cache.rebuild_contours(contour_segments, FlightWorldScript.SIZE_KM)
+
 func _find_terrain_peaks(heights: PackedFloat32Array, cell: float) -> void:
 	var candidates: Array[Dictionary] = []
 	var row_size = SAMPLE_GRID + 1

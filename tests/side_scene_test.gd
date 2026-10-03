@@ -140,5 +140,65 @@ func _run() -> void:
 	key.physical_keycode = KEY_X
 	scene._input(key)
 	check(scene.view_mode == scene.ViewMode.COCKPIT, "Physical X must work with alternate keyboard layout")
+	_test_under_ramp_walking(scene)
 	print("Side scenes: both orientations, click travel, boarding, service, seat, bounds and X toggle — ", "FAIL" if failed else "OK")
 	quit(1 if failed else 0)
+
+func _test_under_ramp_walking(scene: Control) -> void:
+	for heading in [90.0, 270.0]:
+		scene.flight.heading_deg = heading
+		scene._set_view_mode(scene.ViewMode.CABIN)
+		for local_x in [313.0, 350.0, 394.0]:
+			scene.in_fuel_bay = false
+			scene.scene_player_x = scene._aircraft_point(Vector2(local_x, 0)).x
+			var before: float = scene.scene_player_x
+			var down := InputEventKey.new()
+			down.keycode = KEY_DOWN
+			down.pressed = true
+			scene._input(down)
+			check(scene.in_fuel_bay and is_equal_approx(scene.scene_player_x, before), "Down anywhere on the ramp must drop to the floor without horizontal teleportation")
+			check(is_equal_approx(scene._cabin_player_position().y, scene._aircraft_point(Vector2(local_x, scene.AircraftArt.FLOOR_Y)).y), "Pilot below the ramp must stay on the lower floor")
+		scene.scene_player_x = scene._aircraft_point(Vector2(350, 0)).x
+		var left := InputEventKey.new()
+		left.keycode = KEY_LEFT
+		left.pressed = true
+		var before: float = scene.scene_player_x
+		scene._input(left)
+		check(scene.in_fuel_bay and is_equal_approx(scene.scene_player_x, before), "Left key must not teleport out of the fuel bay")
+		Input.action_press("ui_left")
+		scene._update_scene_walking(0.1)
+		Input.action_release("ui_left")
+		check(is_equal_approx(scene.scene_player_x, before - 19.0) and scene.scene_is_walking, "Leaving the fuel bay must use normal walking speed")
+		# Reversal while under the stairs must not put the pilot onto the ramp.
+		scene.scene_player_x = scene._aircraft_point(Vector2(315, 0)).x
+		scene.in_fuel_bay = true
+		check(scene.cabin_interactions.can_refuel() and scene.cabin_interactions.active("fuel"), "Fuel interaction must be active beside the device")
+		check(not scene.cabin_interactions.entry("seat").is_empty(), "Pilot seat must remain clickable below the ladder")
+		check(scene.cabin_interactions.active("seat") == scene.cabin_interactions.has_point("seat", scene.get_local_mouse_position()), "Below the ladder the seat must underline only on mouse hover, not proximity")
+		scene.flight.fuel_l = 20.0
+		scene.economy.carried_item = {"type": "canister", "fuel_l": 5.0}
+		scene._set_default_fuel_amount()
+		scene.scene_player_x = scene._aircraft_point(Vector2(380, 0)).x
+		check(not scene.cabin_interactions.can_refuel() and not scene.cabin_interactions.active("fuel"), "Fuel label must not remain active throughout the under-ladder route")
+		check(scene.cabin_interactions.prompt().is_empty(), "Refuelling prompt must disappear away from the tank")
+		scene._interact_in_scene()
+		check(is_equal_approx(scene.flight.fuel_l, 20.0), "Enter away from the tank must not transfer fuel")
+		scene.scene_player_x = scene._aircraft_point(Vector2(315, 0)).x
+		scene._interact_in_scene()
+		check(is_equal_approx(scene.flight.fuel_l, 25.0), "Enter beside the tank must transfer fuel")
+		var seat: Dictionary = scene.cabin_interactions.entry("seat")
+		var seat_click: Vector2 = seat.transform * Rect2(seat.rect).get_center()
+		scene._click_side_scene(seat_click)
+		check(scene.view_mode == scene.ViewMode.COCKPIT and not scene.in_fuel_bay, "Clicking the pilot seat below the ladder must enter the cockpit")
+		scene._set_view_mode(scene.ViewMode.CABIN)
+		scene.scene_player_x = scene._aircraft_point(Vector2(400, 0)).x
+		scene.in_fuel_bay = true
+		scene.side_scenes._leave_under_ramp_if_clear()
+		check(scene.in_fuel_bay, "The lower-floor route must persist until the entire pilot clears the ramp")
+		scene.scene_player_x = scene._aircraft_point(Vector2(350, 0)).x
+		check(is_equal_approx(scene._cabin_player_position().y, scene._aircraft_point(Vector2(350, scene.AircraftArt.FLOOR_Y)).y), "Returning under the stairs must stay on the floor")
+		scene.scene_player_x = scene._aircraft_point(Vector2(420, 0)).x
+		scene.side_scenes._leave_under_ramp_if_clear()
+		check(not scene.in_fuel_bay, "Completely clearing the stairs must restore normal ramp walking")
+		scene.scene_player_x = scene._aircraft_point(Vector2(350, 0)).x
+		check(is_equal_approx(scene._cabin_player_position().y, scene._aircraft_point(Vector2(350, scene.AircraftArt.cabin_floor_y(350))).y), "Returning after clearing the stairs must climb toward the cockpit")

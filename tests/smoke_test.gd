@@ -280,7 +280,8 @@ func _init() -> void:
 
 func _test_approach(airport_index: int, reverse_direction: bool) -> bool:
 	# A centre-mounted beacon is 5 km away at 4 km before the threshold.
-	# The 3.3-degree glide path aims 60 m beyond the threshold: 234.098 m.
+	# The target glide path aims 60 m beyond the threshold. The aircraft starts
+	# slightly above the new three-degree path, still within its capture tolerance.
 	var landing_world = FlightWorldScript.new(424242)
 	landing_world.storms.clear()
 	for layer in landing_world.wind_layers:
@@ -303,7 +304,7 @@ func _test_approach(airport_index: int, reverse_direction: bool) -> bool:
 	assert(not approach.landing_guidance(airport_index, false).signal_available)
 	assert(initial_guidance.in_localizer)
 	assert(initial_guidance.in_glide)
-	assert(absf(initial_guidance.desired_altitude_m - 234.098) < 0.01)
+	assert(absf(initial_guidance.desired_altitude_m - (4.0 + FlightModelScript.GLIDE_TOUCHDOWN_OFFSET_KM) * 1000.0 * tan(deg_to_rad(3.0))) < 0.01)
 	assert(absf(initial_guidance.beacon_distance_km - 5.0) < 0.001)
 	assert(Vector2(landing_world.beacons[airport_index].position).is_equal_approx(approach_airport.position))
 	assert(is_equal_approx(initial_guidance.approach_sign, -1.0 if reverse_direction else 1.0))

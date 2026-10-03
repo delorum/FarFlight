@@ -108,6 +108,7 @@ func _run() -> void:
 	key.pressed = true
 	scene._input(key)
 	check(scene.cabin_terrain_zoom == 0 and scene.view_mode == scene.ViewMode.CABIN, "Enter must restore cabin without activating its hotspots")
+	await _test_side_beacons(scene)
 	print("Cabin terrain, zoom, visibility and input: ", "FAIL" if failed else "OK")
 	for zoom in range(4):
 		scene.cabin_terrain_zoom = zoom
@@ -119,3 +120,41 @@ func _run() -> void:
 		check(is_equal_approx(after - before, 0.2 * scene._cabin_weather_scale()), "Crossing cloud base must move boundary continuously at current scale")
 	print("Cloud base continuity at all four zooms: ", "FAIL" if failed else "OK")
 	quit(1 if failed else 0)
+
+func _test_side_beacons(scene) -> void:
+	var saved_beacons: Array = scene.world.beacons.duplicate(true)
+	scene.flight.position_km = Vector2(scene.world.airports[0].position)
+	scene.flight.altitude_m = scene.world.height_at(scene.flight.position_km) + 80.0
+	scene.flight.state = scene.FlightModelScript.State.FLYING
+	scene.flight.heading_deg = 37.0
+	scene.flight.speed_kmh = 100.0
+	scene.flight.current_wind_kmh = Vector2(20, -10)
+	scene.cabin_terrain_zoom = 1
+	var direction: Vector2 = scene._cabin_ground_direction()
+	var right := Vector2(direction.y, -direction.x)
+	var position: Vector2 = scene.flight.position_km + direction * 0.1 + right * 0.05
+	scene.world.beacons.assign([
+		{"position": position, "runway": -1},
+		{"position": position, "runway": 0},
+	])
+	var visible: Array[Dictionary] = scene.side_scenes._cabin_visible_beacons()
+	check(visible.size() == 1, "Nearby standalone beacon must be visible; airport beacon must not be duplicated")
+	var centre: float = visible[0].centre_m
+	scene.flight.position_km += direction * 0.05
+	visible = scene.side_scenes._cabin_visible_beacons()
+	check(visible.size() == 1 and absf(absf(visible[0].centre_m - centre) - 50.0) < 0.01, "Beacon must move with ground-track motion including wind drift")
+	for zoom in [0, 1, 3]:
+		scene.cabin_terrain_zoom = zoom
+		scene._update_cabin_terrain_profile()
+		scene.queue_redraw()
+		await process_frame
+		await process_frame
+	scene.cabin_terrain_zoom = 1
+	scene.world.beacons[0].position = scene.flight.position_km + right * 0.15
+	check(scene.side_scenes._cabin_visible_beacons().is_empty(), "Beacon outside the 100 m lateral corridor must be hidden")
+	scene.world.beacons[0].position = scene.flight.position_km + direction * 2.0
+	check(scene.side_scenes._cabin_visible_beacons().is_empty(), "Beacon outside the view span must be hidden")
+	scene.world.beacons[0].position = scene.flight.position_km
+	scene.flight.altitude_m = scene.world.height_at(scene.flight.position_km) + 100.0
+	check(scene.side_scenes._cabin_visible_beacons().is_empty(), "Beacons must be hidden at 100 m AGL")
+	scene.world.beacons.assign(saved_beacons)

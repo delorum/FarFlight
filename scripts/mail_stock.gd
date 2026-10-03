@@ -31,16 +31,10 @@ func arrive_at_airport(origin: int, world, elapsed_seconds: float, make_offer: C
 	last_landed_airport = origin
 	offers_by_airport[origin] = _generate_offers(origin, world, elapsed_seconds, make_offer)
 
-func _generate_offers(origin: int, world, elapsed_seconds: float, make_offer: Callable, retained: Array = []) -> Array[Dictionary]:
+func _generate_offers(origin: int, world, elapsed_seconds: float, make_offer: Callable) -> Array[Dictionary]:
 	var candidates: Array[int] = []
 	for destination in remaining_destinations_by_airport.get(origin, []):
-		var already_shown := false
-		for offer in retained:
-			if int(offer.destination) == int(destination):
-				already_shown = true
-				break
-		if not already_shown:
-			candidates.append(int(destination))
+		candidates.append(int(destination))
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(world.seed_value) ^ (origin + 1) * 7919 ^ int(elapsed_seconds * 10.0) ^ next_parcel_id * 104729
 	for index in range(candidates.size() - 1, 0, -1):
@@ -49,14 +43,12 @@ func _generate_offers(origin: int, world, elapsed_seconds: float, make_offer: Ca
 		candidates[index] = candidates[other]
 		candidates[other] = value
 	var offers: Array[Dictionary] = []
-	for offer in retained:
-		offers.append(offer)
-	for candidate_index in mini(maxi(0, 3 - offers.size()), candidates.size()):
+	for candidate_index in mini(3, candidates.size()):
 		offers.append(make_offer.call(origin, candidates[candidate_index], next_parcel_id, world))
 		next_parcel_id += 1
 	return offers
 
-func accept_offer(origin: int, offer_index: int, world, elapsed_seconds: float, make_offer: Callable) -> Dictionary:
+func accept_offer(origin: int, offer_index: int) -> Dictionary:
 	var offers: Array = offers_at(origin)
 	if offer_index < 0 or offer_index >= offers.size():
 		return {}
@@ -64,7 +56,8 @@ func accept_offer(origin: int, offer_index: int, world, elapsed_seconds: float, 
 	var remaining: Array = remaining_destinations_by_airport.get(origin, [])
 	remaining.erase(int(parcel.destination))
 	remaining_destinations_by_airport[origin] = remaining
-	offers_by_airport[origin] = _generate_offers(origin, world, elapsed_seconds, make_offer, offers)
+	# A vacant offer slot stays vacant until landing here after another airport.
+	offers_by_airport[origin] = offers
 	return parcel
 
 func return_parcel(parcel: Dictionary) -> void:

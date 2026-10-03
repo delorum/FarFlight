@@ -28,20 +28,33 @@ func _run() -> void:
 	check(economy.remaining_parcels_at(0) == 7 and economy.offers_at(0).size() == 3, "Each airport must start with seven unique outgoing parcels and show three")
 	var initial_other_ids := [economy.offers_at(0)[1].id, economy.offers_at(0)[2].id]
 	var first_taken: Dictionary = economy.accept_offer(0, 0)
-	check(not first_taken.is_empty() and economy.offers_at(0).any(func(offer): return offer.id == initial_other_ids[0]) and economy.offers_at(0).any(func(offer): return offer.id == initial_other_ids[1]), "Accepting one offer must keep the other two visible while filling the free slot")
+	check(not first_taken.is_empty() and economy.offers_at(0).size() == 2 and economy.offers_at(0).any(func(offer): return offer.id == initial_other_ids[0]) and economy.offers_at(0).any(func(offer): return offer.id == initial_other_ids[1]), "Accepting one offer must leave exactly the other two visible")
+	economy.arrive_at_airport(0, world)
+	check(economy.offers_at(0).size() == 2, "Landing again at the same airport must not replenish offers")
 	economy.discard_carried()
-	check(economy.remaining_parcels_at(0) == 7, "Cancelling an undelivered order must return it to the finite stock")
+	check(economy.remaining_parcels_at(0) == 7 and economy.offers_at(0).size() == 2, "Cancelling an undelivered order must return it to stock without refreshing the current assortment")
+	var waiting_mail_save := economy.snapshot()
+	var reloaded_mail = Economy.new()
+	check(reloaded_mail.restore(waiting_mail_save, world) and reloaded_mail.offers_at(0).size() == 2, "A saved partially depleted assortment must reload unchanged")
+	reloaded_mail.arrive_at_airport(0, world)
+	check(reloaded_mail.offers_at(0).size() == 2, "Reloading and landing at the same airport must not replenish offers")
+	reloaded_mail.arrive_at_airport(1, world)
+	reloaded_mail.arrive_at_airport(0, world)
+	check(reloaded_mail.offers_at(0).size() == 3, "Returning after a landing elsewhere must refresh the assortment")
 	economy = Economy.new(world)
 	for origin in world.airports.size():
 		var picked := {}
 		for pickup in 7:
 			economy.arrive_at_airport(origin, world)
-			check(economy.offers_at(origin).size() == mini(3, 7 - pickup), "Mail offers must refill from the finite stock")
+			var visible_before := mini(3, 7 - pickup)
+			check(economy.offers_at(origin).size() == visible_before, "Mail offers must refill from finite stock only after returning from another airport")
 			var parcel: Dictionary = economy.accept_offer(origin, 0)
 			check(not parcel.is_empty() and not picked.has(parcel.destination), "An origin-destination parcel must never be offered twice")
 			picked[parcel.destination] = true
 			check(economy.remaining_parcels_at(origin) == 6 - pickup, "Accepting mail must consume exactly one parcel from that airport")
+			check(economy.offers_at(origin).size() == visible_before - 1, "Picking up mail must not immediately replace its offer")
 			economy.deliver_carried(int(parcel.destination))
+			economy.arrive_at_airport(int(parcel.destination), world)
 		check(economy.offers_at(origin).is_empty(), "An exhausted post office must stay empty")
 	var same_seed_world = World.new(424242)
 	check(world.ensure_exit_portal() and same_seed_world.ensure_exit_portal() and world.exit_portal == same_seed_world.exit_portal, "The next-map exit must be reproducible from the world seed")
@@ -55,7 +68,7 @@ func _run() -> void:
 	var money_before_locked_exit: int = game.economy.money
 	check(WorldProgression.transition(game.world, game.flight, game.economy, game.simulation).is_empty() and game.economy.money == money_before_locked_exit and game.flight.world == game.world, "A locked exit must leave campaign state untouched")
 	var airport_screen: Vector2 = game.navigation_map.world_to_screen(Vector2(game.world.airports[0].position))
-	check(game.navigation_map.map_footer_text_at(airport_screen).contains("пос. 7"), "The map hover line must show a concise remaining-parcel count")
+	check(game.navigation_map.map_footer_text_at(airport_screen).contains("почта (7), лётная служба"), "The map hover line must place the remaining-parcel count beside the post office")
 	check(not game.world.crossed_exit(Vector2(-1.0, 100.0)), "No level exit may work before the mail objective")
 	for delivery_index in Economy.DELIVERIES_TO_UNLOCK_EXIT:
 		var origin := delivery_index / 7
@@ -65,6 +78,7 @@ func _run() -> void:
 		game._handle_economy_click(game._economy_button_rect(0).get_center())
 		check(game.economy.deliveries_on_map == delivery_index + 1, "Every delivered parcel must advance the current-map objective")
 		check(game.world.exit_portal.is_empty() == (delivery_index + 1 < Economy.DELIVERIES_TO_UNLOCK_EXIT), "The exit must appear on exactly the sixteenth delivery")
+		game.economy.arrive_at_airport(int(parcel.destination), game.world)
 	var portal: Dictionary = game.world.exit_portal
 	check(not portal.is_empty() and game.world.height_at(Vector2(portal.position)) <= World.ROUTE_CEILING_M - World.ROUTE_CLEARANCE_M, "The exit must be on reachable low ground")
 	check(SaveGame.valid(SaveGame.capture(game)), "An unlocked exit must be valid in a save")
@@ -87,9 +101,19 @@ func _run() -> void:
 	game.economy.money = 777
 	var old_seed: int = game.world.seed_value
 	var old_side: String = portal.side
+	var history = game.simulation.flight_history
+	history.active = true
+	history.active_origin = 0
+	history.active_level = 0
+	history.active_origin_name = String(game.world.airports[0].name)
+	history.active_start_seconds = maxf(0.0, game.economy.elapsed_seconds - 300.0)
+	history.active_distance_km = 45.0
+	var history_start: float = history.active_start_seconds
 	game._transition_to_next_world()
 	check(game.world.level_index == 1 and game.world.seed_value != old_seed, "The exit must generate a distinct second map")
 	check(game.flight.world == game.world and game.flight.state == game.FlightModelScript.State.FLYING, "The aircraft must remain airborne in the new world")
+	check(history.active and history.active_level == 0 and history.active_start_seconds == history_start and history.active_distance_km == 45.0, "Crossing worlds must preserve the active flight's departure, time and distance")
+	check(history.transitions.size() == 1 and history.transitions[0].from_level == 0 and history.transitions[0].to_level == 1, "Crossing worlds must add an explicit numbered history event")
 	check(game.flight.fuel_l == 23.0 and game.flight.airframe_condition == 63.0 and game.economy.money == 777, "Fuel, damage and money must survive a map transition")
 	check(game.economy.deliveries_on_map == 0 and game.economy.remaining_parcels_at(0) == 7, "A new map must receive a fresh finite mail objective")
 	check(game.economy.total_deliveries == 16, "The lifetime delivery counter must not reset with the map objective")
@@ -105,6 +129,7 @@ func _run() -> void:
 	restored.set_process(false)
 	check(SaveGame.restore(restored, saved), "The new map and its finite mail stock must reload")
 	check(restored.world.level_index == 1 and restored.economy.remaining_parcels_at(0) == 7 and restored.economy.total_deliveries == 16, "Reloaded progress and lifetime deliveries must stay on the new map")
+	check(restored.simulation.flight_history.snapshot() == history.snapshot(), "World transitions and the cross-world active flight must survive saving")
 	var second_seed: int = restored.world.seed_value
 	check(restored.world.ensure_exit_portal(), "The second map must also offer a reachable exit after its mail objective")
 	restored._transition_to_next_world()

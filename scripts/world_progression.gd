@@ -74,10 +74,7 @@ static func transition(previous_world, flight, economy, simulation) -> Dictionar
 	flight.airport_index = nearest_airport
 	flight.prepared_airport_index = nearest_airport
 	flight.departure_authorized = false
-	simulation.flight_history.active = false
-	simulation.flight_history.active_origin = -1
-	simulation.flight_history.active_level = next_chart.level_index
-	simulation.flight_history.active_distance_km = 0.0
+	simulation.flight_history.add_world_transition(previous_world.level_index, next_chart.level_index, economy.elapsed_seconds)
 	simulation.trip_air_distance_km = 0.0
 	simulation.trip_elapsed_seconds = 0.0
 	simulation.last_economy_flight_state = flight.state

@@ -1,4 +1,5 @@
 extends Control
+const VisualTheme = preload("res://scripts/visual_theme.gd")
 const UILayout = preload("res://scripts/ui_layout.gd")
 const Localization = preload("res://scripts/localization.gd")
 
@@ -25,6 +26,7 @@ const UIButton = preload("res://scripts/ui_button.gd")
 const FlightWorldScript = preload("res://scripts/world.gd")
 const FlightModelScript = preload("res://scripts/flight_model.gd")
 const LandingPredictorScript = preload("res://scripts/landing_predictor.gd")
+const ILSPredictionScheduler = preload("res://scripts/ils_prediction_scheduler.gd")
 const SessionMode = preload("res://scripts/session_mode.gd")
 const LandingPractice = preload("res://scripts/landing_practice.gd")
 const ILSDisplayState = preload("res://scripts/ils_display_state.gd")
@@ -50,7 +52,7 @@ const INITIAL_MAP_RADIUS_KM := 40.0
 const APPROACH_DETAIL_MIN_ZOOM := 20.0
 const WIND_OVERLAY_ALTITUDES = FlightWorldScript.WIND_ALTITUDES_M
 const TIME_SCALES = SimulationSession.TIME_SCALES
-const ILS_PREDICTION_REAL_INTERVAL := 0.5
+const ILS_PREDICTION_REAL_INTERVAL := ILSPredictionScheduler.REFRESH_INTERVAL
 # Mirrored scene: both door-to-inventory and inventory-to-chair gaps are 19 units.
 const CABIN_TABLE_X = UILayout.CABIN_TABLE_X
 const CABIN_TABLE_SEAT_X = UILayout.CABIN_TABLE_SEAT_X
@@ -212,8 +214,13 @@ var pause_history_return_state: Dictionary = {}
 var signal_check_timer := 0.0
 var receiver_signal_status: Array[Dictionary] = [{}, {}]
 var ils_signal_status: Dictionary = {}
-var ils_prediction_timer := 0.0
-var ils_touchdown_prediction: Dictionary = LandingPredictorScript.no_touchdown()
+var ils_prediction_scheduler := ILSPredictionScheduler.new()
+var ils_prediction_timer: float:
+	get: return ils_prediction_scheduler.remaining_seconds
+	set(value): ils_prediction_scheduler.remaining_seconds = value
+var ils_touchdown_prediction: Dictionary:
+	get: return ils_prediction_scheduler.result
+	set(value): ils_prediction_scheduler.result = value
 var large_ils := false
 var map_render_layer: Control
 var map_canvas: Control:
@@ -320,6 +327,7 @@ var radar_range_index: int:
 	set(value):
 		navigation_map.radar_range_index = value
 var weather_radar_cache: Node
+var small_weather_radar_cache: Node
 var crash_overlay: PanelContainer
 var crash_description: Label
 var crash_stats: Label
@@ -393,6 +401,8 @@ var cabin_sleep_progress_seconds: float:
 var flight_calculator: PanelContainer
 
 func _ready() -> void:
+	VisualTheme.initialize(Localization.settings_path)
+	material = VisualTheme.create_material()
 	Engine.max_fps = 60
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
 	if not OS.has_feature("web"):
@@ -406,6 +416,9 @@ func _ready() -> void:
 	add_child(flight_calculator)
 	weather_radar_cache = WeatherRadarCache.new()
 	add_child(weather_radar_cache)
+	small_weather_radar_cache = WeatherRadarCache.new()
+	small_weather_radar_cache.texture_size = 128
+	add_child(small_weather_radar_cache)
 	_build_crash_overlay()
 	resized.connect(_on_viewport_resized)
 	regenerate_world(requested_world_seed)
@@ -458,16 +471,8 @@ func _input(event: InputEvent) -> void:
 			if side_scenes.handle_history_key(event.keycode):
 				get_viewport().set_input_as_handled()
 				return
-			if view_mode == ViewMode.CABIN and cabin_terrain_zoom == 0 and event.keycode == KEY_DOWN and _near_cabin_ramp():
-				_enter_fuel_bay()
-				queue_redraw()
-				get_viewport().set_input_as_handled()
-				return
-			if view_mode == ViewMode.CABIN and event.keycode == KEY_LEFT and in_fuel_bay:
-				in_fuel_bay = false
-				scene_player_x = _aircraft_point(Vector2(AircraftArt.COCKPIT_RAMP_BOTTOM_X + 15, 0)).x
-				scene_player_facing = -1.0
-				scene_notice = ""
+			if view_mode == ViewMode.CABIN and cabin_terrain_zoom == 0 and event.keycode == KEY_DOWN and side_scenes._on_cabin_ramp():
+				_enter_fuel_bay(true)
 				queue_redraw()
 				get_viewport().set_input_as_handled()
 				return
@@ -564,7 +569,7 @@ func _transition_to_next_world() -> void:
 	_build_approach_markers()
 	_update_receiver_signals()
 	_update_ils_touchdown_prediction()
-	weather_radar_cache.invalidate()
+	invalidate_weather_radar_caches()
 	_queue_map_redraw()
 	queue_redraw()
 
@@ -609,22 +614,16 @@ func _process(delta: float) -> void:
 		if SessionMode.keeps_storms_clear(session_mode):
 			LandingPractice.clear_storms(world)
 		navigation_map.refresh_weather_briefing()
-		weather_radar_cache.invalidate()
 	navigation_map.update_dynamic_annotations(delta)
 	signal_check_timer -= game_delta
 	if signal_check_timer <= 0.0:
 		_update_receiver_signals()
 		signal_check_timer = 1.0
 	if view_mode == ViewMode.COCKPIT and flight.electrical_power and flight.state == FlightModelScript.State.FLYING:
-		ils_prediction_timer -= delta
-		if ils_prediction_timer <= 0.0:
-			_update_ils_touchdown_prediction()
-			ils_prediction_timer = ILS_PREDICTION_REAL_INTERVAL
+		_advance_ils_touchdown_prediction(delta)
 	else:
 		# Recompute immediately when the instrument becomes relevant again.
-		ils_prediction_timer = 0.0
-		if flight.state != FlightModelScript.State.FLYING and bool(ils_touchdown_prediction.get("valid", false)):
-			ils_touchdown_prediction = LandingPredictorScript.no_touchdown("not_flying")
+		ils_prediction_scheduler.suspend(flight.state == FlightModelScript.State.FLYING)
 	if events.map_changed:
 		_queue_map_redraw()
 	_update_cabin_sleep_notice()
@@ -855,11 +854,12 @@ func _near_cabin_ramp() -> bool:
 	var ramp_x := _aircraft_point(Vector2((AircraftArt.COCKPIT_RAMP_TOP_X + AircraftArt.COCKPIT_RAMP_BOTTOM_X) * 0.5, 0)).x
 	return absf(scene_player_x - ramp_x) < 55.0
 
-func _enter_fuel_bay() -> void:
+func _enter_fuel_bay(keep_position: bool = false) -> void:
 	cabin_table_seated = false
 	in_fuel_bay = true
 	scene_player_facing = 1.0
-	scene_player_x = _aircraft_point(Vector2(315, 0)).x
+	if not keep_position:
+		scene_player_x = _aircraft_point(Vector2(315, 0)).x
 	_set_default_fuel_amount()
 	scene_notice = ""
 	scene_is_walking = false
@@ -1189,6 +1189,7 @@ func panel_rect() -> Rect2:
 	return instrument_panel.panel_rect()
 
 func _draw() -> void:
+	material.set_shader_parameter("theme_enabled", VisualTheme.dark and view_mode != ViewMode.COCKPIT)
 	draw_rect(Rect2(Vector2.ZERO, size), Color("10171b"))
 	match view_mode:
 		ViewMode.COCKPIT:
@@ -1227,7 +1228,7 @@ func localization_changed() -> void:
 	if crash_map_button != null:
 		crash_map_button.text = Localization.text("ПОКАЗАТЬ ТРАЕКТОРИЮ [ENTER]")
 	_update_crash_overlay()
-	weather_radar_cache.invalidate()
+	invalidate_weather_radar_caches()
 	navigation_map._queue_map_redraw()
 	queue_redraw()
 
@@ -1269,8 +1270,8 @@ func _airframe_indicator_text() -> String:
 	return "ПЛАНЕР: %s  %s  %.1f%% • износ %.3f%%/мин" % [_airframe_condition_status().label, _airframe_bar(), flight.airframe_condition, wear_per_minute]
 
 func _airframe_bar() -> String:
-	var filled := ceili(clampf(flight.airframe_condition, 0.0, 100.0) / 100.0 * 5.0)
-	return "■".repeat(filled) + "□".repeat(5 - filled)
+	var filled := ceili(clampf(flight.airframe_condition, 0.0, 100.0) / 100.0 * 6.0)
+	return "■".repeat(filled) + "□".repeat(6 - filled)
 
 func _need_bar(value: int) -> String:
 	return "■".repeat(clampi(value, 0, 6)) + "□".repeat(6 - clampi(value, 0, 6))
@@ -1409,15 +1410,19 @@ func _beacon_for_frequency(frequency_khz: int) -> Variant:
 			return beacon
 	return null
 
+func invalidate_weather_radar_caches() -> void:
+	for cache in [weather_radar_cache, small_weather_radar_cache]:
+		if cache != null:
+			cache.invalidate()
+
 func _update_ils_touchdown_prediction() -> void:
-	if flight == null:
-		return
-	var selected_airport := _selected_ils_airport_index()
-	if selected_airport < 0:
-		ils_touchdown_prediction = LandingPredictorScript.no_touchdown("no_runway_frequency")
-		return
-	ils_airport_index = selected_airport
-	ils_touchdown_prediction = LandingPredictorScript.predict(flight, selected_airport)
+	var selected_airport := _selected_ils_airport_index() if flight != null else -1
+	if selected_airport >= 0:
+		ils_airport_index = selected_airport
+	ils_prediction_scheduler.refresh_immediately(flight, selected_airport)
+
+func _advance_ils_touchdown_prediction(delta: float) -> void:
+	ils_prediction_scheduler.update(flight, _selected_ils_airport_index(), bool(ils_signal_status.get("available", false)), delta)
 
 func get_throttle_rect() -> Rect2:
 	return instrument_panel.get_throttle_rect()
@@ -1465,6 +1470,14 @@ func _gui_input(event: InputEvent) -> void:
 		_handle_mouse_motion(event)
 
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
+	# Appearance is independent of aircraft control, time acceleration or death.
+	if view_mode == ViewMode.COCKPIT and event.button_index == MOUSE_BUTTON_LEFT and event.pressed and instrument_panel.get_theme_button_rect().has_point(event.position):
+		VisualTheme.set_dark(not VisualTheme.dark)
+		flight_calculator.refresh_visual_theme()
+		map_render_layer.invalidate_base()
+		navigation_map._queue_map_redraw()
+		queue_redraw()
+		return
 	if flight.state == FlightModelScript.State.CRASHED and view_mode not in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY] and (view_mode != ViewMode.COCKPIT or not (map_rect().has_point(event.position) or get_trajectory_button_rect().has_point(event.position))):
 		return
 	if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
@@ -1571,7 +1584,7 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 				flight.yoke = Vector2.ZERO
 			elif get_power_button_rect().has_point(event.position):
 				flight.toggle_electrical_power()
-				weather_radar_cache.invalidate()
+				invalidate_weather_radar_caches()
 				_queue_map_redraw()
 			elif get_engine_button_rect().has_point(event.position):
 				flight.toggle_engine()
@@ -1648,7 +1661,7 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 		new_world.y = clampf(new_world.y, 0.0, FlightWorldScript.SIZE_KM)
 		for connection in dragged_measure_connections:
 			active_measurement_lines[connection.line_index][connection.endpoint] = new_world
-		_refresh_measurement_max_heights(dragged_measure_connections)
+		navigation_map._refresh_measurement_max_heights(dragged_measure_connections, true)
 		_queue_map_redraw()
 		queue_redraw()
 		return

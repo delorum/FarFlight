@@ -27,7 +27,7 @@ func entries() -> Array[Dictionary]:
 		{"id": "bed", "rect": Rect2(-6, -25, 108, 51), "transform": host._bed_transform(),
 			"near": host._bed_is_near, "action": _bed, "prompt": "лечь на кровать"},
 		{"id": "fuel", "rect": Rect2(-12, -8, 112, 76), "transform": host._fuel_device_transform(),
-			"near": host._near_cabin_ramp, "action": _fuel, "prompt": "перейти к заправке"},
+			"near": _near_fuel, "action": _fuel, "prompt": "перейти к заправке"},
 		{"id": "table", "rect": Rect2(-5, -55, 80, 72), "transform": host._table_transform(),
 			"near": host._near_cabin_table, "action": _table, "prompt": "сесть за стол"},
 	]
@@ -49,6 +49,10 @@ func has_point(id: String, position: Vector2) -> bool:
 	return not item.is_empty() and item.rect.has_point(item.transform.affine_inverse() * position)
 
 func active(id: String) -> bool:
+	if id == "seat" and host.in_fuel_bay:
+		return has_point(id, host.get_local_mouse_position())
+	if id == "fuel" and host.in_fuel_bay:
+		return can_refuel()
 	var item := entry(id)
 	if item.is_empty():
 		return false
@@ -64,6 +68,8 @@ func click(position: Vector2) -> bool:
 func nearby() -> Dictionary:
 	# Keep furniture ahead of the wider doorway/ramp ranges.
 	for id in ["table", "seat", "fuel", "bed", "door"]:
+		if id == "seat" and host.in_fuel_bay:
+			continue
 		var item := entry(id)
 		if not item.is_empty() and item.near.call():
 			return item
@@ -73,7 +79,8 @@ func interact() -> void:
 	if host.cabin_sleeping:
 		host._stop_cabin_sleep()
 	elif host.in_fuel_bay:
-		host._refuel_from_carried_canister()
+		if can_refuel():
+			host._refuel_from_carried_canister()
 	elif host._at_cabin_table():
 		host._eat_at_table()
 	else:
@@ -85,7 +92,7 @@ func prompt() -> String:
 	if host.cabin_sleeping:
 		return "Enter: встать с кровати"
 	if host.in_fuel_bay:
-		return "Enter: заправить самолёт"
+		return "Enter: заправить самолёт" if can_refuel() else ""
 	if host._at_cabin_table():
 		return "Enter: съесть еду" if host.economy.carried_item.get("type", "") == "food" else "Возьмите еду и принесите её к столу"
 	var item := nearby()
@@ -96,8 +103,19 @@ func _bed() -> void:
 		host._start_cabin_sleep()
 
 func _fuel() -> void:
+	if host.in_fuel_bay:
+		if can_refuel():
+			host.scene_player_facing = 1.0
+			host._refuel_from_carried_canister()
+		return
 	host._stop_cabin_sleep()
 	host._enter_fuel_bay()
+
+func can_refuel() -> bool:
+	return host.view_mode == host.ViewMode.CABIN and host.in_fuel_bay and absf(host.side_scenes._cabin_player_local_x() - 315.0) <= 22.0
+
+func _near_fuel() -> bool:
+	return can_refuel() if host.in_fuel_bay else host._near_cabin_ramp()
 
 func _table() -> void:
 	host.in_fuel_bay = false

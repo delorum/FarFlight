@@ -131,7 +131,10 @@ func _draw_weather_radar() -> void:
 	host.draw_arc(center, radius * 0.5, 0, TAU, 32, Color(0.35, 0.48, 0.50, 0.55), 1.0)
 	host.draw_line(center, center + Vector2(0, -radius), Color("8ca1a4"), 1.0)
 	host.draw_circle(center, 2.0, Color("d7c65c"))
-	WeatherRadarArt.draw_echoes(host,host.world,host.flight,center,radius)
+	host.small_weather_radar_cache.update_cache(host.world, host.flight, Time.get_ticks_msec() / 1000.0)
+	host.draw_set_transform(center, -deg_to_rad(host.flight.heading_deg))
+	host.draw_texture_rect(host.small_weather_radar_cache.get_texture(), Rect2(Vector2.ONE * -radius, Vector2.ONE * radius * 2.0), false)
+	host.draw_set_transform(Vector2.ZERO)
 	for line in host.radar_measurement_lines:
 		host._draw_radar_measurement(host, line.a, line.b, Color("e8d274"), center, radius)
 	var info_x = rect.position.x + 68.0
@@ -270,8 +273,13 @@ func _calculate_optimal_altitude_range() -> Vector2:
 	for sample_index in sample_count:
 		var altitude := first_altitude + sample_index * STEP_M
 		var score := -INF
+		var power := FlightModelScript.altitude_power_factor_at(altitude)
+		var fuel := FlightModelScript.altitude_fuel_factor_at(altitude)
+		var wind: Vector2 = host.world.wind_at(altitude)
+		var crosswind := wind.dot(track_right)
+		var alongwind := wind.dot(track_forward)
 		for airspeed in range(ceili(FlightModelScript.NOMINAL_STALL_SPEED_KMH + 15.0), floori(FlightModelScript.VNO_KMH) + 1):
-			score = maxf(score, _economy_range_score(airspeed, altitude, track_forward, track_right))
+			score = maxf(score, _economy_score_with_factors(airspeed, power, fuel, crosswind, alongwind))
 		scores.append(score)
 		if score > best_score:
 			best_score = score
@@ -342,16 +350,18 @@ func _economy_track_deg() -> float:
 
 func _economy_range_score(airspeed: float, altitude: float, track_forward: Vector2, track_right: Vector2) -> float:
 	var power_factor := FlightModelScript.altitude_power_factor_at(altitude)
+	var wind: Vector2 = host.world.wind_at(altitude)
+	return _economy_score_with_factors(airspeed, power_factor, FlightModelScript.altitude_fuel_factor_at(altitude), wind.dot(track_right), wind.dot(track_forward))
+
+func _economy_score_with_factors(airspeed: float, power_factor: float, fuel_factor: float, crosswind: float, alongwind: float) -> float:
 	var required_throttle := (airspeed - 35.0) / (185.0 * power_factor)
 	if required_throttle < 0.0 or required_throttle > 1.0:
 		return -INF
-	var wind: Vector2 = host.world.wind_at(altitude)
-	var crosswind := wind.dot(track_right)
 	if absf(crosswind) >= airspeed:
 		return -INF
 	var along_air := sqrt(airspeed * airspeed - crosswind * crosswind)
-	var ground_speed := along_air + wind.dot(track_forward)
-	var fuel_flow := FlightModelScript.sea_level_fuel_flow_lpm(required_throttle) * FlightModelScript.altitude_fuel_factor_at(altitude)
+	var ground_speed := along_air + alongwind
+	var fuel_flow := FlightModelScript.sea_level_fuel_flow_lpm(required_throttle) * fuel_factor
 	return ground_speed / fuel_flow if ground_speed > 0.0 and fuel_flow > 0.0 else -INF
 
 func _near_optimal_range(scores: PackedFloat32Array, best_index: int, best_score: float, minimum: float, step: float) -> Vector2:
@@ -698,6 +708,7 @@ func _draw_controls(rect: Rect2) -> void:
 	var roomy_storms_button: bool = storms_button.size.x >= 80.0
 	var storms_text: String = ("ГРОЗЫ: ВКЛ" if roomy_storms_button else "ГР: ВКЛ") if host.navigation_map.weather_briefing_visible else ("ГРОЗЫ: ВЫКЛ" if roomy_storms_button else "ГР: ВЫКЛ")
 	_draw_cockpit_action_button(storms_button, storms_text)
+	_draw_cockpit_action_button(get_theme_button_rect(), "ТЕМА: ТЁМНАЯ" if host.VisualTheme.dark else "ТЕМА: СВЕТЛАЯ")
 	_draw_time_controls(false)
 
 func _draw_cockpit_action_button(rect: Rect2, label: String, indicator: Color = Color.TRANSPARENT, enabled: bool = true) -> void:
@@ -766,6 +777,10 @@ func get_engine_button_rect() -> Rect2:
 
 func get_cabin_button_rect() -> Rect2:
 	return _split_cockpit_action_rect(_left_cockpit_action_area(), 0, 3)
+
+func get_theme_button_rect() -> Rect2:
+	var area := _left_cockpit_action_area()
+	return Rect2(area.position + Vector2(0, area.size.y + 5), Vector2(area.size.x, 24))
 
 func get_power_button_rect() -> Rect2:
 	return _split_cockpit_action_rect(_right_cockpit_action_area(), 0)
