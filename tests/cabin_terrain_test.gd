@@ -58,7 +58,21 @@ func _run() -> void:
 	check(not approach_airport_view.is_empty() and float(approach_airport_view.start_m) > 250.0, "Runway must enter the side view ahead on final approach")
 	var runway_right := Vector2(approach_direction.y, -approach_direction.x)
 	scene.flight.position_km += runway_right * 0.1
-	check(scene._cabin_visible_airport().is_empty(), "Side view must not invent a runway when the flight path misses it")
+	var nearby_airport: Dictionary = scene._cabin_visible_airport()
+	check(not nearby_airport.is_empty() and is_equal_approx(nearby_airport.size_scale, 1.0), "A near-miss within 100 m of the runway edge must show the airport at full size")
+	scene.flight.position_km = Vector2(airport.position) + runway_right * 0.4
+	nearby_airport = scene._cabin_visible_airport()
+	check(not nearby_airport.is_empty() and nearby_airport.size_scale > 0.0 and nearby_airport.size_scale < 1.0, "A laterally distant airport must appear at reduced size")
+	for zoom in [0, 1, 3]:
+		scene.cabin_terrain_zoom = zoom
+		scene._update_cabin_terrain_profile()
+		scene.queue_redraw()
+		await process_frame
+		await process_frame
+	scene.flight.position_km = Vector2(airport.position) + runway_right * 1.1
+	check(scene._cabin_visible_airport().is_empty(), "Airports beyond 1 km from the runway edge must be hidden")
+	var oblique_projection: Dictionary = scene.side_scenes._side_airport_projection(Vector2.ZERO, Vector2(1, 1).normalized())
+	check(is_zero_approx(oblique_projection.lateral_km), "A path crossing the runway at an angle must have zero lateral separation")
 	scene.cabin_terrain_zoom = 0
 	scene.flight.state = scene.FlightModelScript.State.FLYING
 	scene.flight.position_km = Vector2(50, 50)
@@ -108,6 +122,7 @@ func _run() -> void:
 	key.pressed = true
 	scene._input(key)
 	check(scene.cabin_terrain_zoom == 0 and scene.view_mode == scene.ViewMode.CABIN, "Enter must restore cabin without activating its hotspots")
+	_test_side_airport_positions(scene)
 	await _test_side_beacons(scene)
 	print("Cabin terrain, zoom, visibility and input: ", "FAIL" if failed else "OK")
 	for zoom in range(4):
@@ -120,6 +135,50 @@ func _run() -> void:
 		check(is_equal_approx(after - before, 0.2 * scene._cabin_weather_scale()), "Crossing cloud base must move boundary continuously at current scale")
 	print("Cloud base continuity at all four zooms: ", "FAIL" if failed else "OK")
 	quit(1 if failed else 0)
+
+func _test_side_airport_positions(scene) -> void:
+	var airport: Dictionary = scene.world.airports[0]
+	var forward: Vector2 = scene.world.heading_vector(float(airport.heading))
+	var right := Vector2(forward.y, -forward.x)
+	scene.flight.state = scene.FlightModelScript.State.FLYING
+	scene.flight.position_km = Vector2(airport.position)
+	scene.flight.speed_kmh = 100.0
+	scene.flight.current_wind_kmh = Vector2.ZERO
+	var offset := Vector2(-52, 55)
+	for angle in [0.0, 45.0, 90.0, 180.0]:
+		scene.flight.heading_deg = float(airport.heading) + angle
+		var direction: Vector2 = scene._cabin_ground_direction() * (1.0 if scene._aircraft_mirrored() else -1.0)
+		var projected: Dictionary = scene.side_scenes._side_airport_landmark_projection(airport, offset)
+		var relative := forward * offset.x + right * offset.y
+		var runway_view: Dictionary = scene._cabin_visible_airport()
+		var interval: Vector2 = scene.side_scenes._line_runway_interval(Vector2.ZERO, Vector2(forward.dot(direction), right.dot(direction)))
+		check(not runway_view.is_empty() and absf(float(runway_view.runway_end_m) - float(runway_view.runway_start_m) - (interval.y - interval.x) * 1000.0) < 0.1, "Crossing runway must retain the short ground-track intersection")
+		check(bool(runway_view.crossing_view) == (angle == 45.0 or angle == 90.0), "Oblique crossings must use a single stripe and a cluster beside the runway")
+		if runway_view.crossing_view:
+			var rect := Rect2(36, 115, 1208, 600)
+			var anchor := rect.get_center()
+			var layout: Dictionary = scene.side_scenes.landmarks._airport_cluster_layout(runway_view, rect, anchor, 1.0)
+			var minimum_x := INF
+			var maximum_x := -INF
+			for item in layout.buildings + [layout.tower]:
+				var centre_x := anchor.x + float(item.centre_m) + float(layout.shift_px)
+				minimum_x = minf(minimum_x, centre_x - 25.0 * float(item.size_scale))
+				maximum_x = maxf(maximum_x, centre_x + 25.0 * float(item.size_scale))
+			check(minimum_x >= anchor.x + float(runway_view.runway_end_m) + 11.9 or maximum_x <= anchor.x + float(runway_view.runway_start_m) - 11.9, "Side-on airport cluster must remain outside the runway with a gap")
+			var previous_lateral := INF
+			for item in layout.buildings:
+				check(float(item.lateral_km) <= previous_lateral, "Overlapping buildings must be drawn from farthest to nearest")
+				previous_lateral = float(item.lateral_km)
+		check(absf(float(projected.centre_m) - relative.dot(direction)) < 0.03, "Airport buildings must follow fixed world positions at every crossing angle")
+		check(absf(float(projected.lateral_km) * 1000.0 - absf(relative.cross(direction))) < 0.03, "Each airport building must use its own lateral distance")
+		scene.flight.position_km += direction * 0.05
+		var moved: Dictionary = scene.side_scenes._side_airport_landmark_projection(airport, offset)
+		check(absf(float(moved.centre_m) - float(projected.centre_m) + 50.0) < 0.03, "Fixed airport buildings must move backwards with aircraft motion")
+		scene.flight.position_km = Vector2(airport.position)
+	scene.flight.heading_deg = float(airport.heading)
+	scene.flight.position_km += right * 0.5
+	var distant: Dictionary = scene.side_scenes._side_airport_landmark_projection(airport, offset)
+	check(distant.size_scale > 0.0 and distant.size_scale < 1.0, "Airport buildings must shrink according to their individual lateral distance")
 
 func _test_side_beacons(scene) -> void:
 	var saved_beacons: Array = scene.world.beacons.duplicate(true)
@@ -139,6 +198,7 @@ func _test_side_beacons(scene) -> void:
 	])
 	var visible: Array[Dictionary] = scene.side_scenes._cabin_visible_beacons()
 	check(visible.size() == 1, "Nearby standalone beacon must be visible; airport beacon must not be duplicated")
+	check(is_equal_approx(visible[0].size_scale, 1.0), "Beacon within 100 m must keep its full size")
 	var centre: float = visible[0].centre_m
 	scene.flight.position_km += direction * 0.05
 	visible = scene.side_scenes._cabin_visible_beacons()
@@ -151,7 +211,17 @@ func _test_side_beacons(scene) -> void:
 		await process_frame
 	scene.cabin_terrain_zoom = 1
 	scene.world.beacons[0].position = scene.flight.position_km + right * 0.15
-	check(scene.side_scenes._cabin_visible_beacons().is_empty(), "Beacon outside the 100 m lateral corridor must be hidden")
+	visible = scene.side_scenes._cabin_visible_beacons()
+	check(visible.size() == 1 and visible[0].size_scale > 0.0 and visible[0].size_scale < 1.0, "Beacon beyond 100 m must remain visible at reduced size")
+	var previous_scale := 1.0
+	for lateral in [0.1, 0.172, 0.3, 0.75, 0.9, 0.999]:
+		var scale: float = scene.side_scenes._side_beacon_size_scale(lateral)
+		check(scale > 0.0 and scale <= previous_scale, "Beacon size must decrease smoothly with lateral distance")
+		check(is_equal_approx(scale, scene.side_scenes._side_beacon_size_scale(-lateral)), "Visibility must be symmetric on both sides of the aircraft")
+		previous_scale = scale
+	check(previous_scale < 0.0001, "Beacon must shrink to nearly zero before the cutoff")
+	scene.world.beacons[0].position = scene.flight.position_km + right * 1.01
+	check(scene.side_scenes._cabin_visible_beacons().is_empty(), "Beacon beyond 1 km laterally must be hidden")
 	scene.world.beacons[0].position = scene.flight.position_km + direction * 2.0
 	check(scene.side_scenes._cabin_visible_beacons().is_empty(), "Beacon outside the view span must be hidden")
 	scene.world.beacons[0].position = scene.flight.position_km

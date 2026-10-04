@@ -53,7 +53,7 @@ func _run() -> void:
 	shell.save_path = settings_path + ".save"
 	root.add_child(shell)
 	await process_frame
-	check(button_texts(shell) == ["New game", "Landing practice", "About", "Language", "Credits", "Quit"], "The title menu must restore and display English: %s" % [button_texts(shell)])
+	check(button_texts(shell) == ["New game", "Landing practice", "About", "Settings", "Credits", "Quit"], "The title menu must restore and display English: %s" % [button_texts(shell)])
 	shell._open_about()
 	var about_links: Array[Node] = shell.content.find_children("*", "LinkButton", true, false)
 	check(about_links.size() == 1 and about_links[0].uri == shell.README_URL_EN, "English About must link to the English README")

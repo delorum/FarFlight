@@ -237,7 +237,7 @@ func arrive_at_airport(airport_index: int, world) -> void:
 	world_ref = world
 	if airport_index not in visited_airports:
 		visited_airports.append(airport_index)
-	mail.arrive_at_airport(airport_index, world, elapsed_seconds, _make_mail_offer)
+	mail.arrive_at_airport(airport_index, world, _make_mail_offer)
 
 func _make_mail_offer(origin: int, destination: int, parcel_id: int, world) -> Dictionary:
 	var direct_distance: float = Vector2(world.airports[origin].position).distance_to(Vector2(world.airports[destination].position))
@@ -521,4 +521,7 @@ func restore(data: Dictionary, world = null) -> bool:
 		for offer_index in offers.size():
 			if offers[offer_index] is Dictionary:
 				offers[offer_index] = _normalize_saved_parcel(offers[offer_index])
+	if world != null:
+		for origin in offers_by_airport.keys():
+			mail.ensure_all_offers(int(origin), world, _make_mail_offer)
 	return true

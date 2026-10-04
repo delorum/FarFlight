@@ -1,4 +1,5 @@
 extends RefCounted
+const Palette = preload("res://scripts/ui_palette.gd")
 const UILayout = preload("res://scripts/ui_layout.gd")
 const ViewMode = preload("res://scripts/scene_modes.gd").ViewMode
 const Localization = preload("res://scripts/localization.gd")
@@ -22,9 +23,9 @@ const ILS_CAPTURE_ARC_SEGMENTS := 12
 const INITIAL_MAP_RADIUS_KM := 40.0
 const SAMPLE_GRID := 192
 const CONTOUR_STEP_M := 250.0
-const MEASUREMENT_COLOR := Color("254d9a")
-const LINKED_MEASUREMENT_COLOR := Color("c46f24")
-const ACTIVE_LINKED_MEASUREMENT_COLOR := Color("b72f29")
+const MEASUREMENT_COLOR := Palette.ROUTE
+const LINKED_MEASUREMENT_COLOR := Palette.LINKED_ROUTE
+const ACTIVE_LINKED_MEASUREMENT_COLOR := Palette.ACTIVE_ROUTE
 var host: Control
 var map_zoom := 1.0
 var map_center := Vector2.ONE * FlightWorldScript.SIZE_KM * 0.5
@@ -214,7 +215,7 @@ func _clamp_measurement_screen(point: Vector2) -> Vector2:
 
 func _draw_radar_measurements(canvas: CanvasItem) -> void:
 	for line in radar_measurement_lines:
-		_draw_radar_measurement(canvas, line.a, line.b, Color("e8d274"))
+		_draw_radar_measurement(canvas, line.a, line.b, Palette.WARNING)
 
 func _draw_radar_course_guidance(canvas: CanvasItem) -> void:
 	var guidance := radar_course_guidance()
@@ -238,8 +239,8 @@ func _guidance_color(value: float, precise_limit: float, caution_limit: float) -
 	if value <= precise_limit:
 		return Color("65d48c")
 	if value <= caution_limit:
-		return Color("e8d274")
-	return Color("ef645e")
+		return Palette.WARNING
+	return Palette.ERROR
 
 func radar_course_guidance() -> Dictionary:
 	if radar_measurement_lines.is_empty():
@@ -378,8 +379,8 @@ func _draw_map() -> void:
 
 func _draw_map_base() -> void:
 	var rect = map_rect()
-	map_canvas.draw_rect(rect, Color("d7d0ad"), true)
-	map_canvas.draw_rect(rect, Color("6d6751"), false, 2.0)
+	map_canvas.draw_rect(rect, Palette.PAPER, true)
+	map_canvas.draw_rect(rect, Palette.MAP_FRAME, false, 2.0)
 	# 10 km coordinate grid.
 	for k in range(0, int(FlightWorldScript.SIZE_KM) + 1, 10):
 		var a = world_to_screen(Vector2(k, 0))
@@ -409,13 +410,13 @@ func _draw_map_overlay() -> void:
 		var highlighted: bool = line_id == highlighted_line_id
 		_draw_measurement(line.a, line.b, measurement_line_color(linked, highlighted), line.get("max_height_m", -1.0), linked, highlighted, line_id)
 	if pending_measure != null:
-		_draw_measurement(pending_measure, _snap_map_point(host.get_local_mouse_position()), Color(0.1, 0.25, 0.7, 0.55))
+		_draw_measurement(pending_measure, _snap_map_point(host.get_local_mouse_position()), MEASUREMENT_COLOR)
 	_draw_completed_flight_trajectory()
 	_draw_exit_portal()
 	host._draw_economy_hud(map_canvas, false)
 	_draw_hovered_weather_storm_motion(rect)
 	_draw_hovered_airport_services(rect)
-	Localization.draw_string(map_canvas,ThemeDB.fallback_font, rect.position + Vector2(10, 20), "НАВИГАЦИОННАЯ КАРТА", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("35372e"))
+	Localization.draw_string(map_canvas,ThemeDB.fallback_font, rect.position + Vector2(10, 20), "НАВИГАЦИОННАЯ КАРТА", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Palette.MAP_TEXT)
 	var wind_altitude_label: String
 	if wind_overlay_index == WIND_OVERLAY_ALTITUDES.size():
 		wind_altitude_label = "текущая %.0f м" % host.flight.altitude_m
@@ -424,7 +425,7 @@ func _draw_map_overlay() -> void:
 	else:
 		wind_altitude_label = "%d м" % roundi(float(WIND_OVERLAY_ALTITUDES[wind_overlay_index]))
 	var wind_hint = "V: ветер [%s]" % wind_altitude_label
-	Localization.draw_string(map_canvas,ThemeDB.fallback_font, rect.position + Vector2(10, 39), "Метеосводка: возраст %s" % weather_briefing_age_text(), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("55574a"))
+	Localization.draw_string(map_canvas,ThemeDB.fallback_font, rect.position + Vector2(10, 39), "Метеосводка: возраст %s" % weather_briefing_age_text(), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Palette.MAP_HINT)
 	var map_hints = [
 		wind_hint,
 		"ЛКМ: точка/линия",
@@ -434,12 +435,12 @@ func _draw_map_overlay() -> void:
 		"Колесо над приёмником: 1 кГц, с Shift: 10 кГц",
 	]
 	for hint_index in map_hints.size():
-		Localization.draw_string(map_canvas,ThemeDB.fallback_font, rect.position + Vector2(10, 58 + hint_index * 17), map_hints[hint_index], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("55574a"))
+		Localization.draw_string(map_canvas,ThemeDB.fallback_font, rect.position + Vector2(10, 58 + hint_index * 17), map_hints[hint_index], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Palette.MAP_HINT)
 	var scale_km = 10.0
 	var scale_px = scale_km * pixels_per_km()
 	var scale_start = rect.end - Vector2(scale_px + 18, 18)
-	map_canvas.draw_line(scale_start, scale_start + Vector2(scale_px, 0), Color("25271f"), 3)
-	Localization.draw_string(map_canvas,ThemeDB.fallback_font, scale_start - Vector2(0, 6), "10 км", HORIZONTAL_ALIGNMENT_CENTER, scale_px, 12, Color("25271f"))
+	map_canvas.draw_line(scale_start, scale_start + Vector2(scale_px, 0), Palette.MAP_SCALE, 3)
+	Localization.draw_string(map_canvas,ThemeDB.fallback_font, scale_start - Vector2(0, 6), "10 км", HORIZONTAL_ALIGNMENT_CENTER, scale_px, 12, Palette.MAP_SCALE)
 
 func _draw_contours_batched(rect: Rect2) -> void:
 	# One transform and two draw calls, rather than repeated layout queries and
@@ -466,9 +467,9 @@ func _draw_contours_batched(rect: Rect2) -> void:
 			minor.append(clipped[0])
 			minor.append(clipped[1])
 	if not minor.is_empty():
-		map_canvas.draw_multiline(minor, Color("806f4b"), 1.0)
+		map_canvas.draw_multiline(minor, Palette.CONTOUR, 1.0)
 	if not major.is_empty():
-		map_canvas.draw_multiline(major, Color("5c4b31"), 1.7)
+		map_canvas.draw_multiline(major, Palette.MAP_INK, 1.7)
 
 func _visible_contour_segments(rect: Rect2) -> Array[Dictionary]:
 	var scale := pixels_per_km()
@@ -481,7 +482,7 @@ func _draw_exit_portal() -> void:
 	if not map_rect().grow(-6.0).has_point(point):
 		return
 	var color := Color("784a91")
-	map_canvas.draw_circle(point, 9.0, Color("d7d0ad"))
+	map_canvas.draw_circle(point, 9.0, Palette.PAPER)
 	map_canvas.draw_arc(point, 9.0, 0.0, TAU, 24, color, 2.5, true)
 	var direction := Vector2.ZERO
 	match String(host.world.exit_portal.side):
@@ -505,8 +506,8 @@ func _draw_hovered_airport_services(rect: Rect2) -> void:
 		var localized_text := Localization.text(text)
 		var measured_width := ThemeDB.fallback_font.get_string_size(localized_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
 		var background_width := minf(rect.size.x - 16, ceilf(measured_width) + 12.0)
-		map_canvas.draw_rect(Rect2(rect.position.x + 8, rect.end.y - 47, background_width, 25), Color("d7d0ad"), true)
-		Localization.draw_string(map_canvas,ThemeDB.fallback_font, Vector2(rect.position.x + 14, rect.end.y - 29), text, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 28, 12, Color("35372e"))
+		map_canvas.draw_rect(Rect2(rect.position.x + 8, rect.end.y - 47, background_width, 25), Palette.PAPER, true)
+		Localization.draw_string(map_canvas,ThemeDB.fallback_font, Vector2(rect.position.x + 14, rect.end.y - 29), text, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 28, 12, Palette.MAP_TEXT)
 
 func map_footer_text_at(screen_position: Vector2) -> String:
 	if large_weather_radar or not map_rect().has_point(screen_position):
@@ -579,7 +580,7 @@ func _draw_hovered_weather_storm_motion(rect: Rect2) -> void:
 	var label_size := ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12)
 	var label_rect := WeatherRadarArt.storm_motion_label_rect(rect, origin, tip, label_size)
 	if label_rect.has_area():
-		map_canvas.draw_rect(label_rect, Color("d7d0ad"), true)
+		map_canvas.draw_rect(label_rect, Palette.PAPER, true)
 		map_canvas.draw_rect(label_rect, Color(0.19, 0.37, 0.39, 0.45), false, 1.0)
 		Localization.draw_string(map_canvas,ThemeDB.fallback_font, label_rect.position + Vector2(4, 13), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, color)
 
@@ -850,7 +851,7 @@ func _draw_contour_labels(rect: Rect2) -> void:
 		var label = Localization.text("%d м" % level)
 		var text_size = ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
 		var background = Rect2(midpoint - Vector2(text_size.x * 0.5 + 3.0, 9.0), text_size + Vector2(6.0, 3.0))
-		map_canvas.draw_rect(background, Color("d7d0ad"), true)
+		map_canvas.draw_rect(background, Palette.PAPER, true)
 		Localization.draw_string(map_canvas,ThemeDB.fallback_font, midpoint + Vector2(-text_size.x * 0.5, 4.0), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("55462f"))
 		positions.append(midpoint)
 
@@ -915,7 +916,7 @@ func _draw_approach_direction(airport: Dictionary, approach_sign: float) -> void
 			point + Vector2(0, -6), point + Vector2(6, 0),
 			point + Vector2(0, 6), point + Vector2(-6, 0),
 		])
-		map_canvas.draw_colored_polygon(diamond, Color("d7d0ad"))
+		map_canvas.draw_colored_polygon(diamond, Palette.PAPER)
 		map_canvas.draw_polyline(PackedVector2Array([diamond[0], diamond[1], diamond[2], diamond[3], diamond[0]]), Color("185f61"), 2.0)
 		var desired_altitude: float = marker.altitude_m
 		var label = Localization.text("%.1f км • %.0f м" % [float(marker.distance_km), desired_altitude])
@@ -923,7 +924,7 @@ func _draw_approach_direction(airport: Dictionary, approach_sign: float) -> void
 		var label_position = point + Vector2(12.0, 4.0)
 		label_position.x = clampf(label_position.x, map_rect().position.x + 4.0, map_rect().end.x - text_size.x - 4.0)
 		label_position.y = clampf(label_position.y, map_rect().position.y + text_size.y + 2.0, map_rect().end.y - 4.0)
-		map_canvas.draw_rect(Rect2(label_position + Vector2(-3, -11), text_size + Vector2(6, 3)), Color("d7d0ad"), true)
+		map_canvas.draw_rect(Rect2(label_position + Vector2(-3, -11), text_size + Vector2(6, 3)), Palette.PAPER, true)
 		Localization.draw_string(map_canvas,ThemeDB.fallback_font, label_position, label, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("185f61"))
 
 func ils_capture_boundary(airport: Dictionary, approach_sign: float) -> Dictionary:
@@ -1101,7 +1102,7 @@ func _draw_rotated_map_label(position: Vector2, line_direction: Vector2, label: 
 	var text_size = ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13)
 	map_canvas.draw_set_transform(position, angle, Vector2.ONE)
 	# Keep a clear gap between the line at local Y=0 and the label above it.
-	map_canvas.draw_rect(Rect2(Vector2(-text_size.x * 0.5 - 3.0, -25.0), text_size + Vector2(6.0, 4.0)), Color("d7d0ad"), true)
+	map_canvas.draw_rect(Rect2(Vector2(-text_size.x * 0.5 - 3.0, -25.0), text_size + Vector2(6.0, 4.0)), Palette.PAPER, true)
 	Localization.draw_string(map_canvas,ThemeDB.fallback_font, Vector2(-text_size.x * 0.5, -13.0), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, color)
 	map_canvas.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
@@ -1110,7 +1111,7 @@ func _draw_horizontal_measurement_label(midpoint: Vector2, line_direction: Vecto
 	var text_size := ThemeDB.fallback_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13)
 	var chart := map_rect()
 	var baseline := _horizontal_measurement_label_baseline(midpoint, line_direction, text_size, chart)
-	map_canvas.draw_rect(Rect2(baseline - Vector2(3.0, text_size.y + 3.0), text_size + Vector2(6.0, 6.0)), Color("d7d0ad"), true)
+	map_canvas.draw_rect(Rect2(baseline - Vector2(3.0, text_size.y + 3.0), text_size + Vector2(6.0, 6.0)), Palette.PAPER, true)
 	Localization.draw_string(map_canvas,ThemeDB.fallback_font, baseline, label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, color)
 
 func _horizontal_measurement_label_baseline(midpoint: Vector2, line_direction: Vector2, text_size: Vector2, chart: Rect2) -> Vector2:

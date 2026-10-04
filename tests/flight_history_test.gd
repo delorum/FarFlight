@@ -48,6 +48,10 @@ func _run() -> void:
 	history.records.append({"origin": 0, "destination": 1, "distance_km": 18.0, "duration_seconds": 42.0, "start_seconds": 500.0, "end_seconds": 542.0})
 	var route := history.route_records(0, 1)
 	check(history.route_count(0, 1) == 2 and route.size() == 2 and route[0].duration_seconds == 42.0 and route[1].duration_seconds == 51.0, "Repeated route flights must sort from the fastest record to the slowest")
+	var index_builds := history.route_index_build_count
+	for lookup in 1000:
+		check(history.route_count(0, 1, 0) == 2, "Cached route counts must match journal records")
+	check(history.route_index_build_count == index_builds, "Repeated UI queries must not rebuild the route index")
 	history.active = true
 	history.active_origin = 1
 	history.active_start_seconds = 800.0
@@ -55,6 +59,9 @@ func _run() -> void:
 	var snapshot := history.snapshot()
 	var restored := FlightHistory.new()
 	check(FlightHistory.valid_snapshot(snapshot, world.airports.size()) and restored.restore_snapshot(snapshot, world.airports.size()) and restored.snapshot() == snapshot, "Completed and airborne flight history must survive a save round trip")
+	check(restored.route_count(0, 1, 0) == 2, "Loading must rebuild route counts from the restored journal")
+	restored.reset()
+	check(restored.route_count(0, 1, 0) == 0, "Resetting must invalidate cached route counts")
 	var cross_world := FlightHistory.new()
 	world.level_index = 0
 	flight.state = FlightModel.State.FLYING
@@ -87,6 +94,10 @@ func _run() -> void:
 	root.add_child(scene)
 	await process_frame
 	scene.set_process(false)
+	scene.side_scenes.history_selected = 3
+	check(scene.side_scenes.history_view.history_selected == 3, "History selection must have one owner in the extracted view")
+	scene.side_scenes.history_view.history_selected = 0
+	check(scene.side_scenes.history_selected == 0, "Compatibility accessors must not keep a second selection")
 	var sample := {"distance_km": 75.0, "duration_seconds": 1800.0, "start_seconds": 0.0, "end_seconds": 1800.0}
 	check(scene.side_scenes._format_history_details(sample).contains("00:30:00 • СР. 150.0 км/ч"), "History must show distance divided by elapsed hours directly after duration")
 	sample.duration_seconds = 0.0

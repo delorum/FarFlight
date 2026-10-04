@@ -874,27 +874,12 @@ func _refuel_from_carried_canister() -> void:
 		scene_notice = "Перелито %.1f л • в баке %.1f/%.0f л" % [moved, flight.fuel_l, flight.fuel_capacity_l]
 
 func _handle_economy_click(position: Vector2) -> void:
-	if _economy_button_rect(5).has_point(position):
+	if side_scenes._economy_exit_rect().has_point(position):
 		_leave_current_scene()
 		return
 	match view_mode:
 		ViewMode.MAIL:
-			var row := 0
-			if economy.carried_item.get("type", "") == "parcel" and int(economy.carried_item.get("destination", -1)) == flight.airport_index:
-				if _economy_button_rect(row).has_point(position):
-					var delivery: Dictionary = economy.deliver_carried(flight.airport_index)
-					if economy.deliveries_on_map >= EconomyScript.DELIVERIES_TO_UNLOCK_EXIT and world.exit_portal.is_empty():
-						world.ensure_exit_portal()
-						_queue_map_redraw()
-					scene_notice = "Доставлено: +%d монет • переход открыт на карте" % delivery.paid if not world.exit_portal.is_empty() and economy.deliveries_on_map == EconomyScript.DELIVERIES_TO_UNLOCK_EXIT else "Доставлено: +%d монет • %d/16" % [delivery.paid, economy.deliveries_on_map]
-					return
-				row += 1
-			var offers: Array = economy.offers_at(flight.airport_index)
-			for index in offers.size():
-				if _economy_button_rect(row + index).has_point(position):
-					var parcel: Dictionary = economy.accept_offer(flight.airport_index, index)
-					scene_notice = "Посылка получена — отнесите её в самолёт" if not parcel.is_empty() else "Сначала освободите руки"
-					return
+			side_scenes.mail_view.handle_click(position)
 		ViewMode.CAFE:
 			if _economy_button_rect(0).has_point(position):
 				scene_notice = "Еда куплена — отнесите её в самолёт" if economy.buy_food(flight.airport_index) else "Не хватает денег или руки заняты"
@@ -1232,6 +1217,12 @@ func localization_changed() -> void:
 	navigation_map._queue_map_redraw()
 	queue_redraw()
 
+func visual_theme_changed() -> void:
+	flight_calculator.refresh_visual_theme()
+	map_render_layer.invalidate_base()
+	navigation_map._queue_map_redraw()
+	queue_redraw()
+
 func _draw_economy_hud(canvas: CanvasItem, dark: bool) -> void:
 	if economy == null:
 		return
@@ -1470,14 +1461,6 @@ func _gui_input(event: InputEvent) -> void:
 		_handle_mouse_motion(event)
 
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
-	# Appearance is independent of aircraft control, time acceleration or death.
-	if view_mode == ViewMode.COCKPIT and event.button_index == MOUSE_BUTTON_LEFT and event.pressed and instrument_panel.get_theme_button_rect().has_point(event.position):
-		VisualTheme.set_dark(not VisualTheme.dark)
-		flight_calculator.refresh_visual_theme()
-		map_render_layer.invalidate_base()
-		navigation_map._queue_map_redraw()
-		queue_redraw()
-		return
 	if flight.state == FlightModelScript.State.CRASHED and view_mode not in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY] and (view_mode != ViewMode.COCKPIT or not (map_rect().has_point(event.position) or get_trajectory_button_rect().has_point(event.position))):
 		return
 	if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
@@ -1492,6 +1475,11 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	var map_interaction := view_mode == ViewMode.COCKPIT and map_rect().has_point(event.position)
 	if event.pressed and not map_interaction:
 		_reset_time_scale_for_action()
+	if _handle_side_scene_mouse_button(event):
+		return
+	_handle_cockpit_mouse_button(event)
+
+func _handle_side_scene_mouse_button(event: InputEventMouseButton) -> bool:
 	if event.button_index == MOUSE_BUTTON_LEFT and _fuel_slider_is_active():
 		var slider_origin: Vector2 = _active_fuel_slider_origin()
 		if event.pressed and _fuel_slider_rect(slider_origin).has_point(event.position):
@@ -1499,12 +1487,12 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 			_set_fuel_amount_from_mouse(event.position, slider_origin)
 			scene_notice = ""
 			queue_redraw()
-			return
+			return true
 		if not event.pressed and dragging_fuel_slider:
 			_set_fuel_amount_from_mouse(event.position, slider_origin, true)
 			dragging_fuel_slider = false
 			queue_redraw()
-			return
+			return true
 	if view_mode == ViewMode.CABIN and event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
 		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN and _can_view_cabin_terrain():
 			cabin_terrain_zoom = mini(3, cabin_terrain_zoom + 1)
@@ -1513,7 +1501,7 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		if cabin_terrain_zoom > 0:
 			_update_cabin_terrain_profile()
 		queue_redraw()
-		return
+		return true
 	if view_mode == ViewMode.OPERATIONS:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			if get_building_exit_rect().has_point(event.position):
@@ -1527,23 +1515,27 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 			elif get_operations_runway_rect(true).has_point(event.position):
 				_pay_and_prepare(true)
 			queue_redraw()
-		return
+		return true
 	if view_mode in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY]:
-		if event is InputEventMouseButton:
-			side_scenes.handle_history_mouse(event)
-		return
+		side_scenes.handle_history_mouse(event)
+		return true
 	if view_mode in [ViewMode.MAIL, ViewMode.CAFE, ViewMode.HOTEL, ViewMode.FUEL, ViewMode.REPAIR]:
+		if view_mode == ViewMode.MAIL:
+			side_scenes.handle_mail_scroll(event)
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			_handle_economy_click(event.position)
-			queue_redraw()
-		return
+		queue_redraw()
+		return true
 	if view_mode != ViewMode.COCKPIT:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			if view_mode == ViewMode.CABIN and _handle_inventory_click(event.position):
 				queue_redraw()
-				return
+				return true
 			_click_side_scene(event.position)
-		return
+		return true
+	return false
+
+func _handle_cockpit_mouse_button(event: InputEventMouseButton) -> void:
 	var mrect := map_rect()
 	if event.button_index == MOUSE_BUTTON_LEFT and event.pressed and get_weather_radar_rect().has_point(event.position):
 		_toggle_weather_radar()
@@ -1559,41 +1551,24 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		return
 	if large_ils and mrect.has_point(event.position):
 		return
-	var hovered_receiver := _receiver_at_point(event.position)
-	if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN] and event.pressed and hovered_receiver >= 0:
-		active_receiver = hovered_receiver
-		var wheel_direction := 1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1
-		_tune_receiver_frequency(hovered_receiver, wheel_direction * (10 if event.shift_pressed else 1))
-	elif event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed and mrect.has_point(event.position):
+	_handle_chart_and_controls_mouse_button(event)
+
+func _handle_chart_and_controls_mouse_button(event: InputEventMouseButton) -> void:
+	var mrect := map_rect()
+	if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		map_drag_candidate = false
+		point_drag_candidate = false
+	if _handle_panel_controls_mouse_button(event):
+		_queue_map_redraw()
+		queue_redraw()
+		return
+	if event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed and mrect.has_point(event.position):
 		_zoom_at(event.position, 1.18)
 	elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed and mrect.has_point(event.position):
 		_zoom_at(event.position, 1.0 / 1.18)
 	elif event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
-			map_drag_candidate = false
-			point_drag_candidate = false
-			if get_trip_reset_button_rect().has_point(event.position):
-				_reset_trip_counter()
-			elif get_throttle_rect().has_point(event.position):
-				dragging_throttle = true
-				_update_throttle(event.position)
-			elif get_yoke_rect().has_point(event.position):
-				dragging_yoke = true
-				_update_yoke(event.position)
-			elif get_center_yoke_button_rect().has_point(event.position):
-				flight.yoke = Vector2.ZERO
-			elif get_power_button_rect().has_point(event.position):
-				flight.toggle_electrical_power()
-				invalidate_weather_radar_caches()
-				_queue_map_redraw()
-			elif get_engine_button_rect().has_point(event.position):
-				flight.toggle_engine()
-				_queue_map_redraw()
-			elif get_cabin_button_rect().has_point(event.position):
-				_enter_cabin(true)
-			elif get_trajectory_button_rect().has_point(event.position):
-				_toggle_final_trajectory()
-			elif mrect.has_point(event.position):
+			if mrect.has_point(event.position):
 				if flight_calculator.awaiting_line_binding():
 					navigation_map.bind_calculator_to_line_at(event.position)
 				else:
@@ -1627,6 +1602,40 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 			_erase_nearest_measurement(event.position)
 	_queue_map_redraw()
 	queue_redraw()
+
+func _handle_panel_controls_mouse_button(event: InputEventMouseButton) -> bool:
+	var hovered_receiver := _receiver_at_point(event.position)
+	if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN] and event.pressed and hovered_receiver >= 0:
+		active_receiver = hovered_receiver
+		var wheel_direction := 1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1
+		_tune_receiver_frequency(hovered_receiver, wheel_direction * (10 if event.shift_pressed else 1))
+		return true
+	if event.button_index != MOUSE_BUTTON_LEFT or not event.pressed:
+		return false
+	if get_trip_reset_button_rect().has_point(event.position):
+		_reset_trip_counter()
+	elif get_throttle_rect().has_point(event.position):
+		dragging_throttle = true
+		_update_throttle(event.position)
+	elif get_yoke_rect().has_point(event.position):
+		dragging_yoke = true
+		_update_yoke(event.position)
+	elif get_center_yoke_button_rect().has_point(event.position):
+		flight.yoke = Vector2.ZERO
+	elif get_power_button_rect().has_point(event.position):
+		flight.toggle_electrical_power()
+		invalidate_weather_radar_caches()
+		_queue_map_redraw()
+	elif get_engine_button_rect().has_point(event.position):
+		flight.toggle_engine()
+		_queue_map_redraw()
+	elif get_cabin_button_rect().has_point(event.position):
+		_enter_cabin(true)
+	elif get_trajectory_button_rect().has_point(event.position):
+		_toggle_final_trajectory()
+	else:
+		return false
+	return true
 
 func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 	if flight.state == FlightModelScript.State.CRASHED and view_mode != ViewMode.COCKPIT:

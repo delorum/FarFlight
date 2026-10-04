@@ -5,7 +5,10 @@ const GameVersion = preload("res://scripts/game_version.gd")
 const SessionMode = preload("res://scripts/session_mode.gd")
 const Localization = preload("res://scripts/localization.gd")
 const GAME_SCENE = preload("res://scenes/main.tscn")
-const INK := Color("513e2c")
+const VisualTheme = preload("res://scripts/visual_theme.gd")
+const Palette = preload("res://scripts/ui_palette.gd")
+const DAY_ART = preload("res://assets/title_screen.png")
+const NIGHT_ART_PATH := "res://assets/title_screen_night.png"
 const README_URL_EN := "https://github.com/delorum/FarFlight/blob/main/README.md"
 const README_URL_RU := "https://github.com/delorum/FarFlight/blob/main/README_RU.md"
 const ABOUT := "Вы — почтальон-пилот. Между затерянными аэродромами почтовая авиация связывает людей: посылки, письма и вести издалека должны добраться до адресата. Выбирайте заказы на почте, загружайте самолёт и составляйте выгодные маршруты для нескольких доставок. Дальние заказы оплачиваются лучше.\n\nНо здесь небо почти никогда не бывает ясным. Уже в ста метрах над землёй начинается сплошная облачность. Дальше — полёт по приборам: курс, высота, скорость, сигналы радиомаяков и ваши пометки на карте. Положение самолёта на ней не отмечено — его предстоит определить самому.\n\nУчитывайте ветер, обходите грозы и планируйте остановки: топливо, еда, гостиницы и ремонтные ангары есть не на каждом аэродроме. Канистры и грузы занимают место, пилоту нужно есть и отдыхать, а самолёт постепенно изнашивается — особенно в грозах и при превышении безопасной скорости. Летайте между аэродромами, доставляйте почту и зарабатывайте деньги на новые рейсы."
@@ -17,6 +20,13 @@ var version_label: Label
 var about_open := false
 var authors_open := false
 var language_open := false
+var settings_open := false
+var theme_open := false
+var background: TextureRect
+var background_fill: ColorRect
+var night_art: Texture2D
+var background_gradient: Gradient
+var _background_dark: Variant = null
 var new_game_setup_open := false
 var menu_open := true
 var error_text := ""
@@ -27,6 +37,7 @@ var new_game_seed_field: LineEdit
 
 func _ready() -> void:
 	Localization.initialize(settings_path)
+	VisualTheme.initialize(settings_path)
 	Engine.max_fps = 60
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
 	DisplayServer.window_set_title(Localization.text("Далекий полет — Почтовая авиация"))
@@ -40,16 +51,23 @@ func _build_background() -> void:
 	menu_root = Control.new()
 	menu_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(menu_root)
-	var background := TextureRect.new()
-	background.texture = load("res://assets/title_screen.png")
+	# The menu remains usable if a generated optional asset is unavailable.
+	if ResourceLoader.exists(NIGHT_ART_PATH):
+		night_art = load(NIGHT_ART_PATH)
+	background_fill = ColorRect.new()
+	background_fill.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	background_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	menu_root.add_child(background_fill)
+	background = TextureRect.new()
+	background.name = "MenuArtwork"
 	background.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	menu_root.add_child(background)
-	var gradient := Gradient.new()
+	background_gradient = Gradient.new()
+	var gradient := background_gradient
 	gradient.offsets = PackedFloat32Array([0.0, 0.42, 0.75, 1.0])
-	gradient.colors = PackedColorArray([Color(0.90,0.85,0.72,0.91),Color(0.90,0.85,0.72,0.66),Color(0.90,0.85,0.72,0.06),Color(0.90,0.85,0.72,0.0)])
 	var texture := GradientTexture2D.new()
 	texture.gradient = gradient
 	texture.fill_from = Vector2.ZERO
@@ -69,10 +87,29 @@ func _build_background() -> void:
 	version_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	menu_root.add_child(version_label)
 
+func _menu_ink() -> Color:
+	return Palette.PAPER if VisualTheme.dark else Palette.MENU_INK
+
+func _refresh_background_theme() -> void:
+	# Artwork and gradient change only on a preference change, never per frame.
+	if background == null or _background_dark == VisualTheme.dark:
+		return
+	_background_dark = VisualTheme.dark
+	background_fill.color = Palette.background(VisualTheme.dark)
+	background.texture = night_art if VisualTheme.dark else DAY_ART
+	var veil_color := Palette.DARK_BACKGROUND if VisualTheme.dark else Palette.MENU_VEIL_LIGHT
+	var opacities := [0.94, 0.78, 0.15, 0.0] if VisualTheme.dark else [0.91, 0.66, 0.06, 0.0]
+	var colors := PackedColorArray()
+	for opacity in opacities:
+		colors.append(Color(veil_color, opacity))
+	background_gradient.colors = colors
+	if version_label != null:
+		version_label.add_theme_color_override("font_color", _menu_ink())
+
 func _label(text: String, font_size: int) -> Label:
 	var label := Label.new()
 	label.text = Localization.text(text)
-	label.add_theme_color_override("font_color", INK)
+	label.add_theme_color_override("font_color", _menu_ink())
 	label.add_theme_font_size_override("font_size", font_size)
 	return label
 
@@ -85,14 +122,14 @@ func _button(text: String, action: Callable, disabled := false) -> Button:
 	button.add_theme_font_size_override("font_size", 21)
 	for state in ["normal", "hover", "pressed", "disabled", "focus"]:
 		var style := StyleBoxFlat.new()
-		style.bg_color = Color(0.93,0.89,0.79,0.52 if state in ["hover","focus"] else 0.12)
-		style.border_color = Color(0.40,0.29,0.18,0.5 if state == "focus" else 0.22)
+		style.bg_color = Color(Palette.HOVER_DARK if VisualTheme.dark else Palette.MENU_FILL_LIGHT, (0.72 if VisualTheme.dark else 0.52) if state in ["hover","focus"] else (0.40 if VisualTheme.dark else 0.12))
+		style.border_color = Color(Palette.PAPER if VisualTheme.dark else Palette.MENU_BORDER_LIGHT, 0.5 if state == "focus" else 0.22)
 		style.border_width_bottom = 1
 		style.content_margin_left = 14
 		style.content_margin_right = 14
 		button.add_theme_stylebox_override(state, style)
-		button.add_theme_color_override("font_" + state + "_color", Color(0.36,0.30,0.24,0.4) if state == "disabled" else INK)
-	button.add_theme_color_override("font_color", INK)
+		button.add_theme_color_override("font_" + state + "_color", Color(Palette.PAPER if VisualTheme.dark else Palette.MENU_DISABLED_LIGHT, 0.4) if state == "disabled" else _menu_ink())
+	button.add_theme_color_override("font_color", _menu_ink())
 	button.pressed.connect(action)
 	content.add_child(button)
 	return button
@@ -101,13 +138,14 @@ func _link(text: String, url: String, parent: Node = null) -> LinkButton:
 	var link := LinkButton.new()
 	link.text = Localization.text(text)
 	link.uri = url
-	link.add_theme_color_override("font_color", INK)
-	link.add_theme_color_override("font_hover_color", Color("8a552f"))
+	link.add_theme_color_override("font_color", _menu_ink())
+	link.add_theme_color_override("font_hover_color", Palette.WARNING if VisualTheme.dark else Palette.MENU_LINK_LIGHT)
 	link.add_theme_font_size_override("font_size", 20)
 	(parent if parent != null else content).add_child(link)
 	return link
 
 func _rebuild_menu() -> void:
+	_refresh_background_theme()
 	if content != null:
 		content.hide()
 		content.queue_free()
@@ -146,6 +184,16 @@ func _rebuild_menu() -> void:
 		_button(("✓ " if Localization.language == Localization.RUSSIAN else "") + Localization.text("Русский"), _select_language.bind(Localization.RUSSIAN))
 		_button(("✓ " if Localization.language == Localization.ENGLISH else "") + Localization.text("Английский"), _select_language.bind(Localization.ENGLISH))
 		_button("Назад", _close_language)
+	elif theme_open:
+		content.add_child(_label("ТЕМА", 22))
+		_button(("✓ " if not VisualTheme.dark else "") + Localization.text("Светлая"), _select_theme.bind(false))
+		_button(("✓ " if VisualTheme.dark else "") + Localization.text("Тёмная"), _select_theme.bind(true))
+		_button("Назад", _close_theme)
+	elif settings_open:
+		content.add_child(_label("НАСТРОЙКИ", 22))
+		_button("Язык", _open_language)
+		_button("Тема оформления", _open_theme)
+		_button("Назад", _close_settings)
 	elif new_game_setup_open:
 		content.add_child(_label("НОВАЯ ИГРА", 22))
 		var seed_help := _label("Введите seed от 1 до 2147483647, чтобы воспроизвести тот же мир. Оставьте поле пустым для случайного seed.", 16)
@@ -158,13 +206,13 @@ func _rebuild_menu() -> void:
 		new_game_seed_field.max_length = 10
 		new_game_seed_field.custom_minimum_size.y = 48
 		new_game_seed_field.add_theme_font_size_override("font_size", 19)
-		new_game_seed_field.add_theme_color_override("font_color", INK)
-		new_game_seed_field.add_theme_color_override("font_placeholder_color", Color(0.32, 0.25, 0.18, 0.55))
-		new_game_seed_field.add_theme_color_override("caret_color", INK)
+		new_game_seed_field.add_theme_color_override("font_color", _menu_ink())
+		new_game_seed_field.add_theme_color_override("font_placeholder_color", Color(Palette.PAPER if VisualTheme.dark else Palette.MENU_PLACEHOLDER_LIGHT, 0.55))
+		new_game_seed_field.add_theme_color_override("caret_color", _menu_ink())
 		for state in ["normal", "focus", "read_only"]:
 			var field_style := StyleBoxFlat.new()
-			field_style.bg_color = Color(0.93, 0.89, 0.79, 0.66)
-			field_style.border_color = Color(0.40, 0.29, 0.18, 0.55 if state == "focus" else 0.28)
+			field_style.bg_color = Color(Palette.HOVER_DARK if VisualTheme.dark else Palette.MENU_FILL_LIGHT, 0.88 if VisualTheme.dark else 0.66)
+			field_style.border_color = Color(Palette.PAPER if VisualTheme.dark else Palette.MENU_BORDER_LIGHT, 0.55 if state == "focus" else 0.28)
 			field_style.set_border_width_all(1)
 			field_style.content_margin_left = 12
 			field_style.content_margin_right = 12
@@ -179,13 +227,14 @@ func _rebuild_menu() -> void:
 			content.add_child(_label("ПОСАДКА", 14))
 			_button("Начать заново", _restart_landing_training)
 			_button("В главное меню", _leave_landing_training)
+			_button("Настройки", _open_settings)
 		else:
 			var run_finished: bool = game.flight.state == game.FlightModelScript.State.CRASHED
 			content.add_child(_label("ИТОГИ ПРОХОЖДЕНИЯ" if run_finished else "ПАУЗА", 14))
 			_button(("Вернуться к итогам" if run_finished else "Продолжить") + " • seed %d" % game.world.seed_value, _resume_game)
 			_button("Статистика полётов", _open_pause_flight_history)
 			_button("Об игре", _open_about)
-			_button("Язык", _open_language)
+			_button("Настройки", _open_settings)
 			_button("Новая игра", _open_new_game_setup)
 			if run_finished:
 				_button("Выйти", _exit_game)
@@ -199,7 +248,7 @@ func _rebuild_menu() -> void:
 		_button("Новая игра", _open_new_game_setup)
 		_button("Посадка", _start_landing_training)
 		_button("Об игре", _open_about)
-		_button("Язык", _open_language)
+		_button("Настройки", _open_settings)
 		_button("Авторы", _open_authors)
 		_button("Выход", _exit_game)
 		if SaveGame.slot_exists(save_path) and slot.is_empty():
@@ -207,7 +256,7 @@ func _rebuild_menu() -> void:
 	if not error_text.is_empty():
 		var error_label := _label(error_text, 15)
 		error_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		error_label.add_theme_color_override("font_color", Color("893f2f"))
+		error_label.add_theme_color_override("font_color", Palette.ERROR if VisualTheme.dark else Palette.MENU_ERROR_LIGHT)
 		content.add_child(error_label)
 	_layout_menu()
 	if new_game_setup_open and new_game_seed_field != null:
@@ -243,6 +292,8 @@ func _open_new_game_setup() -> void:
 	about_open = false
 	authors_open = false
 	language_open = false
+	settings_open = false
+	theme_open = false
 	error_text = ""
 	new_game_seed_text = ""
 	_rebuild_menu()
@@ -337,6 +388,8 @@ func _pause_game() -> void:
 	about_open = false
 	authors_open = false
 	language_open = false
+	settings_open = false
+	theme_open = false
 	game.set_process(false)
 	game.set_process_input(false)
 	game.hide()
@@ -413,6 +466,8 @@ func _exit_game() -> void:
 	about_open = false
 	authors_open = false
 	language_open = false
+	settings_open = false
+	theme_open = false
 	error_text = "Можно закрыть вкладку. Сохранения хранятся в этом браузере."
 	menu_root.show()
 	_rebuild_menu()
@@ -421,6 +476,8 @@ func _open_about() -> void:
 	about_open = true
 	authors_open = false
 	language_open = false
+	settings_open = false
+	theme_open = false
 	new_game_setup_open = false
 	error_text = ""
 	_rebuild_menu()
@@ -433,6 +490,8 @@ func _open_authors() -> void:
 	authors_open = true
 	about_open = false
 	language_open = false
+	settings_open = false
+	theme_open = false
 	new_game_setup_open = false
 	error_text = ""
 	_rebuild_menu()
@@ -441,8 +500,46 @@ func _close_authors() -> void:
 	authors_open = false
 	_rebuild_menu()
 
+func _open_settings() -> void:
+	settings_open = true
+	language_open = false
+	theme_open = false
+	about_open = false
+	authors_open = false
+	new_game_setup_open = false
+	error_text = ""
+	_rebuild_menu()
+
+func _close_settings() -> void:
+	settings_open = false
+	language_open = false
+	theme_open = false
+	_rebuild_menu()
+
+func _open_theme() -> void:
+	settings_open = true
+	theme_open = true
+	language_open = false
+	about_open = false
+	authors_open = false
+	new_game_setup_open = false
+	error_text = ""
+	_rebuild_menu()
+
+func _close_theme() -> void:
+	theme_open = false
+	_rebuild_menu()
+
+func _select_theme(dark: bool) -> void:
+	VisualTheme.set_dark(dark)
+	if game != null:
+		game.visual_theme_changed()
+	_rebuild_menu()
+
 func _open_language() -> void:
+	settings_open = true
 	language_open = true
+	theme_open = false
 	about_open = false
 	authors_open = false
 	new_game_setup_open = false
@@ -471,6 +568,10 @@ func _input(event: InputEvent) -> void:
 			_close_authors()
 		elif language_open:
 			_close_language()
+		elif theme_open:
+			_close_theme()
+		elif settings_open:
+			_close_settings()
 		elif new_game_setup_open:
 			_close_new_game_setup()
 		elif game != null:

@@ -46,9 +46,12 @@ func _init() -> void:
 		if economy.optional_service_count(airport_index) == 0:
 			empty_airports += 1
 	assert(empty_airports <= Economy.MAX_AIRPORTS_WITHOUT_OPTIONAL_SERVICES)
-	assert(economy.offers_at(0).size() == 3)
+	assert(economy.offers_at(0).size() == 7)
 	var destinations := {}
+	var previous_distance := -1.0
 	for offer in economy.offers_at(0):
+		assert(float(offer.distance_km) >= previous_distance, "Mail offers must be sorted by route distance, nearest first")
+		previous_distance = float(offer.distance_km)
 		assert(int(offer.destination) != 0)
 		assert(not destinations.has(offer.destination))
 		destinations[offer.destination] = true
@@ -94,13 +97,14 @@ func _init() -> void:
 	assert(legacy_mail_restored.restore(legacy_mail_save, world))
 	assert(legacy_mail_restored.carried_item.reward == expected and not legacy_mail_restored.carried_item.has("urgent_deadline"))
 	assert(int(legacy_parcel.destination) not in legacy_mail_restored.remaining_destinations_by_airport[0], "Legacy accepted mail must be reserved under the finite stock rules")
-	assert(legacy_mail_restored.offers_at(0)[0].reward == expected and not legacy_mail_restored.offers_at(0)[0].has("urgent_reward"))
+	assert(not legacy_mail_restored.offers_at(0).any(func(offer): return offer.destination == legacy_parcel.destination), "Migrated offers must not duplicate an accepted parcel")
+	assert(legacy_mail_restored.offers_at(0).all(func(offer): return offer.has("reward") and not offer.has("urgent_reward")), "All available migrated offers must use the unified reward")
 	var old_offers: Array = economy.offers_at(0).duplicate(true)
 	economy.arrive_at_airport(0, world)
 	assert(economy.offers_at(0) == old_offers)
 	var initial_storms: Array = world.storms.duplicate(true)
 	economy.arrive_at_airport(destination, world)
-	assert(economy.offers_at(destination).size() == 3)
+	assert(economy.offers_at(destination).size() == 7)
 	assert(world.wind_layers == initial_wind and world.storms == initial_storms, "Economy arrivals must not mutate physical weather")
 	for layer in world.wind_layers:
 		assert(layer.speed_kmh >= 8.0 and layer.speed_kmh <= 32.0)

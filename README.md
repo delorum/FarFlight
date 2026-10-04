@@ -64,7 +64,7 @@ The 200×200 km map is procedurally generated. Each of its four 100×100 km regi
 
 Before a new game, you may enter a positive `seed` from 1 to 2147483647 or leave the field blank. The same seed reproduces the terrain, airfields, beacons, services, and weather sequence. You can share it with another player to compare records in the same world. Before a campaign starts, the game checks that all airfields and a future exit are reachable. A rare unusable requested seed is deterministically replaced by a playable one; the actual seed appears on the Continue button in both the title and pause menus.
 
-The title screen offers continuation or results for the saved run, a new game, Landing Practice, About, Language, Credits, and Quit. About links to this complete guide. The Language screen switches the entire interface between Russian and English and saves that choice independently of the current game.
+The title screen offers continuation or results for the saved run, a new game, Landing Practice, About, Settings, Credits, and Quit. About links to this complete guide. Settings is also available in the pause menu and contains Language (Russian or English) and Display theme (Light or Dark). Both preferences are saved independently of the current game.
 
 Landing Practice creates a fresh random world and airfield for every attempt. The aircraft starts on a six-kilometre final at 234 m, 150 km/h, 70% throttle, with electrical power and engine on, 40 litres of fuel, random wind, no thunderstorms, and the large ILS open. The mode can be restarted or left for the title screen and never reads, creates, or replaces the main campaign save.
 
@@ -111,11 +111,13 @@ The small arrow to the right of the attitude indicator shows the resulting nose 
 
 Clicking the door, seat, table, or chair performs the interaction immediately. Merely walking past an object does not activate it.
 
-Below 100 m above ground, standalone radio beacons appear in both cabin side views as a radio tower with a small building. They are visible within 100 m of the ground-track axis and the current view span; they move behind the aircraft as it passes. Airport beacons are not drawn a second time.
+Below 100 m above ground, standalone radio beacons appear in both cabin side views as a radio tower with a small building. Within 100 m of the ground-track axis they appear at full size; farther away they shrink smoothly and disappear at 1 km laterally. They must also lie within the current view span and move behind the aircraft as it passes. Airport beacons are not drawn a second time. Airfield buildings and runways follow the same lateral-distance rule. Runway distance is measured to its nearest edge; flying directly across it retains the normal full-size strip. Buildings and the tower have fixed positions beside the runway, projected onto the aircraft's ground track, and each shrinks according to its own lateral distance.
+
+When crossing the runway at an angle, the side view shows the short intersected section, with one transverse light stripe at its centre instead of dashed markings. Buildings and the tower form a compact, overlapping schematic cluster beside the strip, outside its bounds; farther buildings are drawn behind nearer ones. Longitudinal views retain normal building spacing and dashed markings.
 
 ### Display theme
 
-The second row of buttons below Cabin / Trajectory / Storms switches between light and dark themes. Dark mode uses the weather-radar background with beige map lines and text, and also applies to the flight calculator and side-view scenes. Weather and warning colours remain distinct. The choice is saved as an interface preference, separately from campaign saves.
+Choose Settings → Display theme in the main menu or pause menu to switch between Light and Dark. Dark mode uses the weather-radar background with beige map lines and text, and also applies to the flight calculator and side-view scenes. The main and pause menus use matching night-time artwork and light text in dark mode; light mode retains the original daytime artwork. Weather and warning colours remain distinct. The choice is saved as an interface preference, separately from campaign saves.
 
 ### Time and pause
 
@@ -240,9 +242,11 @@ Starting money is 160 coins. After visiting at least two buildings of one type, 
 
 ### Mail
 
-Each airfield has exactly one parcel for each of the other seven airfields. The post office displays up to three random destinations from its remaining stock. Accepting a parcel reserves that origin–destination route and removes its offer without immediately replacing it. The assortment refreshes only when you land here after landing at a different airfield; landing here again without visiting another airfield does not refresh it. The post office and the map hover hint show how many parcels remain there. Job distance follows the shortest passable route under the 700 m ceiling with 150 m terrain clearance.
+Parcels are listed by route distance, from nearest to farthest.
 
-Discarding an undelivered parcel cancels that order and returns its destination to the originating post office's stock; only a delivered parcel is permanently completed.
+Each airfield has exactly one parcel for each of the other seven airfields. The post office displays all remaining destinations, with route distance and payment. Scroll the list with the mouse wheel if it does not fit on screen. Accepting a parcel reserves that origin–destination route and removes its offer; every other available parcel remains visible without requiring another landing. The post office and the map hover hint show how many parcels remain there. Job distance follows the shortest passable route under the 700 m ceiling with 150 m terrain clearance.
+
+Discarding an undelivered parcel cancels that order and immediately returns it to the originating post office's list; only a delivered parcel is permanently completed.
 
 Payment grows slightly faster than distance and accounts for a destination's lack of services: no optional services add 35%, one adds 20%, and two add 10%. Actual flown distance does not increase the reward. There are no deadlines, so several parcels can be taken on a multi-stop route.
 
@@ -330,6 +334,7 @@ References: [Godot Web export](https://docs.godotengine.org/en/stable/tutorials/
 - `ils_display_state.gd` supplies the same guidance and forecast readouts to both ILS sizes;
 - `ils_prediction_scheduler.gd` owns the forecast lifecycle and frame budget; `map_geometry_cache.gd` owns contour indexing and cached storm outlines without UI dependencies;
 - the map, instrument panel, and side scenes live in separate modules;
+- `side_landmarks.gd` owns side-view landmark projection and drawing; `mail_view.gd` keeps post-office rows, scrolling and clicks together;
 - `aircraft_art.gd` draws the aircraft externally and in cutaway view.
 
 More detail is available in [ARCHITECTURE.md](ARCHITECTURE.md).

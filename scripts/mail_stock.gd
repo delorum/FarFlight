@@ -25,28 +25,34 @@ func remaining_at(airport_index: int) -> int:
 func offers_at(airport_index: int) -> Array:
 	return offers_by_airport.get(airport_index, [])
 
-func arrive_at_airport(origin: int, world, elapsed_seconds: float, make_offer: Callable) -> void:
-	if origin == last_landed_airport:
-		return
+func arrive_at_airport(origin: int, world, make_offer: Callable) -> void:
 	last_landed_airport = origin
-	offers_by_airport[origin] = _generate_offers(origin, world, elapsed_seconds, make_offer)
+	if not offers_by_airport.has(origin):
+		ensure_all_offers(origin, world, make_offer)
 
-func _generate_offers(origin: int, world, elapsed_seconds: float, make_offer: Callable) -> Array[Dictionary]:
-	var candidates: Array[int] = []
-	for destination in remaining_destinations_by_airport.get(origin, []):
-		candidates.append(int(destination))
-	var rng := RandomNumberGenerator.new()
-	rng.seed = int(world.seed_value) ^ (origin + 1) * 7919 ^ int(elapsed_seconds * 10.0) ^ next_parcel_id * 104729
-	for index in range(candidates.size() - 1, 0, -1):
-		var other := rng.randi_range(0, index)
-		var value := candidates[index]
-		candidates[index] = candidates[other]
-		candidates[other] = value
-	var offers: Array[Dictionary] = []
-	for candidate_index in mini(3, candidates.size()):
-		offers.append(make_offer.call(origin, candidates[candidate_index], next_parcel_id, world))
-		next_parcel_id += 1
-	return offers
+func ensure_all_offers(origin: int, world, make_offer: Callable) -> void:
+	# Preserve existing parcels/IDs, including legacy three-offer saves. Only
+	# materialize missing destinations; no random reshuffle or per-frame routing.
+	var remaining: Array = remaining_destinations_by_airport.get(origin, [])
+	var offers: Array = offers_at(origin)
+	var seen := {}
+	var complete: Array = []
+	for offer in offers:
+		var destination := int(offer.destination)
+		if destination in remaining and not seen.has(destination):
+			complete.append(offer)
+			seen[destination] = true
+	for destination in remaining:
+		if not seen.has(int(destination)):
+			complete.append(make_offer.call(origin, int(destination), next_parcel_id, world))
+			next_parcel_id += 1
+	complete.sort_custom(_offer_distance_less)
+	offers_by_airport[origin] = complete
+
+static func _offer_distance_less(a: Dictionary, b: Dictionary) -> bool:
+	var first := float(a.distance_km)
+	var second := float(b.distance_km)
+	return int(a.destination) < int(b.destination) if first == second else first < second
 
 func accept_offer(origin: int, offer_index: int) -> Dictionary:
 	var offers: Array = offers_at(origin)
@@ -56,7 +62,7 @@ func accept_offer(origin: int, offer_index: int) -> Dictionary:
 	var remaining: Array = remaining_destinations_by_airport.get(origin, [])
 	remaining.erase(int(parcel.destination))
 	remaining_destinations_by_airport[origin] = remaining
-	# A vacant offer slot stays vacant until landing here after another airport.
+	# All other remaining destinations are already visible.
 	offers_by_airport[origin] = offers
 	return parcel
 
@@ -68,6 +74,10 @@ func return_parcel(parcel: Dictionary) -> void:
 		if destination not in remaining:
 			remaining.append(destination)
 			remaining_destinations_by_airport[origin] = remaining
+			var offers: Array = offers_at(origin)
+			offers.append(parcel.duplicate(true))
+			offers.sort_custom(_offer_distance_less)
+			offers_by_airport[origin] = offers
 
 func record_delivery() -> void:
 	deliveries_on_map += 1

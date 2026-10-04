@@ -8,6 +8,9 @@ var records: Array[Dictionary] = []
 var transitions: Array[Dictionary] = []
 var _journal: Array[Dictionary] = []
 var _journal_size := Vector2i(-1, -1)
+var _route_counts: Dictionary = {}
+var _route_counts_size := -1
+var route_index_build_count := 0
 var active := false
 var active_origin := -1
 var active_level := 0
@@ -19,6 +22,7 @@ func reset() -> void:
 	records.clear()
 	transitions.clear()
 	_journal_size = Vector2i(-1, -1)
+	_route_counts_size = -1
 	active = false
 	active_origin = -1
 	active_level = 0
@@ -106,13 +110,22 @@ func route_records(origin: int, destination: int, level: int = -1, destination_l
 	)
 	return result
 
+static func route_key(origin: int, destination: int, level: int, destination_level: int = -1) -> String:
+	return "%d:%d:%d:%d" % [level, origin, destination_level if destination_level >= 0 else level, destination]
+
 func route_count(origin: int, destination: int, level: int = -1, destination_level: int = -1) -> int:
-	var count := 0
-	for record in records:
-		if int(record.origin) == origin and int(record.destination) == destination and (level < 0 or int(record.get("level", 0)) == level):
-			if level < 0 or int(record.get("destination_level", record.get("level", 0))) == (destination_level if destination_level >= 0 else level):
-				count += 1
-	return count
+	# UI redraws only perform a lookup; rebuild once when records are appended.
+	if _route_counts_size != records.size():
+		route_index_build_count += 1
+		_route_counts.clear()
+		for record in records:
+			var record_level := int(record.get("level", 0))
+			var key := route_key(int(record.origin), int(record.destination), record_level, int(record.get("destination_level", record_level)))
+			_route_counts[key] = int(_route_counts.get(key, 0)) + 1
+			var all_worlds := route_key(int(record.origin), int(record.destination), -1, -1)
+			_route_counts[all_worlds] = int(_route_counts.get(all_worlds, 0)) + 1
+		_route_counts_size = records.size()
+	return int(_route_counts.get(route_key(origin, destination, level if level >= 0 else -1, destination_level if level >= 0 else -1), 0))
 
 func snapshot() -> Dictionary:
 	return {
@@ -180,6 +193,7 @@ func restore_snapshot(data: Dictionary, airport_count: int = 8) -> bool:
 	records.assign(data.records.duplicate(true))
 	transitions.assign(data.get("transitions", []).duplicate(true))
 	_journal_size = Vector2i(-1, -1)
+	_route_counts_size = -1
 	active = data.active
 	active_origin = data.active_origin
 	active_level = int(data.get("active_level", 0))

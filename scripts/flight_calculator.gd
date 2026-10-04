@@ -1,13 +1,14 @@
 extends PanelContainer
 const FlightPlanSolver = preload("res://scripts/flight_plan_solver.gd")
 const Localization = preload("res://scripts/localization.gd")
+const Palette = preload("res://scripts/ui_palette.gd")
 const VisualTheme = preload("res://scripts/visual_theme.gd")
 
-const MAP_PAPER := Color("d7d0ad")
-const HOVER_PAPER := Color("cec6a2")
-const PRESSED_PAPER := Color("c4b98e")
-const CONTOUR_COLOR := Color("806f4b")
-const MAJOR_CONTOUR_COLOR := Color("5c4b31")
+const MAP_PAPER := Palette.PAPER
+const HOVER_PAPER := Palette.HOVER_LIGHT
+const PRESSED_PAPER := Palette.PRESSED_LIGHT
+const CONTOUR_COLOR := Palette.CONTOUR
+const MAJOR_CONTOUR_COLOR := Palette.MAP_INK
 var controller: Control
 var expanded := false
 var dragging := false
@@ -71,11 +72,11 @@ func _refresh_localized_controls(node: Node) -> void:
 		_refresh_localized_controls(child)
 
 func refresh_visual_theme() -> void:
-	var paper := Color("071012") if VisualTheme.dark else MAP_PAPER
-	var hover := Color("202b2f") if VisualTheme.dark else HOVER_PAPER
-	var pressed := Color("334044") if VisualTheme.dark else PRESSED_PAPER
-	var ink := MAP_PAPER if VisualTheme.dark else MAJOR_CONTOUR_COLOR
-	var border := MAP_PAPER.darkened(0.28) if VisualTheme.dark else CONTOUR_COLOR
+	var paper := Palette.background(VisualTheme.dark)
+	var hover := Palette.hover(VisualTheme.dark)
+	var pressed := Palette.pressed(VisualTheme.dark)
+	var ink := Palette.text_color(VisualTheme.dark)
+	var border := Palette.border(VisualTheme.dark)
 	var palette := Theme.new()
 	palette.default_font_size = 13
 	for type in ["Label", "Button", "OptionButton", "LineEdit", "SpinBox"]:
@@ -674,8 +675,8 @@ func _show_error(reason: String, editing_key: String = "") -> void:
 
 func _apply_validation_style(reason: String) -> void:
 	validation_reason = reason
-	var ink := MAP_PAPER if VisualTheme.dark else MAJOR_CONTOUR_COLOR
-	var error_color := Color("ef645e") if VisualTheme.dark else Color("a3483f")
+	var ink := Palette.text_color(VisualTheme.dark)
+	var error_color := Palette.error(VisualTheme.dark)
 	for key in fields:
 		fields[key].tooltip_text = Localization.text(reason)
 		fields[key].add_theme_color_override("font_color", ink if reason.is_empty() else error_color)

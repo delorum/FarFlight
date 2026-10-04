@@ -708,7 +708,6 @@ func _draw_controls(rect: Rect2) -> void:
 	var roomy_storms_button: bool = storms_button.size.x >= 80.0
 	var storms_text: String = ("ГРОЗЫ: ВКЛ" if roomy_storms_button else "ГР: ВКЛ") if host.navigation_map.weather_briefing_visible else ("ГРОЗЫ: ВЫКЛ" if roomy_storms_button else "ГР: ВЫКЛ")
 	_draw_cockpit_action_button(storms_button, storms_text)
-	_draw_cockpit_action_button(get_theme_button_rect(), "ТЕМА: ТЁМНАЯ" if host.VisualTheme.dark else "ТЕМА: СВЕТЛАЯ")
 	_draw_time_controls(false)
 
 func _draw_cockpit_action_button(rect: Rect2, label: String, indicator: Color = Color.TRANSPARENT, enabled: bool = true) -> void:
@@ -777,10 +776,6 @@ func get_engine_button_rect() -> Rect2:
 
 func get_cabin_button_rect() -> Rect2:
 	return _split_cockpit_action_rect(_left_cockpit_action_area(), 0, 3)
-
-func get_theme_button_rect() -> Rect2:
-	var area := _left_cockpit_action_area()
-	return Rect2(area.position + Vector2(0, area.size.y + 5), Vector2(area.size.x, 24))
 
 func get_power_button_rect() -> Rect2:
 	return _split_cockpit_action_rect(_right_cockpit_action_area(), 0)

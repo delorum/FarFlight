@@ -22,7 +22,13 @@ var scene_notice := ""
 var scene_is_walking := false
 var propeller_phase := 0.0
 var cabin_terrain_zoom := 0
-const SIDE_BEACON_CORRIDOR_KM := 0.1
+const MailView = preload("res://scripts/mail_view.gd")
+var mail_view: RefCounted
+var mail_scroll: int:
+	get: return mail_view.scroll
+	set(value): mail_view.scroll = value
+const SideLandmarks = preload("res://scripts/side_landmarks.gd")
+var landmarks: RefCounted
 var cabin_terrain_profile := PackedVector2Array()
 var cabin_terrain_timer := 0.0
 var cabin_rain_blue := true
@@ -33,20 +39,60 @@ var fuel_amount_litres := 20.0
 var dragging_fuel_slider := false
 var cabin_sleeping := false
 var cabin_table_seated := false
-var history_scroll := 0
-var history_selected := 0
-var route_history_scroll := 0
-var route_history_selected := 0
-var route_history_origin := -1
-var route_history_destination := -1
-var route_history_level := 0
-var route_history_destination_level := 0
-var route_history_records_cache: Array[Dictionary] = []
-var history_route_counts: Dictionary = {}
-var history_route_counts_size := -1
+const FlightHistoryView = preload("res://scripts/flight_history_view.gd")
+var history_view: RefCounted
+# Compatibility accessors; the history view owns selection and scrolling.
+var history_scroll: int:
+	get:
+		return history_view.history_scroll
+	set(value):
+		history_view.history_scroll = value
+var history_selected: int:
+	get:
+		return history_view.history_selected
+	set(value):
+		history_view.history_selected = value
+var route_history_scroll: int:
+	get:
+		return history_view.route_history_scroll
+	set(value):
+		history_view.route_history_scroll = value
+var route_history_selected: int:
+	get:
+		return history_view.route_history_selected
+	set(value):
+		history_view.route_history_selected = value
+var route_history_origin: int:
+	get:
+		return history_view.route_history_origin
+	set(value):
+		history_view.route_history_origin = value
+var route_history_destination: int:
+	get:
+		return history_view.route_history_destination
+	set(value):
+		history_view.route_history_destination = value
+var route_history_level: int:
+	get:
+		return history_view.route_history_level
+	set(value):
+		history_view.route_history_level = value
+var route_history_destination_level: int:
+	get:
+		return history_view.route_history_destination_level
+	set(value):
+		history_view.route_history_destination_level = value
+var route_history_records_cache: Array[Dictionary]:
+	get:
+		return history_view.route_history_records_cache
+	set(value):
+		history_view.route_history_records_cache = value
 
 func _init(controller: Control) -> void:
 	host = controller
+	history_view = FlightHistoryView.new(controller)
+	landmarks = SideLandmarks.new(controller)
+	mail_view = MailView.new(controller)
 
 func _set_view_mode(next_mode: int) -> void:
 	cabin_table_seated = false
@@ -55,13 +101,14 @@ func _set_view_mode(next_mode: int) -> void:
 	host.invalidate_weather_radar_caches()
 	cabin_terrain_zoom = 0
 	view_mode = next_mode
+	if view_mode == ViewMode.MAIL:
+		mail_scroll = 0
 	if view_mode != ViewMode.CABIN:
 		in_fuel_bay = false
 	dragging_fuel_slider = false
 	if view_mode == ViewMode.FUEL:
 		_set_default_fuel_amount()
 	if view_mode == ViewMode.FLIGHT_HISTORY:
-		history_route_counts_size = -1
 		_clamp_history_selection(false)
 	elif view_mode == ViewMode.ROUTE_HISTORY:
 		_clamp_history_selection(true)
@@ -851,204 +898,41 @@ func _draw_cabin_airport_close_view() -> void:
 		_draw_side_runway(airport_view, rect, anchor, pixels_per_m)
 	_draw_side_beacons(rect, anchor, pixels_per_m)
 
+func _side_beacon_size_scale(lateral_km: float) -> float:
+	return landmarks._landmark_size_scale(lateral_km)
+
 func _cabin_visible_beacons() -> Array[Dictionary]:
-	var visible: Array[Dictionary] = []
-	if not _cabin_ground_visible():
-		return visible
-	var direction: Vector2 = _cabin_ground_direction() * (1.0 if _aircraft_mirrored() else -1.0)
-	var half_span_km: float = _cabin_terrain_span_m() / 2000.0
-	for beacon in host.world.beacons:
-		if int(beacon.get("runway", -1)) >= 0:
-			continue
-		var offset: Vector2 = Vector2(beacon.position) - host.flight.position_km
-		var along: float = offset.dot(direction)
-		if absf(offset.cross(direction)) <= SIDE_BEACON_CORRIDOR_KM and absf(along) <= half_span_km + 0.03:
-			visible.append({"centre_m": along * 1000.0, "position": Vector2(beacon.position)})
-	return visible
+	return landmarks._cabin_visible_beacons()
 
 func _draw_side_beacons(rect: Rect2, anchor: Vector2, pixels_per_m: float) -> void:
-	var ink := AircraftArt.INK.lerp(AircraftArt.PAPER, 0.35)
-	var fill := AircraftArt.LIGHT.lerp(AircraftArt.PAPER, 0.35)
-	for beacon in _cabin_visible_beacons():
-		var x: float = anchor.x + float(beacon.centre_m) * pixels_per_m
-		var y: float = anchor.y + (host.flight.altitude_m - host.world.height_at(beacon.position)) * pixels_per_m
-		var top: float = y - 20.0 * pixels_per_m
-		var half_width: float = 3.0 * pixels_per_m
-		_draw_side_clipped_line(Vector2(x - half_width, y), Vector2(x, top), ink, 1.2, rect)
-		_draw_side_clipped_line(Vector2(x + half_width, y), Vector2(x, top), ink, 1.2, rect)
-		for brace in 4:
-			var lower: float = y - 20.0 * pixels_per_m * brace / 4.0
-			var upper: float = y - 20.0 * pixels_per_m * (brace + 1.0) / 4.0
-			var lower_width: float = half_width * (4 - brace) / 4.0
-			var upper_width: float = half_width * (3 - brace) / 4.0
-			_draw_side_clipped_line(Vector2(x - lower_width, lower), Vector2(x + upper_width, upper), ink, 0.8, rect)
-			_draw_side_clipped_line(Vector2(x + lower_width, lower), Vector2(x - upper_width, upper), ink, 0.8, rect)
-		_draw_side_clipped_line(Vector2(x, top), Vector2(x, top - 3.0 * pixels_per_m), ink, 1.2, rect)
-		var body := Rect2(x + 7.0 * pixels_per_m, y - 5.0 * pixels_per_m, 10.0 * pixels_per_m, 5.0 * pixels_per_m)
-		if body.intersects(rect):
-			host.draw_rect(body.intersection(rect), fill, true)
-		for edge in [[body.position, Vector2(body.end.x, body.position.y)], [Vector2(body.end.x, body.position.y), body.end], [body.end, Vector2(body.position.x, body.end.y)], [Vector2(body.position.x, body.end.y), body.position]]:
-			_draw_side_clipped_line(edge[0], edge[1], ink, 1.0, rect)
-		var roof_peak := Vector2(body.get_center().x, body.position.y - 2.0 * pixels_per_m)
-		_draw_side_clipped_line(body.position, roof_peak, ink, 1.0, rect)
-		_draw_side_clipped_line(roof_peak, Vector2(body.end.x, body.position.y), ink, 1.0, rect)
-		var door_x: float = body.get_center().x
-		_draw_side_clipped_line(Vector2(door_x, y), Vector2(door_x, y - 3.0 * pixels_per_m), ink, 1.0, rect)
+	landmarks._draw_side_beacons(rect, anchor, pixels_per_m)
 
 func _cabin_visible_airport() -> Dictionary:
-	var screen_world_direction = _cabin_ground_direction() * (1.0 if _aircraft_mirrored() else -1.0)
-	var half_span_km = _cabin_terrain_span_m() / 2000.0
-	var nearest: Dictionary = {}
-	var nearest_distance = INF
-	for airport_index in host.world.airports.size():
-		var airport: Dictionary = host.world.airports[airport_index]
-		var local_position: Vector2 = host.world.runway_coordinates(host.flight.position_km, airport)
-		var runway_forward: Vector2 = host.world.heading_vector(float(airport.heading))
-		var runway_right = Vector2(runway_forward.y, -runway_forward.x)
-		var local_direction = Vector2(screen_world_direction.dot(runway_forward), screen_world_direction.dot(runway_right))
-		var interval = _line_runway_interval(local_position, local_direction)
-		var clipped_start = maxf(interval.x, -half_span_km)
-		var clipped_end = minf(interval.y, half_span_km)
-		if clipped_start > clipped_end:
-			continue
-		var centre_parameter: float = (Vector2(airport.position) - host.flight.position_km).dot(screen_world_direction)
-		var distance: float = absf(centre_parameter)
-		if distance < nearest_distance:
-			nearest_distance = distance
-			nearest = {
-				"airport_index": airport_index,
-				"start_m": clipped_start * 1000.0,
-				"end_m": clipped_end * 1000.0,
-				"runway_start_m": interval.x * 1000.0,
-				"runway_end_m": interval.y * 1000.0,
-				"centre_m": centre_parameter * 1000.0,
-			}
-	return nearest
+	return landmarks._cabin_visible_airport()
+
+func _side_airport_projection(origin: Vector2, direction: Vector2) -> Dictionary:
+	return landmarks._side_airport_projection(origin, direction)
 
 func _line_runway_interval(origin: Vector2, direction: Vector2) -> Vector2:
-	var low = -INF
-	var high = INF
-	var half_length = FlightWorldScript.RUNWAY_LENGTH_KM * 0.5
-	var half_width = FlightWorldScript.RUNWAY_WIDTH_KM * 0.5
-	if absf(direction.x) < 0.000001:
-		if absf(origin.x) > half_length:
-			return Vector2(INF, -INF)
-	else:
-		var first_x = (-half_length - origin.x) / direction.x
-		var second_x = (half_length - origin.x) / direction.x
-		low = maxf(low, minf(first_x, second_x))
-		high = minf(high, maxf(first_x, second_x))
-	if absf(direction.y) < 0.000001:
-		if absf(origin.y) > half_width:
-			return Vector2(INF, -INF)
-	else:
-		var first_y = (-half_width - origin.y) / direction.y
-		var second_y = (half_width - origin.y) / direction.y
-		low = maxf(low, minf(first_y, second_y))
-		high = minf(high, maxf(first_y, second_y))
-	return Vector2(low, high) if low <= high else Vector2(INF, -INF)
+	return landmarks._line_runway_interval(origin, direction)
 
 func _side_runway_y(airport_index: int, anchor: Vector2, pixels_per_m: float) -> float:
-	var airport: Dictionary = host.world.airports[airport_index]
-	var runway_height: float = host.world.height_at(Vector2(airport.position))
-	return anchor.y + (host.flight.altitude_m - runway_height) * pixels_per_m
+	return landmarks._side_runway_y(airport_index, anchor, pixels_per_m)
+
+func _side_airport_landmark_projection(airport: Dictionary, offset_m: Vector2) -> Dictionary:
+	return landmarks._side_airport_landmark_projection(airport, offset_m)
 
 func _draw_distant_airport(view: Dictionary, rect: Rect2, anchor: Vector2, pixels_per_m: float) -> void:
-	var runway_y = _side_runway_y(int(view.airport_index), anchor, pixels_per_m)
-	if runway_y < rect.position.y or runway_y > rect.end.y + 20.0:
-		return
-	# Buildings share the airport's world coordinate instead of being clamped to
-	# a screen edge; they must travel backwards and leave the frame on takeoff.
-	var cluster_m = float(view.centre_m)
-	var distant_ink = AircraftArt.INK.lerp(AircraftArt.PAPER, 0.48)
-	var distant_fill = AircraftArt.LIGHT.lerp(AircraftArt.PAPER, 0.42)
-	for building in [
-		{"offset_m": -52.0, "width_m": 18.0, "height_m": 8.0},
-		{"offset_m": -24.0, "width_m": 13.0, "height_m": 11.0},
-		{"offset_m": 9.0, "width_m": 24.0, "height_m": 9.0},
-		{"offset_m": 44.0, "width_m": 15.0, "height_m": 7.0},
-	]:
-		var centre_x = anchor.x + (cluster_m + float(building.offset_m)) * pixels_per_m
-		var width_px = clampf(float(building.width_m) * pixels_per_m, 9.0, 46.0)
-		var height_px = clampf(float(building.height_m) * pixels_per_m, 7.0, 30.0)
-		if centre_x + width_px < rect.position.x or centre_x - width_px > rect.end.x:
-			continue
-		var body = Rect2(centre_x - width_px * 0.5, runway_y - height_px, width_px, height_px)
-		var visible_body = body.intersection(rect)
-		if visible_body.has_area():
-			host.draw_rect(visible_body, distant_fill, true)
-		for edge in [
-			[body.position, Vector2(body.end.x, body.position.y)],
-			[Vector2(body.end.x, body.position.y), body.end],
-			[body.end, Vector2(body.position.x, body.end.y)],
-			[Vector2(body.position.x, body.end.y), body.position],
-		]:
-			_draw_side_clipped_line(edge[0], edge[1], distant_ink, 1.1, rect)
-		var roof = PackedVector2Array([
-			Vector2(body.position.x - 2.0, body.position.y),
-			Vector2(centre_x, body.position.y - height_px * 0.42),
-			Vector2(body.end.x + 2.0, body.position.y),
-		])
-		_draw_side_clipped_line(roof[0], roof[1], distant_ink, 1.1, rect)
-		_draw_side_clipped_line(roof[1], roof[2], distant_ink, 1.1, rect)
-		if width_px >= 14.0:
-			var door = Rect2(centre_x - 2.0, runway_y - height_px * 0.55, 4.0, height_px * 0.55)
-			for edge in [
-				[door.position, Vector2(door.end.x, door.position.y)],
-				[Vector2(door.end.x, door.position.y), door.end],
-				[door.end, Vector2(door.position.x, door.end.y)],
-				[Vector2(door.position.x, door.end.y), door.position],
-			]:
-				_draw_side_clipped_line(edge[0], edge[1], distant_ink, 0.8, rect)
-	# A modest locator/radio mast rises just above the distant airport buildings.
-	var tower_x = anchor.x + (cluster_m + 28.0) * pixels_per_m
-	var tower_height = clampf(17.0 * pixels_per_m, 24.0, 48.0)
-	var tower_half_width = clampf(tower_height * 0.18, 5.0, 8.0)
-	if tower_x + tower_half_width >= rect.position.x and tower_x - tower_half_width <= rect.end.x:
-		var tower_top = runway_y - tower_height
-		_draw_side_clipped_line(Vector2(tower_x - tower_half_width, runway_y), Vector2(tower_x, tower_top), distant_ink, 1.2, rect)
-		_draw_side_clipped_line(Vector2(tower_x + tower_half_width, runway_y), Vector2(tower_x, tower_top), distant_ink, 1.2, rect)
-		for brace_index in 3:
-			var upper_y = runway_y - tower_height * (brace_index + 1.0) / 4.0
-			var lower_y = runway_y - tower_height * brace_index / 4.0
-			var upper_half = tower_half_width * (upper_y - tower_top) / tower_height
-			var lower_half = tower_half_width * (lower_y - tower_top) / tower_height
-			_draw_side_clipped_line(Vector2(tower_x - lower_half, lower_y), Vector2(tower_x + upper_half, upper_y), distant_ink, 0.9, rect)
-			_draw_side_clipped_line(Vector2(tower_x + lower_half, lower_y), Vector2(tower_x - upper_half, upper_y), distant_ink, 0.9, rect)
-		_draw_side_clipped_line(Vector2(tower_x, tower_top), Vector2(tower_x, tower_top - 7.0), distant_ink, 1.2, rect)
-		if rect.has_point(Vector2(tower_x, tower_top - 8.5)):
-			host.draw_circle(Vector2(tower_x, tower_top - 8.5), 1.8, distant_ink)
+	landmarks._draw_distant_airport(view, rect, anchor, pixels_per_m)
 
 func _draw_side_clipped_line(a: Vector2, b: Vector2, color: Color, width: float, rect: Rect2) -> void:
-	var clipped = host._clip_line_to_rect(a, b, rect)
-	if clipped.size() == 2:
-		host.draw_line(clipped[0], clipped[1], color, width, true)
+	landmarks._draw_side_clipped_line(a, b, color, width, rect)
 
 func _draw_side_runway(view: Dictionary, rect: Rect2, anchor: Vector2, pixels_per_m: float) -> void:
-	var start_x = clampf(anchor.x + float(view.start_m) * pixels_per_m, rect.position.x, rect.end.x)
-	var end_x = clampf(anchor.x + float(view.end_m) * pixels_per_m, rect.position.x, rect.end.x)
-	var runway_y = _side_runway_y(int(view.airport_index), anchor, pixels_per_m)
-	if runway_y < rect.position.y - 8.0 or runway_y > rect.end.y:
-		return
-	var dash_origin_x = anchor.x + float(view.runway_start_m) * pixels_per_m
-	_draw_runway_strip_screen(start_x, end_x, runway_y, dash_origin_x)
+	landmarks._draw_side_runway(view, rect, anchor, pixels_per_m)
 
-func _draw_runway_strip_screen(start_x: float, end_x: float, runway_y: float, dash_origin_x: float = NAN) -> void:
-	var runway_rect = Rect2(start_x, runway_y - 2.0, maxf(0.0, end_x - start_x), 9.0)
-	host.draw_rect(runway_rect, Color("b6a779"), true)
-	host.draw_line(Vector2(start_x, runway_y - 2.0), Vector2(end_x, runway_y - 2.0), AircraftArt.INK, 2.0, true)
-	host.draw_line(Vector2(start_x, runway_y + 7.0), Vector2(end_x, runway_y + 7.0), AircraftArt.LIGHT, 1.2, true)
-	if is_nan(dash_origin_x):
-		dash_origin_x = start_x
-	var dash_x = dash_origin_x + 15.0
-	if dash_x + 24.0 < start_x:
-		dash_x += ceilf((start_x - dash_x - 24.0) / 45.0) * 45.0
-	while dash_x < end_x - 8.0:
-		var visible_dash_start = maxf(dash_x, start_x)
-		var visible_dash_end = minf(dash_x + 24.0, end_x)
-		if visible_dash_end > visible_dash_start:
-			host.draw_line(Vector2(visible_dash_start, runway_y + 2.5), Vector2(visible_dash_end, runway_y + 2.5), Color("ded5b5"), 2.0, true)
-		dash_x += 45.0
+func _draw_runway_strip_screen(start_x: float, end_x: float, runway_y: float, dash_origin_x: float = NAN, size_scale: float = 1.0, side_on: bool = false) -> void:
+	landmarks._draw_runway_strip_screen(start_x, end_x, runway_y, dash_origin_x, size_scale, side_on)
 
 func _cabin_weather_scale() -> float:
 	if cabin_terrain_zoom == 0:
@@ -1245,237 +1129,82 @@ func _draw_operations_scene() -> void:
 	_scene_prompt(scene_notice if not scene_notice.is_empty() else "Enter: выйти из здания • Esc: меню")
 
 func get_history_back_rect() -> Rect2:
-	var button_width := minf(270.0, host.size.x * 0.30)
-	return Rect2(host.size.x - _history_right_margin() - button_width, 108.0, button_width, 44.0)
+	return history_view.get_history_back_rect()
 
 func _history_list_rect() -> Rect2:
-	var left := _history_left_margin()
-	return Rect2(left, 160.0, host.size.x - left - _history_right_margin(), maxf(80.0, host.size.y - 270.0))
+	return history_view._history_list_rect()
 
 func _history_left_margin() -> float:
-	# The clock controls end at x=202. Match their 48 px distance from the left
-	# edge on the other side of the column: the journal starts at x=250.
-	return 250.0
+	return history_view._history_left_margin()
 
 func _history_right_margin() -> float:
-	# There is no instrument column on the right, so retain only the normal
-	# scene-edge breathing room and give the journal the otherwise empty width.
-	return 40.0
+	return history_view._history_right_margin()
 
 func _history_visible_rows() -> int:
-	return maxi(1, floori(_history_list_rect().size.y / 64.0))
+	return history_view._history_visible_rows()
 
 func _active_history_records() -> Array[Dictionary]:
-	if view_mode == ViewMode.ROUTE_HISTORY:
-		return route_history_records_cache
-	return host.simulation.flight_history.journal_rows()
+	return history_view._active_history_records()
 
 func _history_record_at(display_index: int) -> Dictionary:
-	var records := _active_history_records()
-	if view_mode == ViewMode.ROUTE_HISTORY:
-		return records[display_index]
-	# The model caches chronological rows including crossings. Translate the
-	# visible index instead of reversing the full journal on every redraw.
-	return records[records.size() - 1 - display_index]
-
-func _history_route_key(origin: int, destination: int, level: int = 0, destination_level: int = -1) -> String:
-	return "%d:%d:%d:%d" % [level, origin, destination_level if destination_level >= 0 else level, destination]
+	return history_view._history_record_at(display_index)
 
 func _history_route_count(origin: int, destination: int, level: int = 0, destination_level: int = -1) -> int:
-	var records: Array[Dictionary] = host.simulation.flight_history.records
-	if history_route_counts_size != records.size():
-		history_route_counts.clear()
-		for record in records:
-			var key := _history_route_key(int(record.origin), int(record.destination), int(record.get("level", 0)), int(record.get("destination_level", record.get("level", 0))))
-			history_route_counts[key] = int(history_route_counts.get(key, 0)) + 1
-		history_route_counts_size = records.size()
-	return int(history_route_counts.get(_history_route_key(origin, destination, level, destination_level), 0))
+	return history_view._history_route_count(origin, destination, level, destination_level)
 
 func _clamp_history_selection(route_details: bool) -> void:
-	var records: Array[Dictionary] = route_history_records_cache if route_details else host.simulation.flight_history.journal_rows()
-	var maximum := maxi(0, records.size() - 1)
-	if route_details:
-		route_history_selected = clampi(route_history_selected, 0, maximum)
-		route_history_scroll = clampi(route_history_scroll, 0, maxi(0, records.size() - _history_visible_rows()))
-		if route_history_selected < route_history_scroll:
-			route_history_scroll = route_history_selected
-		elif route_history_selected >= route_history_scroll + _history_visible_rows():
-			route_history_scroll = route_history_selected - _history_visible_rows() + 1
-	else:
-		history_selected = clampi(history_selected, 0, maximum)
-		history_scroll = clampi(history_scroll, 0, maxi(0, records.size() - _history_visible_rows()))
-		if history_selected < history_scroll:
-			history_scroll = history_selected
-		elif history_selected >= history_scroll + _history_visible_rows():
-			history_scroll = history_selected - _history_visible_rows() + 1
+	history_view._clamp_history_selection(route_details)
 
 func handle_history_key(keycode: int) -> bool:
-	if view_mode not in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY]:
-		return false
-	var records := _active_history_records()
-	if keycode in [KEY_UP, KEY_DOWN, KEY_PAGEUP, KEY_PAGEDOWN, KEY_HOME, KEY_END]:
-		var selected := route_history_selected if view_mode == ViewMode.ROUTE_HISTORY else history_selected
-		match keycode:
-			KEY_UP: selected -= 1
-			KEY_DOWN: selected += 1
-			KEY_PAGEUP: selected -= _history_visible_rows()
-			KEY_PAGEDOWN: selected += _history_visible_rows()
-			KEY_HOME: selected = 0
-			KEY_END: selected = records.size() - 1
-		selected = clampi(selected, 0, maxi(0, records.size() - 1))
-		if view_mode == ViewMode.ROUTE_HISTORY:
-			route_history_selected = selected
-		else:
-			history_selected = selected
-		_clamp_history_selection(view_mode == ViewMode.ROUTE_HISTORY)
-		host.queue_redraw()
-		return true
-	return false
+	return history_view.handle_history_key(keycode)
 
 func handle_history_mouse(event: InputEventMouseButton) -> bool:
-	if view_mode not in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY] or not event.pressed:
-		return false
-	if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
-		var delta := -1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1
-		if view_mode == ViewMode.ROUTE_HISTORY:
-			route_history_scroll += delta
-		else:
-			history_scroll += delta
-		_clamp_history_scroll(view_mode == ViewMode.ROUTE_HISTORY)
-		# Keep keyboard selection inside the newly scrolled viewport so drawing
-		# does not immediately pull the list back to the previous selection.
-		var first_visible := route_history_scroll if view_mode == ViewMode.ROUTE_HISTORY else history_scroll
-		var last_visible := mini(_active_history_records().size() - 1, first_visible + _history_visible_rows() - 1)
-		if view_mode == ViewMode.ROUTE_HISTORY:
-			route_history_selected = clampi(route_history_selected, first_visible, maxi(first_visible, last_visible))
-		else:
-			history_selected = clampi(history_selected, first_visible, maxi(first_visible, last_visible))
-		host.queue_redraw()
-		return true
-	if event.button_index != MOUSE_BUTTON_LEFT:
-		return false
-	if get_history_back_rect().has_point(event.position):
-		_leave_current_scene()
-		return true
-	var list_rect := _history_list_rect()
-	if not list_rect.has_point(event.position):
-		return false
-	var scroll := route_history_scroll if view_mode == ViewMode.ROUTE_HISTORY else history_scroll
-	var row := floori((event.position.y - list_rect.position.y) / 64.0) + scroll
-	var records := _active_history_records()
-	if row < 0 or row >= records.size():
-		return false
-	if view_mode == ViewMode.ROUTE_HISTORY:
-		route_history_selected = row
-	else:
-		history_selected = row
-	host.queue_redraw()
-	return true
+	return history_view.handle_history_mouse(event)
 
 func _clamp_history_scroll(route_details: bool) -> void:
-	var count := _active_history_records().size()
-	var maximum := maxi(0, count - _history_visible_rows())
-	if route_details:
-		route_history_scroll = clampi(route_history_scroll, 0, maximum)
-	else:
-		history_scroll = clampi(history_scroll, 0, maximum)
+	history_view._clamp_history_scroll(route_details)
 
 func _open_selected_history_route() -> void:
-	var records := _active_history_records()
-	if records.is_empty() or history_selected < 0 or history_selected >= records.size():
-		return
-	var record: Dictionary = _history_record_at(history_selected)
-	if record.get("kind", "") == "world_transition":
-		return
-	var count: int = _history_route_count(int(record.origin), int(record.destination), int(record.get("level", 0)), int(record.get("destination_level", record.get("level", 0))))
-	if count < 2:
-		return
-	route_history_origin = int(record.origin)
-	route_history_destination = int(record.destination)
-	route_history_level = int(record.get("level", 0))
-	route_history_destination_level = int(record.get("destination_level", route_history_level))
-	route_history_records_cache = host.simulation.flight_history.route_records(route_history_origin, route_history_destination, route_history_level, route_history_destination_level)
-	route_history_selected = 0
-	route_history_scroll = 0
-	_set_view_mode(ViewMode.ROUTE_HISTORY)
+	history_view._open_selected_history_route()
 
 func _format_history_duration(seconds_value: float) -> String:
-	var total := maxi(0, roundi(seconds_value))
-	return "%02d:%02d:%02d" % [total / 3600, (total % 3600) / 60, total % 60]
+	return history_view._format_history_duration(seconds_value)
 
 func _format_history_timestamp(seconds_value: float) -> String:
-	var total := maxi(0, floori(seconds_value))
-	var day := total / 86400 + 1
-	var within_day := total % 86400
-	return "день %d %02d:%02d:%02d" % [day, within_day / 3600, (within_day % 3600) / 60, within_day % 60]
+	return history_view._format_history_timestamp(seconds_value)
 
 func _format_history_details(record: Dictionary) -> String:
-	var duration := float(record.duration_seconds)
-	var distance := float(record.distance_km)
-	var average := "%.1f" % (distance * 3600.0 / duration) if duration > 0.0 else "—"
-	return "%.1f км • %s • СР. %s км/ч • %s → %s" % [distance, _format_history_duration(duration), average, _format_history_timestamp(float(record.start_seconds)), _format_history_timestamp(float(record.end_seconds))]
+	return history_view._format_history_details(record)
 
 func _history_world_label(origin_level: int, destination_level: int) -> String:
-	return Localization.text("Мир %d" % (origin_level + 1)) if origin_level == destination_level else Localization.text("Мир %d → %d" % [origin_level + 1, destination_level + 1])
+	return history_view._history_world_label(origin_level, destination_level)
 
 func _history_airport_name(record: Dictionary, endpoint: String) -> String:
-	var stored := String(record.get(endpoint + "_name", ""))
-	return stored if not stored.is_empty() else String(host.world.airports[int(record[endpoint])].name)
+	return history_view._history_airport_name(record, endpoint)
 
 func _draw_flight_history_scene() -> void:
-	var route_details := view_mode == ViewMode.ROUTE_HISTORY
-	_draw_scene_background("СТАТИСТИКА ПОЛЁТОВ • МИР %d" % (host.world.level_index + 1))
-	var records := _active_history_records()
-	var title := "ИСТОРИЯ ПОЛЁТОВ • НОВЫЕ СВЕРХУ"
-	if route_details and route_history_origin in range(host.world.airports.size()) and route_history_destination in range(host.world.airports.size()):
-		title = "%s • %s → %s • ВСЕГО ПОЛЁТОВ: %d • РЕКОРД СВЕРХУ" % [_history_world_label(route_history_level, route_history_destination_level), _history_airport_name(records[0], "origin") if not records.is_empty() else host.world.airports[route_history_origin].name, _history_airport_name(records[0], "destination") if not records.is_empty() else host.world.airports[route_history_destination].name, records.size()]
-	var back_rect := get_history_back_rect()
-	host.draw_localized_string(ThemeDB.fallback_font, Vector2(_history_left_margin(), 139), title, HORIZONTAL_ALIGNMENT_LEFT, maxf(100.0, back_rect.position.x - _history_left_margin() - 18.0), 17, AircraftArt.INK)
-	_draw_menu_button(get_history_back_rect(), "НАЗАД")
-	var list_rect := _history_list_rect()
-	host.draw_rect(list_rect, Color("d7d0ad"), true)
-	host.draw_rect(list_rect, AircraftArt.INK, false, 1.0)
-	if records.is_empty():
-		host.draw_localized_string(ThemeDB.fallback_font, list_rect.position + Vector2(0, 42), "Завершённых полётов пока нет", HORIZONTAL_ALIGNMENT_CENTER, list_rect.size.x, 17, AircraftArt.INK)
-		_scene_prompt("Колесо / ↑↓: прокрутка • Enter: открыть рекорды маршрута • кнопка «Назад»: вернуться")
-		return
-	_clamp_history_selection(route_details)
-	var scroll := route_history_scroll if route_details else history_scroll
-	var selected := route_history_selected if route_details else history_selected
-	var end_index := mini(records.size(), scroll + _history_visible_rows())
-	for record_index in range(scroll, end_index):
-		var record: Dictionary = _history_record_at(record_index)
-		var row_rect := Rect2(list_rect.position + Vector2(5, (record_index - scroll) * 64.0 + 4), Vector2(list_rect.size.x - 10, 56))
-		if record_index == selected:
-			host.draw_rect(row_rect, Color("c4ba91"), true)
-		if record.get("kind", "") == "world_transition":
-			host.draw_line(row_rect.position + Vector2(10, 4), Vector2(row_rect.end.x - 10, row_rect.position.y + 4), AircraftArt.INK, 1.0)
-			host.draw_localized_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 25), "ПЕРЕХОД: МИР %d → МИР %d" % [int(record.from_level) + 1, int(record.to_level) + 1], HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 15, AircraftArt.INK)
-			var transition_time := _format_history_timestamp(float(record.time_seconds)) if bool(record.get("time_known", true)) else "Время перехода не записано"
-			host.draw_localized_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 46), transition_time, HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 13, Color("6f5b3e"))
-			continue
-		var origin_name: String = _history_airport_name(record, "origin")
-		var destination_name: String = _history_airport_name(record, "destination")
-		var level := int(record.get("level", 0))
-		var destination_level := int(record.get("destination_level", level))
-		var count: int = _history_route_count(int(record.origin), int(record.destination), level, destination_level)
-		var count_text := Localization.text(" • всего полётов: %d • Enter: рекорды" % count) if not route_details and count > 1 else ""
-		var rank_text := "%d. " % (record_index + 1) if route_details else ""
-		if route_details and record_index == 0:
-			rank_text += Localization.text("РЕКОРД • ")
-		host.draw_localized_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 21), "%s%s • %s → %s%s" % [rank_text, _history_world_label(level, destination_level), origin_name, destination_name, count_text], HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 15, AircraftArt.INK)
-		var details := _format_history_details(record)
-		host.draw_localized_string(ThemeDB.fallback_font, row_rect.position + Vector2(10, 43), details, HORIZONTAL_ALIGNMENT_LEFT, row_rect.size.x - 20, 13, Color("6f5b3e"))
-	if records.size() > _history_visible_rows():
-		var bar := Rect2(list_rect.end.x - 7, list_rect.position.y + 4, 3, list_rect.size.y - 8)
-		host.draw_rect(bar, Color("aa9c72"), true)
-		var thumb_height := maxf(22.0, bar.size.y * _history_visible_rows() / float(records.size()))
-		var thumb_y := bar.position.y + (bar.size.y - thumb_height) * scroll / float(maxi(1, records.size() - _history_visible_rows()))
-		host.draw_rect(Rect2(bar.position.x - 1, thumb_y, 5, thumb_height), AircraftArt.INK, true)
-	_scene_prompt("Колесо / ↑↓: прокрутка • Enter: открыть рекорды маршрута • кнопка «Назад»: вернуться")
+	history_view._draw_flight_history_scene()
 
 func _economy_button_rect(index: int) -> Rect2:
 	return Rect2(host.size.x * 0.48, 165.0 + index * 64.0, minf(520.0, host.size.x * 0.46), 48.0)
+
+func _economy_exit_rect() -> Rect2:
+	return mail_view._economy_exit_rect() if view_mode == ViewMode.MAIL else _economy_button_rect(5)
+
+func _mail_row_count() -> int:
+	return mail_view._mail_row_count()
+
+func _mail_visible_rows() -> int:
+	return mail_view._mail_visible_rows()
+
+func _clamp_mail_scroll() -> void:
+	mail_view._clamp_scroll()
+
+func _mail_row_rect(index: int) -> Rect2:
+	return mail_view._mail_row_rect(index)
+
+func handle_mail_scroll(event: InputEventMouseButton) -> void:
+	mail_view.handle_scroll(event)
 
 func _delivery_button_text(parcel: Dictionary) -> String:
 	return "СДАТЬ ПОСЫЛКУ • %d монет" % host.economy.parcel_reward(parcel)
@@ -1488,18 +1217,7 @@ func _draw_economy_scene() -> void:
 	host.draw_localized_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.48, 120), "%s • %d монет" % [host.world.airports[host.flight.airport_index].name, host.economy.money], HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.46, 18, AircraftArt.INK)
 	match view_mode:
 		ViewMode.MAIL:
-			var mail_status := "ПОСЫЛОК ОСТАЛОСЬ: %d • ПЕРЕХОД ОТКРЫТ" % host.economy.remaining_parcels_at(host.flight.airport_index) if not host.world.exit_portal.is_empty() else "ПОСЫЛОК ОСТАЛОСЬ: %d • ДО НОВОЙ КАРТЫ: %d" % [host.economy.remaining_parcels_at(host.flight.airport_index), maxi(0, EconomyScript.DELIVERIES_TO_UNLOCK_EXIT - host.economy.deliveries_on_map)]
-			host.draw_localized_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.48, 147), mail_status, HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.46, 13, AircraftArt.INK)
-			var row = 0
-			if host.economy.carried_item.get("type", "") == "parcel" and int(host.economy.carried_item.get("destination", -1)) == host.flight.airport_index:
-				_draw_menu_button(_economy_button_rect(row), _delivery_button_text(host.economy.carried_item))
-				row += 1
-			for offer in host.economy.offers_at(host.flight.airport_index):
-				var destination: String = host.world.airports[int(offer.destination)].name
-				var poverty_bonus := int(offer.get("poverty_bonus_percent", 0))
-				var bonus_text := " • надбавка +%d%%" % poverty_bonus if poverty_bonus > 0 else ""
-				_draw_menu_button(_economy_button_rect(row), "%s • маршрут %.0f км • %d монет%s" % [destination, offer.distance_km, host.economy.parcel_reward(offer), bonus_text])
-				row += 1
+			mail_view.draw()
 		ViewMode.CAFE:
 			var food_price_suffix: String = host.economy.known_price_suffix(host.economy.food_airports, host.flight.airport_index)
 			_draw_menu_button(_economy_button_rect(0), "КУПИТЬ ЕДУ С СОБОЙ • %d монет%s" % [host.economy.food_price(host.flight.airport_index), food_price_suffix])
@@ -1519,5 +1237,5 @@ func _draw_economy_scene() -> void:
 			var repair_price_suffix: String = host.economy.known_price_suffix(host.economy.repair_airports, host.flight.airport_index)
 			host.draw_localized_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.48, 148), "Точное состояние: %.1f/100 • %.1f мон./ед." % [host.flight.airframe_condition, host.economy.repair_price_per_point(host.flight.airport_index)], HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.46, 14, AircraftArt.INK)
 			_draw_menu_button(_economy_button_rect(0), "РЕМОНТ ДО 100 • %d монет%s" % [full_cost, repair_price_suffix])
-	_draw_menu_button(_economy_button_rect(5), "ВЫЙТИ В АЭРОПОРТ [ENTER]")
+	_draw_menu_button(_economy_exit_rect(), "ВЫЙТИ В АЭРОПОРТ [ENTER]")
 	_scene_prompt(scene_notice if not scene_notice.is_empty() else "Клик: действие • Enter: выйти • Esc: меню")

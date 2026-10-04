@@ -1,9 +1,10 @@
 extends RefCounted
+const Palette = preload("res://scripts/ui_palette.gd")
 ## One airframe, two views. Coordinates and door/cockpit positions are shared
 ## with navigation in main.gd; changing the skin never changes the floor plan.
-const INK := Color("#a5753d")
-const LIGHT := Color("#d5bd97")
-const PAPER := Color("#d7d0ad")
+const INK := Palette.SCENE_INK
+const LIGHT := Palette.SCENE_LIGHT
+const PAPER := Palette.PAPER
 const SHADE := PAPER
 const FLOOR_Y := 330.0
 const COCKPIT_FLOOR_Y := 258.0

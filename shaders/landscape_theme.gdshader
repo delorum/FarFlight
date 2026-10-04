@@ -3,11 +3,20 @@ shader_type canvas_item;
 // antialiasing and translucent weather keep their original alpha and detail.
 uniform bool theme_enabled = false;
 uniform bool navigation_map = false;
+// Set once at material creation from UIPalette, not on every frame.
+uniform vec3 source_paper;
+uniform vec3 source_route;
+uniform vec3 dark_background;
 varying vec4 drawing_color;
 
 vec3 landscape_color(vec3 source) {
-	vec3 paper = vec3(0.84314, 0.81569, 0.67843);
-	vec3 background = vec3(0.02745, 0.06275, 0.07059);
+	// User-drawn routes (including the unfinished segment) keep their blue
+	// ink in both themes; only chart ink is converted to beige.
+	if (navigation_map && distance(source, source_route) < 0.015) {
+		return source;
+	}
+	vec3 paper = source_paper;
+	vec3 background = dark_background;
 	float lightness = dot(source, vec3(0.2126, 0.7152, 0.0722));
 	float spread = max(source.r, max(source.g, source.b)) - min(source.r, min(source.g, source.b));
 	bool neutral = spread < 0.16;

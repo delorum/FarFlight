@@ -45,7 +45,7 @@ func _run() -> void:
 	check(not Save.slot_exists(slot), "Practice must not create a campaign save")
 	check(Save.write_slot(training, slot) == ERR_UNAUTHORIZED and not Save.slot_exists(slot), "Save boundary must reject practice")
 	shell._pause_game()
-	check(button_texts(shell) == ["Начать заново", "В главное меню"], "Practice pause menu must offer restart and title")
+	check(button_texts(shell) == ["Начать заново", "В главное меню", "Настройки"], "Practice pause menu must offer restart and title")
 	var first_seed: int = training.world.seed_value
 	shell._restart_landing_training()
 	check(shell.game != training and SessionMode.is_landing_practice(shell.game.session_mode) and shell.game.world.seed_value != first_seed, "Restart must create a new independent attempt")

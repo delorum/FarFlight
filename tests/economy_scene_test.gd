@@ -79,6 +79,26 @@ func _run() -> void:
 	scene.time_scale_index = 0
 	check(scene._airport_buildings().size() >= 2, "Mail and flight service must always exist")
 	scene._set_view_mode(scene.ViewMode.MAIL)
+	var mail_backup: Dictionary = scene.economy.snapshot()
+	var original_size: Vector2 = scene.size
+	scene.size = Vector2(1280, 600)
+	check(scene.economy.offers_at(0).size() == 7, "The post office must expose all seven available destinations")
+	check(not scene.side_scenes._mail_row_rect(6).has_area(), "Rows outside the mail viewport must not be clickable")
+	var mail_wheel := InputEventMouseButton.new()
+	mail_wheel.button_index = MOUSE_BUTTON_WHEEL_DOWN
+	mail_wheel.pressed = true
+	mail_wheel.position = scene._economy_button_rect(0).get_center()
+	for scroll_step in 10:
+		scene._handle_mouse_button(mail_wheel)
+	var final_row: Rect2 = scene.side_scenes._mail_row_rect(6)
+	check(final_row.has_area() and final_row.end.y < scene.side_scenes._economy_exit_rect().position.y, "Scrolling must reveal the final destination above a separate exit button")
+	var final_offer: Dictionary = scene.economy.offers_at(0)[6].duplicate(true)
+	scene._handle_economy_click(final_row.get_center())
+	check(scene.economy.carried_item.get("id") == final_offer.id, "A scrolled mail button must accept the matching destination")
+	scene.economy.restore(mail_backup, scene.world)
+	scene.size = original_size
+	scene._set_view_mode(scene.ViewMode.MAIL)
+	check(scene.side_scenes.mail_scroll == 0, "Reopening the post office must reset its scroll position")
 	var offer: Dictionary = scene.economy.offers_at(0)[0]
 	scene._handle_economy_click(scene._economy_button_rect(0).get_center())
 	check(scene.economy.carried_item.get("id") == offer.id, "Clicking an offer must hand parcel to player")
