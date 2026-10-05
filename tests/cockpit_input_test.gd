@@ -128,5 +128,43 @@ func _run() -> void:
 	throttle_key.pressed = false
 	scene._input(throttle_key)
 	check(not scene.throttle_up_held, "Releasing W must clear held throttle")
+	scene.simulation_paused = true
+	scene.flight.throttle = 0.5
+	scene.flight.yoke = Vector2(0.3, -0.2)
+	var paused_heading: float = scene.flight.heading_deg
+	for code in [KEY_W, KEY_S, KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN, KEY_C]:
+		for fine in [false, true]:
+			var paused_key := InputEventKey.new()
+			paused_key.keycode = code
+			paused_key.shift_pressed = fine
+			paused_key.pressed = true
+			scene._input(paused_key)
+			paused_key.pressed = false
+			scene._input(paused_key)
+	Input.action_press("ui_right")
+	Input.action_press("ui_up")
+	scene.cockpit_input.update_keyboard_yoke(1.0)
+	Input.action_release("ui_right")
+	Input.action_release("ui_up")
+	scene._update_held_throttle(1.0)
+	scene._update_held_steering(1.0)
+	scene._update_yoke(scene.get_yoke_rect().position)
+	scene._update_throttle(scene.get_throttle_rect().position)
+	for rect in [scene.get_yoke_rect(), scene.get_throttle_rect(), scene.get_center_yoke_button_rect()]:
+		var paused_click := InputEventMouseButton.new()
+		paused_click.button_index = MOUSE_BUTTON_LEFT
+		paused_click.pressed = true
+		paused_click.position = rect.get_center()
+		scene._handle_panel_controls_mouse_button(paused_click)
+	check(is_equal_approx(scene.flight.throttle, 0.5), "Pause must block throttle taps, holds and mouse input")
+	check(scene.flight.yoke.is_equal_approx(Vector2(0.3, -0.2)), "Pause must block yoke input, fine steps and centering")
+	check(is_equal_approx(scene.flight.heading_deg, paused_heading), "Pause must block fine heading steps")
+	check(not scene.dragging_yoke and not scene.dragging_throttle and not scene.throttle_up_held and not scene.throttle_down_held, "Paused input must not arm controls for resuming")
+	scene.simulation_paused = false
+	throttle_key.pressed = true
+	scene._input(throttle_key)
+	check(is_equal_approx(scene.flight.throttle, 0.51), "Throttle control must work again after resuming")
+	throttle_key.pressed = false
+	scene._input(throttle_key)
 	print("Cockpit keyboard control and time scale: ", "FAIL" if failed else "OK")
 	quit(1 if failed else 0)

@@ -174,5 +174,23 @@ func _run() -> void:
 	check(not bool(game.ils_touchdown_prediction.valid), "Touchdown prediction must disappear immediately outside the flying state")
 	check(not bool(game.ils_display_state().show_forecast), "Both ILS sizes must hide forecast readouts outside flight")
 
+	game.flight.state = game.FlightModelScript.State.FLYING
+	for sample in [
+		{"along": 0.5, "cross": 0.0, "along_ok": true, "cross_ok": true},
+		{"along": 0.5, "cross": 0.1, "along_ok": true, "cross_ok": false},
+		{"along": -0.1, "cross": 0.0, "along_ok": false, "cross_ok": true},
+		{"along": 2.1, "cross": -0.1, "along_ok": false, "cross_ok": false},
+	]:
+		var forecast := {"valid": true, "distance_from_threshold_km": sample.along, "cross_track_km": sample.cross}
+		var state := ILSDisplayState.build(game.flight, 0, true, forecast, departure_frequency)
+		check(state.touchdown_color == (ILSDisplayState.GREEN if sample.along_ok else ILSDisplayState.RED), "Along-runway forecast colour must not depend on lateral miss")
+		check(state.lateral_color == (ILSDisplayState.GREEN if sample.cross_ok else ILSDisplayState.RED), "Lateral forecast colour must not depend on along-runway miss")
+	var unavailable := ILSDisplayState.build(game.flight, 0, true, {"valid": false}, departure_frequency)
+	for angle in [0.5, 3.0, -6.0]:
+		var aligned := ILSDisplayState.build(game.flight, 0, true, {"valid": true, "distance_from_threshold_km": 0.1, "cross_track_km": 0.0, "touchdown_course_error_deg": angle}, departure_frequency)
+		check(aligned.touchdown_course_text == "К ОСИ %+.1f°" % angle, "Forecast row must show the predicted touchdown angle")
+		check(aligned.touchdown_course_color == (ILSDisplayState.GREEN if absf(angle) <= 1 else (ILSDisplayState.YELLOW if absf(angle) <= 5 else ILSDisplayState.RED)), "Touchdown alignment must have an independent colour")
+	check(unavailable.touchdown_color == ILSDisplayState.YELLOW and unavailable.lateral_color == ILSDisplayState.YELLOW, "No forecast must remain neutral, not indicate a hit")
+	check(not ILSDisplayState.prediction_inside_runway({"valid": true, "safe_landing": false, "distance_from_threshold_km": 0.5, "cross_track_km": 0.0}), "Projected marker must retain the touchdown safety check")
 	print("ILS receiver binding, flight-path/nose markers, touchdown prediction and automatic airport selection: OK")
 	quit(1 if failed else 0)

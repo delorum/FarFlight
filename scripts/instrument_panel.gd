@@ -537,7 +537,8 @@ func _draw_ils() -> void:
 	if state.show_forecast:
 		var forecast_segments := [{"text": state.touchdown_text, "color": state.touchdown_color}]
 		if state.has_prediction:
-			forecast_segments.append({"text": state.lateral_text, "color": state.touchdown_color})
+			forecast_segments.append({"text": state.lateral_text, "color": state.lateral_color})
+			forecast_segments.append({"text": state.touchdown_course_text, "color": state.touchdown_course_color})
 		ILSDisplayArt.draw_info_segments(host, info_x, rect.position.y + 61.0, forecast_segments, 12, info_width)
 	# Runway edges live on the airport's fixed horizontal axis. Far from the
 	# airport they are close together; towards the threshold they spread apart.

@@ -24,7 +24,12 @@ static func build(flight, airport_index: int, signal_available: bool, prediction
 	var vertical_speed_color := parameter_color(absf(flight.vertical_speed_mps - desired_vs) / 0.35)
 	var course_color := parameter_color(absf(float(guidance.get("course_error_deg", 0.0))), 1.0, 5.0)
 	var speed_color := GREEN if flight.speed_kmh <= 100.0 else (YELLOW if flight.speed_kmh <= 115.0 else RED)
-	var touchdown_color := GREEN if has_prediction and prediction_inside_runway(prediction) else (RED if has_prediction else YELLOW)
+	var along := float(prediction.get("distance_from_threshold_km", 0.0))
+	var cross := absf(float(prediction.get("cross_track_km", 0.0)))
+	# Diagnose each geometric miss independently. The projected marker still
+	# uses the combined result, including touchdown safety.
+	var touchdown_color := GREEN if has_prediction and along >= 0.0 and along <= FlightWorld.RUNWAY_LENGTH_KM else (RED if has_prediction else YELLOW)
+	var lateral_color := GREEN if has_prediction and cross <= FlightWorld.RUNWAY_WIDTH_KM * 0.5 else (RED if has_prediction else YELLOW)
 	var along_ground_speed_kmh := float(guidance.get("along_ground_speed_kmh", 0.0))
 	var angle_available: bool = flight.state == FlightModel.State.FLYING and along_ground_speed_kmh >= MIN_APPROACH_GROUND_SPEED_KMH
 	var descent_angle: float = descent_angle_deg(flight.vertical_speed_mps, along_ground_speed_kmh) if angle_available else 0.0
@@ -33,6 +38,7 @@ static func build(flight, airport_index: int, signal_available: bool, prediction
 	var projection := guidance.duplicate()
 	projection["aircraft_altitude_m"] = flight.altitude_m
 	projection["aircraft_pitch_deg"] = flight.pitch_deg
+	projection["ground_speed_kmh"] = flight.ground_speed_kmh()
 	projection["flight_path_angle_deg"] = rad_to_deg(atan2(flight.vertical_speed_mps, ground_speed_mps))
 	projection["desired_flight_path_angle_deg"] = rad_to_deg(atan2(desired_vs, ground_speed_mps))
 	return {
@@ -53,11 +59,14 @@ static func build(flight, airport_index: int, signal_available: bool, prediction
 		"distance_text": "ДО ВПП %.2f км" % float(guidance.get("actual_distance_to_threshold_km", 0.0)),
 		"touchdown_text": "КАС. %+.2f км" % float(prediction.get("distance_from_threshold_km", 0.0)) if has_prediction else "КАСАНИЕ — НЕ ПРОГНОЗИРУЕТСЯ",
 		"lateral_text": "БОК %+.0f м" % (float(prediction.get("cross_track_km", 0.0)) * 1000.0) if has_prediction else "",
+		"touchdown_course_text": "К ОСИ %+.1f°" % float(prediction.touchdown_course_error_deg) if has_prediction and prediction.has("touchdown_course_error_deg") else "К ОСИ —",
+		"touchdown_course_color": parameter_color(absf(float(prediction.get("touchdown_course_error_deg", 0.0))), 1.0, 5.0) if has_prediction and prediction.has("touchdown_course_error_deg") else TEXT,
 		"altitude_color": altitude_color,
 		"vertical_speed_color": vertical_speed_color,
 		"speed_color": speed_color,
 		"course_color": course_color,
 		"touchdown_color": touchdown_color,
+		"lateral_color": lateral_color,
 	}
 
 static func descent_angle_deg(vertical_speed_mps: float, along_ground_speed_kmh: float) -> float:
@@ -65,6 +74,25 @@ static func descent_angle_deg(vertical_speed_mps: float, along_ground_speed_kmh:
 		return 0.0
 	var angle := rad_to_deg(atan2(-vertical_speed_mps, along_ground_speed_kmh / 3.6))
 	return 0.0 if absf(angle) < 0.05 else angle
+
+static func axis_motion(guidance: Dictionary) -> Dictionary:
+	var tolerance := maxf(0.001, float(guidance.get("localizer_tolerance_km", FlightWorld.RUNWAY_WIDTH_KM * 0.5)))
+	var cross := float(guidance.get("localizer_error", 0.0)) * tolerance
+	var speed := float(guidance.get("ground_speed_kmh", 0.0)) / 3.6
+	var course := deg_to_rad(float(guidance.get("course_error_deg", 0.0)))
+	# Positive course is rightward, whereas positive runway cross is leftward.
+	var cross_rate := -speed * sin(course)
+	var closing := -signf(cross) * cross_rate if absf(cross) > 0.0005 else -absf(cross_rate)
+	var tolerance_rate := 0.0
+	if float(guidance.get("signed_distance_to_threshold_km", 0.0)) * 0.08 > FlightWorld.RUNWAY_WIDTH_KM * 0.5:
+		tolerance_rate = -speed * cos(course) * 0.08 / 1000.0
+	var error_rate := (cross_rate / 1000.0 - float(guidance.get("localizer_error", 0.0)) * tolerance_rate) / tolerance
+	var axis_text := "ОСЬ %s %.0f м" % ["→" if cross > 0 else "←", absf(cross) * 1000.0] if absf(cross) > 0.0005 else "ОСЬ 0 м"
+	var motion_text := "ПАРАЛЛ." if absf(cross_rate) < 0.1 else (("СБЛ. %+.1f м/с" if closing > 0 else "УХОД %+.1f м/с") % -cross_rate)
+	return {"cross_m": cross * 1000.0, "cross_rate_mps": cross_rate,
+		"closing_mps": closing, "error_rate": error_rate,
+		"axis_text": axis_text, "motion_text": motion_text,
+		"motion_color": TEXT if absf(cross_rate) < 0.1 else (GREEN if closing > 0 else YELLOW)}
 
 static func descent_angle_color(angle_deg: float) -> Color:
 	var excess := angle_deg - FlightModel.GLIDE_SLOPE_DEG

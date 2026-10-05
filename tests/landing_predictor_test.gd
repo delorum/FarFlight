@@ -40,9 +40,17 @@ func _initialize() -> void:
 	var job := LandingPredictor.start_prediction(flight, 0)
 	job.advance(1)
 	check(not job.finished and is_equal_approx(job.elapsed, LandingPredictor.STEP_SECONDS), "Incremental prediction must obey its step budget")
+	var last_displacement := Vector2.ZERO
 	while not job.finished:
-		job.advance(17)
+		var before: Vector2 = job.simulated.position_km
+		job.advance(1)
+		last_displacement = Vector2(job.simulated.position_km) - before
 	check(job.result == prediction, "Incremental and synchronous forecasts must produce exactly the same result")
+	var final_course := world.vector_heading(last_displacement)
+	check(is_equal_approx(float(prediction.touchdown_course_error_deg), wrapf(final_course - heading, -180.0, 180.0)), "Touchdown alignment must match the final airborne displacement, including wind")
+	var rightward_velocity := world.heading_vector(heading + 7.0) * 100.0
+	check(is_equal_approx(LandingPredictor.touchdown_course_error_deg(flight, airport, 1.0, rightward_velocity), 7.0), "Alignment must use ground movement, not nose heading")
+	check(is_equal_approx(LandingPredictor.touchdown_course_error_deg(flight, airport, -1.0, world.heading_vector(heading + 180.0 - 4.0)), -4.0), "Alignment must handle the opposite runway approach")
 	var elapsed_msec := (Time.get_ticks_usec() - started_usec) / 1000.0
 	check(bool(prediction.valid), "A stable three-degree approach must produce a forward touchdown prediction")
 	check(float(prediction.prediction_seconds) > 30.0, "The predictor must simulate the future rather than project one instant")
@@ -107,14 +115,20 @@ func _test_short_trajectory(flight, world) -> void:
 	check(flight.snapshot() == original and flight.turbulence_rng.state == rng_state, "Both forecast modes must leave the source untouched")
 	var scheduler := Scheduler.new()
 	check(is_equal_approx(Scheduler.REFRESH_INTERVAL, 0.5), "Forecast must refresh twice per real second")
-	check(scheduler.prediction_mode == LandingPredictor.Mode.SHORT_TRAJECTORY, "Game instruments must default to the short forecast")
+	check(scheduler.prediction_mode == LandingPredictor.Mode.FULL_SIMULATION, "Game instruments must default to the full forecast")
 	scheduler.refresh_immediately(flight, 0)
-	check(scheduler.result == short_after, "Immediate forecast must use the selected short mode")
-	scheduler.prediction_mode = LandingPredictor.Mode.FULL_SIMULATION
-	scheduler.refresh_immediately(flight, 0)
-	check(scheduler.result == full_after, "One mode switch must restore the original full forecast")
+	check(scheduler.result == full_after, "Immediate forecast must use the selected full mode")
+	scheduler.cancel()
+	scheduler.update(flight, 0, true, Scheduler.REFRESH_INTERVAL)
+	var frames := 1
+	while scheduler.job != null:
+		scheduler.update(flight, 0, true, 0.0)
+		frames += 1
+	check(scheduler.result == full_after, "Budgeted full forecast must match the synchronous physics result")
+	check(frames > 1, "Long forecast must be spread across multiple frames")
 	scheduler.prediction_mode = LandingPredictor.Mode.SHORT_TRAJECTORY
 	scheduler.refresh_immediately(flight, 0)
+	check(scheduler.result == short_after, "One mode switch must restore the short forecast")
 	flight.heading_deg += 2.0
 	var raw := LandingPredictor.predict(flight, 0, LandingPredictor.Mode.SHORT_TRAJECTORY)
 	scheduler.update(flight, 0, true, Scheduler.REFRESH_INTERVAL)

@@ -1615,13 +1615,14 @@ func _handle_panel_controls_mouse_button(event: InputEventMouseButton) -> bool:
 	if get_trip_reset_button_rect().has_point(event.position):
 		_reset_trip_counter()
 	elif get_throttle_rect().has_point(event.position):
-		dragging_throttle = true
+		dragging_throttle = not simulation_paused
 		_update_throttle(event.position)
 	elif get_yoke_rect().has_point(event.position):
-		dragging_yoke = true
+		dragging_yoke = not simulation_paused
 		_update_yoke(event.position)
 	elif get_center_yoke_button_rect().has_point(event.position):
-		flight.yoke = Vector2.ZERO
+		if not simulation_paused:
+			flight.yoke = Vector2.ZERO
 	elif get_power_button_rect().has_point(event.position):
 		flight.toggle_electrical_power()
 		invalidate_weather_radar_caches()
@@ -1691,10 +1692,14 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 		_queue_map_redraw()
 
 func _update_yoke(mouse: Vector2) -> void:
+	if simulation_paused:
+		return
 	var rect := get_yoke_rect()
 	flight.yoke = ((mouse - rect.get_center()) / (rect.size.x * 0.38)).limit_length(1.0)
 
 func _update_throttle(mouse: Vector2) -> void:
+	if simulation_paused:
+		return
 	var rect := get_throttle_rect()
 	flight.throttle = clamp(inverse_lerp(rect.end.y - 8, rect.position.y + 8, mouse.y), 0.0, 1.0)
 	if flight.throttle > 0.001:

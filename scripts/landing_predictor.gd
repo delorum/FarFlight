@@ -72,13 +72,14 @@ class PredictionJob extends RefCounted:
 				return
 			simulated.yoke.x = move_toward(simulated.yoke.x, 0.0, STEP_SECONDS * LATERAL_YOKE_CENTER_RATE)
 			var previous_state: int = simulated.state
+			var previous_position: Vector2 = simulated.position_km
 			simulated.update_prediction(STEP_SECONDS)
 			elapsed += STEP_SECONDS
 			if previous_state == FlightModel.State.FLYING and simulated.state == FlightModel.State.ROLLING:
-				_finish(LandingPredictor._impact_result(simulated, airport, approach_sign, elapsed, true))
+				_finish(LandingPredictor._impact_result(simulated, airport, approach_sign, elapsed, true, Vector2(simulated.position_km) - previous_position))
 			elif simulated.state == FlightModel.State.CRASHED:
 				var contact: bool = simulated.altitude_m <= float(simulated.world.height_at(simulated.position_km)) + FlightModel.GROUND_CONTACT_CLEARANCE_M + 0.01
-				_finish(LandingPredictor._impact_result(simulated, airport, approach_sign, elapsed, false) if contact else LandingPredictor.no_touchdown("airborne_crash"))
+				_finish(LandingPredictor._impact_result(simulated, airport, approach_sign, elapsed, false, Vector2(simulated.position_km) - previous_position) if contact else LandingPredictor.no_touchdown("airborne_crash"))
 			elif mode == LandingPredictor.Mode.SHORT_TRAJECTORY and elapsed >= SHORT_HORIZON_SECONDS - 0.0001:
 				_finish(LandingPredictor._trajectory_result(simulated, airport, approach_sign, elapsed))
 			else:
@@ -106,18 +107,27 @@ static func _trajectory_result(simulated, airport: Dictionary, approach_sign: fl
 		"valid": true,
 		"distance_from_threshold_km": coords.x * approach_sign + FlightWorld.RUNWAY_LENGTH_KM * 0.5,
 		"cross_track_km": coords.y * approach_sign,
+		"touchdown_course_error_deg": touchdown_course_error_deg(simulated, airport, approach_sign, velocity),
 		"predicted_position": position,
 		"prediction_seconds": elapsed + seconds,
 		"safe_landing": simulated.vertical_speed_mps > -FlightModel.FATAL_TOUCHDOWN_SINK_MPS,
 		"reason": "trajectory_estimate",
 	}
 
-static func _impact_result(simulated, airport: Dictionary, approach_sign: float, elapsed: float, safe_landing: bool) -> Dictionary:
+static func touchdown_course_error_deg(simulated, airport: Dictionary, approach_sign: float, velocity: Vector2) -> float:
+	var runway_heading := float(airport.heading) + (180.0 if approach_sign < 0 else 0.0)
+	var course: float = simulated.world.vector_heading(velocity) if velocity.length_squared() > 0.000000000001 else simulated.heading_deg
+	return wrapf(course - runway_heading, -180.0, 180.0)
+
+static func _impact_result(simulated, airport: Dictionary, approach_sign: float, elapsed: float, safe_landing: bool, displacement: Vector2) -> Dictionary:
 	var coords: Vector2 = simulated.world.runway_coordinates(simulated.position_km, airport)
 	return {
 		"valid": true,
 		"distance_from_threshold_km": coords.x * approach_sign + FlightWorld.RUNWAY_LENGTH_KM * 0.5,
 		"cross_track_km": coords.y * approach_sign,
+		# Last airborne displacement retains wind and direction even if impact
+		# resets the aircraft's speed, pitch or other ground-state values.
+		"touchdown_course_error_deg": touchdown_course_error_deg(simulated, airport, approach_sign, displacement),
 		"predicted_position": simulated.position_km,
 		"prediction_seconds": elapsed,
 		"safe_landing": safe_landing,

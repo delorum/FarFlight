@@ -23,6 +23,13 @@ func _init(owner: Control) -> void:
 func handle_key(event: InputEvent) -> bool:
 	if not event is InputEventKey:
 		return false
+	if host.simulation_paused and event.keycode in [KEY_W, KEY_S, KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN, KEY_C]:
+		# Consume controls without arming held input or applying single-key steps.
+		throttle_up_held = false
+		throttle_down_held = false
+		steering_left_held = false
+		steering_right_held = false
+		return true
 	if event.pressed and not event.echo and not event.ctrl_pressed and (event.keycode == KEY_P or event.physical_keycode == KEY_P):
 		host.flight.toggle_electrical_power()
 		host.invalidate_weather_radar_caches()
@@ -93,6 +100,8 @@ func handle_key(event: InputEvent) -> bool:
 	return false
 
 func update_keyboard_yoke(delta: float) -> void:
+	if host.simulation_paused:
+		return
 	var steering_axis := 0.0 if steering_left_held or steering_right_held else Input.get_axis("ui_left", "ui_right")
 	var fine_pitch_active := Input.is_key_pressed(KEY_SHIFT) and absf(Input.get_axis("ui_up", "ui_down")) > 0.05
 	var keyboard_yoke := Vector2(steering_axis, 0.0 if fine_pitch_active else Input.get_axis("ui_up", "ui_down"))
@@ -108,6 +117,8 @@ func update_keyboard_yoke(delta: float) -> void:
 			host.flight.yoke.y = clampf(host.flight.yoke.y + keyboard_yoke.y * delta * 0.75, -1.0, 1.0)
 
 func adjust_throttle_percent(step_percent: int) -> void:
+	if host.simulation_paused:
+		return
 	var current_percent := roundi(host.flight.throttle * 100.0)
 	if step_percent < 0 and current_percent <= 0 and host._aircraft_is_on_ground():
 		host.flight.wheel_brakes_applied = true
@@ -117,6 +128,8 @@ func adjust_throttle_percent(step_percent: int) -> void:
 	host.flight.throttle = clampf((current_percent + step_percent) / 100.0, 0.0, 1.0)
 
 func update_held_throttle(delta: float) -> void:
+	if host.simulation_paused:
+		return
 	if throttle_up_held:
 		var previous_time := throttle_up_hold_time
 		throttle_up_hold_time += delta
@@ -132,6 +145,8 @@ func update_held_throttle(delta: float) -> void:
 			host.flight.wheel_brakes_applied = true
 
 func update_held_steering(delta: float) -> void:
+	if host.simulation_paused:
+		return
 	var direction := float(int(steering_right_held) - int(steering_left_held))
 	if not is_zero_approx(direction):
 		host.flight.heading_deg = fposmod(host.flight.heading_deg + direction * STEERING_FINE_RATE_DEG_S * delta, 360.0)

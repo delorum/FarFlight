@@ -4,6 +4,9 @@ const Localization = preload("res://scripts/localization.gd")
 const FlightWorld = preload("res://scripts/world.gd")
 const FlightModel = preload("res://scripts/flight_model.gd")
 const ILSDisplayState = preload("res://scripts/ils_display_state.gd")
+const CockpitProjection = preload("res://scripts/ils_cockpit_projection.gd")
+# Set false to restore the previous runway-centred large ILS immediately.
+const USE_COCKPIT_PERSPECTIVE := true
 
 const BACKGROUND := Color("071012")
 const SCOPE_BACKGROUND := Color("0a0e10")
@@ -69,6 +72,9 @@ static func _draw_combined_scope(canvas: CanvasItem, scope: Rect2, guidance: Dic
 	canvas.draw_rect(scope, SCOPE_BACKGROUND, true)
 	canvas.draw_rect(scope, FRAME, false, 1.5)
 	var inner := scope.grow(-18.0)
+	if USE_COCKPIT_PERSPECTIVE:
+		_draw_cockpit_scope(canvas, inner, guidance, prediction)
+		return
 	var geometry := projected_runway_geometry(inner, guidance)
 	_draw_projected_runway(canvas, geometry)
 	# The large aircraft cross uses exactly the same localizer/glideslope errors
@@ -99,6 +105,79 @@ static func _draw_combined_scope(canvas: CanvasItem, scope: Rect2, guidance: Dic
 	if bool(prediction.get("valid", false)):
 		var marker := touchdown_cross_position(inner, guidance, prediction)
 		_draw_touchdown_marker(canvas, marker, GREEN if prediction_inside_runway(prediction) else RED)
+
+static func _draw_cockpit_scope(canvas: CanvasItem, view: Rect2, guidance: Dictionary, prediction: Dictionary) -> void:
+	CockpitProjection.draw_runway(canvas, view, guidance, RUNWAY)
+	# Open nose reticle: do not cover the very small distant runway below it.
+	var nose := view.get_center()
+	canvas.draw_line(nose - Vector2(12, 0), nose - Vector2(4, 0), NOSE_MARKER, 2.0, true)
+	canvas.draw_line(nose + Vector2(4, 0), nose + Vector2(12, 0), NOSE_MARKER, 2.0, true)
+	canvas.draw_line(nose - Vector2(0, 9), nose - Vector2(0, 4), NOSE_MARKER, 2.0, true)
+	if bool(prediction.get("valid", false)):
+		var point := CockpitProjection.camera_point(guidance, float(prediction.get("distance_from_threshold_km", 0.0)), float(prediction.get("cross_track_km", 0.0)))
+		var color := GREEN if prediction_inside_runway(prediction) else RED
+		_draw_perspective_cue(canvas, view, point, color, true)
+	# A discrete direction cue, not a clamped runway or touchdown marker.
+	var runway_middle := CockpitProjection.camera_point(guidance, FlightWorld.RUNWAY_LENGTH_KM * 0.5, 0.0)
+	_draw_perspective_cue(canvas, view, runway_middle, RUNWAY, false)
+	_draw_localizer_scale(canvas, view, guidance)
+
+static func _draw_localizer_scale(canvas: CanvasItem, view: Rect2, guidance: Dictionary) -> void:
+	var scale := CockpitProjection.localizer_scale_state(view, guidance)
+	var centre: Vector2 = scale.centre
+	var half_width: float = scale.half_width
+	# A small opaque backing keeps the scale legible over nearby ground lines.
+	canvas.draw_rect(Rect2(centre - Vector2(half_width + 9, 9), Vector2(half_width * 2 + 18, 18)), SCOPE_BACKGROUND)
+	canvas.draw_line(centre - Vector2(half_width, 0), centre + Vector2(half_width, 0), FRAME, 1.0)
+	for tick in [-2, -1, 1, 2]:
+		canvas.draw_circle(centre + Vector2(tick * half_width * 0.5, 0), 1.5, FRAME)
+	canvas.draw_line(centre - Vector2(0, 5), centre + Vector2(0, 5), TEXT, 1.5)
+	var pointer: Vector2 = scale.pointer
+	var color: Color = [GREEN, YELLOW, RED][int(scale.position_severity)]
+	if bool(scale.offscale):
+		var direction := 1.0 if float(scale.error) > 0 else -1.0
+		canvas.draw_line(pointer - Vector2(direction * 5, 4), pointer, color, 2.0, true)
+		canvas.draw_line(pointer - Vector2(direction * 5, -4), pointer, color, 2.0, true)
+	else:
+		canvas.draw_line(pointer - Vector2(0, 6), pointer + Vector2(0, 6), color, 2.0, true)
+	var motion := ILSDisplayState.axis_motion(guidance)
+	# The centre represents our aircraft; show its motion, opposite to the
+	# runway-axis pointer's movement. Positive camera lateral motion is right.
+	var trend_rate := -float(motion.cross_rate_mps) / (CockpitProjection.LOCALIZER_SCALE_LIMIT_M * 0.5)
+	var arrow_length := localizer_trend_arrow_length(trend_rate, half_width)
+	if not is_zero_approx(arrow_length):
+		var start := centre - Vector2(0, 12)
+		var tip := start + Vector2(arrow_length, 0)
+		var arrow_color: Color = GREEN if float(motion.closing_mps) > 0 else YELLOW
+		canvas.draw_line(start, tip, arrow_color, 1.5, true)
+		var back := Vector2(signf(arrow_length) * 4, 0)
+		canvas.draw_line(tip - back + Vector2(0, 3), tip, arrow_color, 1.5, true)
+		canvas.draw_line(tip - back - Vector2(0, 3), tip, arrow_color, 1.5, true)
+
+static func localizer_trend_arrow_length(error_rate: float, half_width: float) -> float:
+	# Never hide a slow but real trend just because its one-second displacement
+	# is subpixel. Keep a readable arrowhead; suppress only numerical noise.
+	if absf(error_rate) < 0.000001:
+		return 0.0
+	return signf(error_rate) * clampf(absf(error_rate) * half_width * 0.5, 8.0, 25.0)
+
+static func _draw_perspective_cue(canvas: CanvasItem, view: Rect2, point: Vector3, color: Color, touchdown: bool) -> void:
+	var position := CockpitProjection.project(view, point)
+	if point.z > CockpitProjection.NEAR_KM and view.grow(-10.0).has_point(position):
+		if touchdown:
+			canvas.draw_circle(position, 3.0, color, false, 1.5, true)
+		return
+	var direction := Vector2(point.x, -point.y)
+	if direction.length_squared() < 0.000001:
+		direction = Vector2.DOWN
+	direction = direction.normalized()
+	var half := view.size * 0.5 - Vector2.ONE * (15.0 if touchdown else 28.0)
+	var distance := minf(half.x / maxf(absf(direction.x), 0.0001), half.y / maxf(absf(direction.y), 0.0001))
+	var tip := view.get_center() + direction * distance
+	var base := tip - direction * 8.0
+	var side := direction.orthogonal() * 4.0
+	canvas.draw_line(base + side, tip, color, 2.0, true)
+	canvas.draw_line(base - side, tip, color, 2.0, true)
 
 static func projected_runway_geometry(view: Rect2, guidance: Dictionary) -> Dictionary:
 	var fallback_distance_km := float(guidance.get("actual_distance_to_threshold_km", 1.0))
@@ -337,7 +416,7 @@ static func _draw_information(canvas: CanvasItem, left: Rect2, right: Rect2, sta
 	# Repeat the small ILS' compact information layout on the right.
 	var show_forecast: bool = state.show_forecast
 	var has_prediction: bool = state.has_prediction
-	var row_count := 3 + (1 if show_forecast else 0)
+	var row_count := 3 + (1 if show_forecast else 0) + (1 if USE_COCKPIT_PERSPECTIVE else 0)
 	var row_offset: float = (row_count - 1) * 0.5
 	var right_y := right.get_center().y - line_height * row_offset
 	draw_info_segments(canvas, right.position.x, right_y, [
@@ -351,12 +430,20 @@ static func _draw_information(canvas: CanvasItem, left: Rect2, right: Rect2, sta
 		{"text": state.distance_text, "color": TEXT},
 	], font_size)
 	right_y += line_height
+	if USE_COCKPIT_PERSPECTIVE:
+		var motion := ILSDisplayState.axis_motion(state.projection)
+		draw_info_segments(canvas, right.position.x, right_y, [
+			{"text": motion.axis_text, "color": TEXT},
+			{"text": motion.motion_text, "color": motion.motion_color},
+		], font_size, right.size.x)
+		right_y += line_height
 	_draw_info_line(canvas, right.position.x, right_y, right.size.x, state.descent_angle_text, state.descent_angle_color, font_size)
 	right_y += line_height
 	if has_prediction:
 		draw_info_segments(canvas, right.position.x, right_y, [
 			{"text": state.touchdown_text, "color": state.touchdown_color},
-			{"text": state.lateral_text, "color": state.touchdown_color},
+			{"text": state.lateral_text, "color": state.lateral_color},
+			{"text": state.touchdown_course_text, "color": state.touchdown_course_color},
 		], font_size, right.size.x)
 	elif show_forecast:
 		_draw_info_line(canvas, right.position.x, right_y, right.size.x, state.touchdown_text, state.touchdown_color, font_size)
