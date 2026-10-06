@@ -1,8 +1,8 @@
 extends RefCounted
 ## Owns forecast lifecycle; physics stays in LandingPredictor. No UI dependency.
 const Predictor = preload("res://scripts/landing_predictor.gd")
-# Set SHORT_TRAJECTORY to restore the cheaper four-second aiming estimate.
-const DEFAULT_PREDICTION_MODE := Predictor.Mode.FULL_SIMULATION
+# Set FULL_SIMULATION to restore the complete approach simulation.
+const DEFAULT_PREDICTION_MODE := Predictor.Mode.SHORT_TRAJECTORY
 const REFRESH_INTERVAL := 0.5
 const FRAME_STEP_LIMIT := 128
 const FRAME_BUDGET_USEC := 1000

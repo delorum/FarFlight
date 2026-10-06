@@ -1,5 +1,6 @@
 extends RefCounted
 const Localization = preload("res://scripts/localization.gd")
+const Palette = preload("res://scripts/ui_palette.gd")
 const UILayout = preload("res://scripts/ui_layout.gd")
 const ViewMode = preload("res://scripts/scene_modes.gd").ViewMode
 ## Cockpit instrument rendering and layout. All drawing uses the owning canvas.
@@ -14,6 +15,8 @@ const INSTRUMENT_GAP = UILayout.INSTRUMENT_GAP
 const HORIZON_READOUT_GAP := 22.0
 const AircraftArt = preload("res://scripts/aircraft_art.gd")
 const TIME_SCALES = preload("res://scripts/simulation_session.gd").TIME_SCALES
+const SIDE_CLOCK_CENTER := Vector2(109, 172)
+const SIDE_CLOCK_RADIUS := 34.0
 const FlightWorldScript = preload("res://scripts/world.gd")
 const USE_STYLIZED_YOKE := true
 const UIButton = preload("res://scripts/ui_button.gd")
@@ -50,7 +53,7 @@ func _draw_panel() -> void:
 		_draw_horizon(_instrument_center(4, gauge_y), INSTRUMENT_RADIUS)
 		_draw_beacon_instrument(_instrument_center(5, gauge_y), INSTRUMENT_RADIUS, 0)
 		_draw_beacon_instrument(_instrument_center(6, gauge_y), INSTRUMENT_RADIUS, 1)
-		_draw_clock(_instrument_center(7, gauge_y), INSTRUMENT_RADIUS)
+		_draw_clock(clock_center(), clock_radius())
 		_draw_fuel_instrument(_instrument_center(8, gauge_y), INSTRUMENT_RADIUS)
 		_draw_ils()
 		_draw_weather_radar()
@@ -93,7 +96,7 @@ func _draw_unpowered_instruments(gauge_y: float) -> void:
 	var titles = ["СКОРОСТЬ", "ВЫСОТА", "ВАРИОМЕТР", "КОМПАС", "АВИАГОРИЗОНТ", "ПРИЁМНИК 1", "ПРИЁМНИК 2", "ЧАСЫ", "ТОПЛИВО"]
 	for index in range(3,titles.size()):
 		if index == 7:
-			_draw_clock(_instrument_center(index, gauge_y), INSTRUMENT_RADIUS)
+			_draw_clock(clock_center(), clock_radius())
 			continue
 		var center = _instrument_center(index, gauge_y)
 		host.draw_circle(center, INSTRUMENT_RADIUS, Color("0a0e10"))
@@ -428,27 +431,29 @@ func _draw_variometer(center: Vector2, radius: float) -> void:
 	host.draw_localized_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ВАРИОМЕТР", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 10, Color("b8c5c8"))
 	host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(-radius, radius + 17), "%+.1f м/с" % host.flight.vertical_speed_mps, HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 14, Color.WHITE)
 
+func clock_center() -> Vector2:
+	return SIDE_CLOCK_CENTER if host.view_mode != ViewMode.COCKPIT else _instrument_center(7, panel_rect().position.y + 108.0)
+
+func clock_radius() -> float:
+	return SIDE_CLOCK_RADIUS if host.view_mode != ViewMode.COCKPIT else float(INSTRUMENT_RADIUS)
+
 func _draw_clock(center: Vector2, radius: float, beige: bool = false) -> void:
 	var whole_seconds = int(host.clock_seconds)
 	var hours: int = whole_seconds / 3600
 	var minutes: int = (whole_seconds % 3600) / 60
 	var seconds: int = whole_seconds % 60
-	var ink = AircraftArt.INK if beige else Color("edf2f2")
-	host.draw_circle(center, radius, AircraftArt.PAPER if beige else Color("0a0e10"))
-	host.draw_arc(center, radius - 1, 0, TAU, 40, AircraftArt.INK if beige else Color("7d8b91"), 2)
+	var ink = AircraftArt.INK if beige else Palette.CLOCK_HAND
+	host.draw_circle(center, radius, AircraftArt.PAPER if beige else Palette.CLOCK_FACE)
+	host.draw_arc(center, radius - 1, 0, TAU, 40, AircraftArt.INK if beige else Palette.CLOCK_RIM, 2)
 	for hour_mark in 12:
 		var mark_angle = deg_to_rad(hour_mark * 30.0 - 90.0)
 		var outer = center + Vector2(cos(mark_angle), sin(mark_angle)) * (radius - 6.0)
 		var inner_radius = radius - (15.0 if hour_mark % 3 == 0 else 11.0)
 		var inner = center + Vector2(cos(mark_angle), sin(mark_angle)) * inner_radius
-		host.draw_line(inner, outer, AircraftArt.INK if beige else Color("d2dde0"), 1.5)
-	var hour_angle = deg_to_rad(fmod(hours, 12) * 30.0 + minutes * 0.5 - 90.0)
-	var minute_angle = deg_to_rad(minutes * 6.0 + seconds * 0.1 - 90.0)
-	var second_angle = deg_to_rad(seconds * 6.0 - 90.0)
-	host.draw_line(center, center + Vector2(cos(hour_angle), sin(hour_angle)) * (radius * 0.48), ink, 3.0, true)
-	host.draw_line(center, center + Vector2(cos(minute_angle), sin(minute_angle)) * (radius * 0.68), ink, 2.0, true)
-	host.draw_line(center, center + Vector2(cos(second_angle), sin(second_angle)) * (radius * 0.73), AircraftArt.LIGHT if beige else Color("ed775f"), 1.0, true)
-	host.draw_circle(center, 2.5, ink)
+		host.draw_line(inner, outer, AircraftArt.INK if beige else Palette.CLOCK_MARK, 1.5)
+	# Active countdown owns the foreground hands: draw them once, above digits.
+	if host.simulation.countdown.state == host.SimulationSession.Countdown.State.RESET:
+		_draw_clock_hands(host, center, radius, ink, AircraftArt.LIGHT if beige else Palette.CLOCK_SECOND_HAND)
 	host.draw_localized_string(ThemeDB.fallback_font, center - Vector2(radius, radius + 10.0), "ЧАСЫ", HORIZONTAL_ALIGNMENT_CENTER, radius * 2, 10, AircraftArt.INK if beige else Color("b8c5c8"))
 	var time_label_width := maxf(radius * 2.0, 142.0)
 	host.draw_localized_string(ThemeDB.fallback_font, center + Vector2(-time_label_width * 0.5, radius + 14), "ДЕНЬ %d • %02d:%02d:%02d" % [game_day_number(), hours, minutes, seconds], HORIZONTAL_ALIGNMENT_CENTER, time_label_width, 10, AircraftArt.INK if beige else Color.WHITE)
@@ -463,10 +468,67 @@ func _draw_clock(center: Vector2, radius: float, beige: bool = false) -> void:
 	host.draw_rect(reset_button, Color("82979f"), false, 1.0)
 	host.draw_localized_string(ThemeDB.fallback_font, reset_button.position + Vector2(0.0, 13.0), "СБРОС [T]", HORIZONTAL_ALIGNMENT_CENTER, reset_button.size.x, 8, Color.WHITE)
 
+func _draw_clock_hands(canvas: CanvasItem, center: Vector2, radius: float, ink: Color, second_ink: Color) -> void:
+	var whole_seconds := int(host.clock_seconds)
+	var hours: int = whole_seconds / 3600
+	var minutes: int = (whole_seconds % 3600) / 60
+	var seconds: int = whole_seconds % 60
+	var hour_angle := deg_to_rad(fmod(hours, 12) * 30.0 + minutes * 0.5 - 90.0)
+	var minute_angle := deg_to_rad(minutes * 6.0 + seconds * 0.1 - 90.0)
+	var second_angle := deg_to_rad(seconds * 6.0 - 90.0)
+	canvas.draw_line(center, center + Vector2(cos(hour_angle), sin(hour_angle)) * (radius * 0.48), ink, 3.0, true)
+	canvas.draw_line(center, center + Vector2(cos(minute_angle), sin(minute_angle)) * (radius * 0.68), ink, 2.0, true)
+	canvas.draw_line(center, center + Vector2(cos(second_angle), sin(second_angle)) * (radius * 0.73), second_ink, 1.0, true)
+	canvas.draw_circle(center, 2.5, ink)
+
 func game_day_number() -> int:
 	if host.economy == null:
 		return 1
 	return floori(maxf(0.0, float(host.economy.elapsed_seconds)) / 86400.0) + 1
+
+func handle_clock_mouse(event: InputEventMouseButton) -> bool:
+	# Side-view clocks mirror the timer but never accept timer controls.
+	if host.view_mode != ViewMode.COCKPIT:
+		return false
+	var centre := clock_center()
+	var radius := clock_radius()
+	if event.position.distance_to(centre) > radius:
+		return false
+	if event.button_index not in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+		return false
+	if event.pressed:
+		var timer = host.simulation.countdown
+		match event.button_index:
+			MOUSE_BUTTON_WHEEL_UP: timer.adjust_minutes(1)
+			MOUSE_BUTTON_WHEEL_DOWN: timer.adjust_minutes(-1)
+			MOUSE_BUTTON_LEFT: timer.toggle()
+			MOUSE_BUTTON_RIGHT: timer.reset()
+	return true
+
+func draw_countdown_overlay(canvas: CanvasItem) -> void:
+	var centre := clock_center()
+	var radius := clock_radius()
+	var timer = host.simulation.countdown
+	if timer.state == host.SimulationSession.Countdown.State.RESET:
+		return
+	var angle: float = timer.target_angle(host.clock_seconds)
+	var direction := Vector2(cos(angle), sin(angle))
+	canvas.draw_line(centre + direction * (radius - 9.0), centre + direction * (radius - 2.0), Palette.ERROR, 3.0, true)
+	if timer.digits_visible():
+		var font_size := 14 if radius >= 50.0 else 10
+		var width := radius * 1.25
+		var baseline := centre + Vector2(-width * 0.5, radius * 0.52)
+		# Keep digits readable against the dial, but put clock hands above them.
+		canvas.draw_rect(Rect2(baseline - Vector2(0, font_size), Vector2(width, font_size + 3)), Palette.CLOCK_FACE)
+		var color := Color.WHITE if timer.remaining_seconds > 300.0 else Palette.ERROR
+		canvas.draw_string(ThemeDB.fallback_font, baseline, timer.time_text(), HORIZONTAL_ALIGNMENT_CENTER, width, font_size, color)
+	var beige: bool = host.view_mode != ViewMode.COCKPIT
+	var ink := AircraftArt.INK if beige else Palette.CLOCK_HAND
+	var second_ink := AircraftArt.LIGHT if beige else Palette.CLOCK_SECOND_HAND
+	if beige and host.VisualTheme.dark:
+		ink = Palette.CLOCK_HAND_DARK
+		second_ink = Palette.CLOCK_SECOND_HAND_DARK
+	_draw_clock_hands(canvas, centre, radius, ink, second_ink)
 
 func _draw_time_controls(beige: bool = false) -> void:
 	UIButton.draw(host, get_time_scale_button_rect(beige), "ВРЕМЯ %d× [⇧Z]" % roundi(TIME_SCALES[host.time_scale_index]), beige, 9)

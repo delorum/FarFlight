@@ -93,7 +93,7 @@ func _initialize() -> void:
 	hotel_economy.fatigue = 2
 	clock_before = Session.time_of_day(hotel_economy.elapsed_seconds)
 	weather_before = hotel_world.weather_time_seconds
-	assert(hotel_session.rest_at_hotel(hotel_flight, hotel_economy))
+	assert(hotel_session.rest_at_hotel(hotel_flight, hotel_economy).paid)
 	assert(hotel_economy.fatigue == 3)
 	assert(is_equal_approx(Session.time_of_day(hotel_economy.elapsed_seconds) - clock_before, Economy.HOTEL_REST_SECONDS))
 	assert(is_equal_approx(hotel_world.weather_time_seconds - weather_before, Economy.HOTEL_REST_SECONDS))
@@ -102,10 +102,19 @@ func _initialize() -> void:
 	var full_rest_time: float = hotel_economy.elapsed_seconds
 	var full_rest_weather: float = hotel_world.weather_time_seconds
 	var full_rest_money: int = hotel_economy.money
-	assert(hotel_session.rest_at_hotel(hotel_flight, hotel_economy), "A full-rest hotel visit must still advance the session")
+	assert(hotel_session.rest_at_hotel(hotel_flight, hotel_economy).paid, "A full-rest hotel visit must still advance the session")
 	assert(is_equal_approx(hotel_economy.elapsed_seconds - full_rest_time, Economy.HOTEL_REST_SECONDS))
 	assert(is_equal_approx(hotel_world.weather_time_seconds - full_rest_weather, Economy.HOTEL_REST_SECONDS))
 	assert(hotel_economy.fatigue == Economy.NEED_SEGMENTS and hotel_economy.money == full_rest_money - hotel_economy.hotel_rest_price(hotel_flight.airport_index))
+	hotel_session.countdown.adjust_minutes(1)
+	hotel_session.countdown.toggle()
+	var interrupted_rest := hotel_session.rest_at_hotel(hotel_flight, hotel_economy)
+	assert(interrupted_rest.paid and interrupted_rest.timer_expired and interrupted_rest.elapsed == 60.0, "Hotel must return the exact countdown expiry event and elapsed time")
+	var subsequent_rest := hotel_session.rest_at_hotel(hotel_flight, hotel_economy)
+	assert(subsequent_rest.paid and not subsequent_rest.timer_expired and subsequent_rest.elapsed == Economy.HOTEL_REST_SECONDS, "An already expired timer must not interrupt another rest")
+	hotel_economy.money = 0
+	var denied_rest := hotel_session.rest_at_hotel(hotel_flight, hotel_economy)
+	assert(not denied_rest.paid and not denied_rest.timer_expired and denied_rest.elapsed == 0.0, "An unpaid hotel visit must not advance time or emit expiry")
 
 	var arrival_world := World.new(99117)
 	var arrival_flight := Flight.new(arrival_world)

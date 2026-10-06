@@ -115,7 +115,10 @@ func _test_short_trajectory(flight, world) -> void:
 	check(flight.snapshot() == original and flight.turbulence_rng.state == rng_state, "Both forecast modes must leave the source untouched")
 	var scheduler := Scheduler.new()
 	check(is_equal_approx(Scheduler.REFRESH_INTERVAL, 0.5), "Forecast must refresh twice per real second")
-	check(scheduler.prediction_mode == LandingPredictor.Mode.FULL_SIMULATION, "Game instruments must default to the full forecast")
+	check(scheduler.prediction_mode == LandingPredictor.Mode.SHORT_TRAJECTORY, "Game instruments must default to the short forecast")
+	scheduler.refresh_immediately(flight, 0)
+	check(scheduler.result == short_after, "Default immediate forecast must use the short estimate")
+	scheduler.prediction_mode = LandingPredictor.Mode.FULL_SIMULATION
 	scheduler.refresh_immediately(flight, 0)
 	check(scheduler.result == full_after, "Immediate forecast must use the selected full mode")
 	scheduler.cancel()

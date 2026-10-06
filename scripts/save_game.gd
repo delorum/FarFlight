@@ -11,6 +11,8 @@ const NavigationMapScript = preload("res://scripts/navigation_map.gd")
 const FlightHistoryScript = preload("res://scripts/flight_history.gd")
 const MailStock = preload("res://scripts/mail_stock.gd")
 const SessionMode = preload("res://scripts/session_mode.gd")
+const ClockCountdown = preload("res://scripts/clock_countdown.gd")
+const Economy = preload("res://scripts/economy.gd")
 const ViewMode = preload("res://scripts/scene_modes.gd").ViewMode
 static var last_validation_error := ""
 
@@ -38,7 +40,7 @@ static func slot_exists(path: String = PATH) -> bool:
 		return encoded is String and not encoded.is_empty()
 	return FileAccess.file_exists(path)
 
-const UI_FIELDS := [
+const REQUIRED_UI_FIELDS := [
 	"receiver_frequencies", "map_zoom", "map_center", "measurement_lines", "pending_measure",
 	"radar_measurement_lines", "radar_pending_measure", "radar_range_index", "large_weather_radar",
 	"status_timer", "trip_air_distance_km", "trip_elapsed_seconds",
@@ -47,9 +49,11 @@ const UI_FIELDS := [
 	"ils_airport_index", "simulation_paused", "wind_overlay_index", "view_mode",
 	"scene_player_facing", "scene_walk_phase", "apron_aircraft_on_left", "scene_notice",
 	"propeller_phase", "cabin_terrain_zoom", "cabin_fog_travel_px",
-	"selected_inventory_slot", "in_fuel_bay", "last_economy_flight_state", "fuel_amount_litres",
-	"time_scale_index", "cabin_sleeping", "cabin_sleep_progress_seconds"
+	"selected_inventory_slot", "in_fuel_bay", "last_economy_flight_state", "fuel_amount_litres"
 ]
+const REQUIRED_UI_FIELDS_SINCE_V4 := ["time_scale_index", "cabin_sleeping", "cabin_sleep_progress_seconds"]
+const OPTIONAL_UI_FIELDS := ["countdown_state"]
+const UI_FIELDS := REQUIRED_UI_FIELDS + REQUIRED_UI_FIELDS_SINCE_V4 + OPTIONAL_UI_FIELDS
 
 static func flight_fields(flight) -> Dictionary:
 	return flight.snapshot()
@@ -91,6 +95,8 @@ static func valid(data: Variant) -> bool:
 		if not data.get(key) is Dictionary:
 			return false
 	var world: Dictionary = data.world
+	if data.ui.has("countdown_state") and not ClockCountdown.valid_snapshot(data.ui.countdown_state):
+		return false
 	if not world.get("seed") is int or not world.get("time") is float or not data.get("rng_state") is int:
 		return false
 	if world.has("weather_generation") and (not world.weather_generation is int or int(world.weather_generation) < 0):
@@ -129,10 +135,10 @@ static func valid(data: Variant) -> bool:
 		for lobe in storm.radar_lobes:
 			if not lobe is Dictionary or not lobe.get("offset_km") is Vector2 or not lobe.has_all(["radius_scale", "strength"]):
 				return false
-	var required_ui_fields := UI_FIELDS if data.version >= 4 else UI_FIELDS.slice(0, UI_FIELDS.size() - 3)
-	for field in required_ui_fields:
-		if not data.ui.has(field):
-			return false
+	if not data.ui.has_all(REQUIRED_UI_FIELDS):
+		return false
+	if data.version >= 4 and not data.ui.has_all(REQUIRED_UI_FIELDS_SINCE_V4):
+		return false
 	if not data.ui.has_all(["player_screen_fraction", "player_aircraft_x"]):
 		return false
 	if not data.ui.receiver_frequencies is Array or data.ui.receiver_frequencies.size() != 2:
@@ -190,7 +196,7 @@ static func valid(data: Variant) -> bool:
 		return false
 	var time_state_valid := true
 	if data.version >= 4:
-		time_state_valid = data.ui.time_scale_index is int and data.ui.time_scale_index in range(5) and data.ui.cabin_sleeping is bool and data.ui.cabin_sleep_progress_seconds is float and data.ui.cabin_sleep_progress_seconds >= 0.0 and data.ui.cabin_sleep_progress_seconds < 1200.0
+		time_state_valid = data.ui.time_scale_index is int and data.ui.time_scale_index in range(5) and data.ui.cabin_sleeping is bool and data.ui.cabin_sleep_progress_seconds is float and data.ui.cabin_sleep_progress_seconds >= 0.0 and data.ui.cabin_sleep_progress_seconds < Economy.BED_REST_SECONDS
 	var condition: Variant = data.flight.get("airframe_condition", 100.0)
 	var condition_valid: bool = condition is float and condition >= 0.0 and condition <= 100.0
 	return data.flight.get("position_km") is Vector2 and data.flight.get("state") in range(5) and data.ui.view_mode in range(12) and data.ui.radar_range_index in range(4) and data.ui.cabin_terrain_zoom in range(4) and time_state_valid and condition_valid
@@ -301,6 +307,8 @@ static func restore(game, data: Dictionary) -> bool:
 		if typeof(data.ui[field]) != typeof(game.get(field)) and field not in ["pending_measure", "radar_pending_measure"]:
 			return false
 	game.world = new_world
+	game.simulation.countdown.reset()
+	game.countdown_overlay.queue_redraw()
 	game.flight = new_flight
 	game.economy = new_economy
 	if new_economy.deliveries_on_map >= game.EconomyScript.DELIVERIES_TO_UNLOCK_EXIT and new_world.exit_portal.is_empty():

@@ -7,6 +7,7 @@ const Localization = preload("res://scripts/localization.gd")
 const AircraftArt = preload("res://scripts/aircraft_art.gd")
 const FlightModelScript = preload("res://scripts/flight_model.gd")
 const EconomyScript = preload("res://scripts/economy.gd")
+const SimulationSession = preload("res://scripts/simulation_session.gd")
 const CABIN_TABLE_X = UILayout.CABIN_TABLE_X
 const CABIN_TABLE_SEAT_X = UILayout.CABIN_TABLE_SEAT_X
 const FlightWorldScript = preload("res://scripts/world.gd")
@@ -516,7 +517,30 @@ func _start_cabin_sleep() -> void:
 	cabin_sleeping = true
 	host.cabin_sleep_progress_seconds = 0.0
 	scene_is_walking = false
-	scene_notice = "Вы легли отдохнуть • каждые 20 минут +1, не выше 2"
+	scene_notice = "Вы легли отдохнуть • каждый час +1 бодрость"
+
+func can_skip_bed_rest() -> bool:
+	return view_mode == ViewMode.CABIN and cabin_sleeping and SimulationSession.can_skip_bed_rest(host.flight)
+
+func bed_skip_button_rect() -> Rect2:
+	return Rect2(48, 262, 220, 30)
+
+func draw_bed_skip_button() -> void:
+	if can_skip_bed_rest():
+		UIButton.draw(host, bed_skip_button_rect(), "Промотать 20 минут", true, 13, Color.TRANSPARENT, not host.simulation_paused)
+
+func handle_bed_skip_mouse(event: InputEventMouseButton) -> bool:
+	if not can_skip_bed_rest() or not event.pressed or event.button_index != MOUSE_BUTTON_LEFT or not bed_skip_button_rect().has_point(event.position):
+		return false
+	skip_bed_rest()
+	return true
+
+func skip_bed_rest() -> void:
+	if host.simulation_paused or not can_skip_bed_rest():
+		return
+	var result: Dictionary = host.simulation.skip_bed_rest(host.flight, host.economy)
+	host._update_cabin_sleep_notice()
+	host._finish_rest(result)
 
 func _draw_cabin_bed() -> void:
 	host.draw_set_transform_matrix(_bed_transform())

@@ -11,12 +11,16 @@ var navigation_map := NavigationMap.new(self)
 
 const InstrumentPanel = preload("res://scripts/instrument_panel.gd")
 var instrument_panel := InstrumentPanel.new(self)
+var countdown_overlay := Node2D.new()
 
 const FlightRecorder = preload("res://scripts/flight_recorder.gd")
 const SimulationSession = preload("res://scripts/simulation_session.gd")
 const WorldProgression = preload("res://scripts/world_progression.gd")
 var recorder := FlightRecorder.new()
 var simulation := SimulationSession.new()
+var countdown_state: Dictionary:
+	get: return simulation.countdown.snapshot()
+	set(value): simulation.countdown.restore(value)
 
 const CabinInteractions = preload("res://scripts/cabin_interactions.gd")
 var cabin_interactions := CabinInteractions.new(self)
@@ -401,6 +405,8 @@ var cabin_sleep_progress_seconds: float:
 var flight_calculator: PanelContainer
 
 func _ready() -> void:
+	add_child(countdown_overlay)
+	countdown_overlay.draw.connect(func(): instrument_panel.draw_countdown_overlay(countdown_overlay))
 	VisualTheme.initialize(Localization.settings_path)
 	material = VisualTheme.create_material()
 	Engine.max_fps = 60
@@ -439,6 +445,9 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_SPACE:
 		if not pause_history_active:
 			simulation_paused = not simulation_paused
+			if not simulation_paused and simulation.countdown.expired:
+				simulation.countdown.reset()
+				countdown_overlay.queue_redraw()
 		get_viewport().set_input_as_handled()
 		queue_redraw()
 		return
@@ -493,6 +502,8 @@ func _input(event: InputEvent) -> void:
 		return
 
 func regenerate_world(requested_seed: int = 0) -> void:
+	simulation.countdown.reset()
+	countdown_overlay.queue_redraw()
 	run_finish_save_attempted = false
 	world = WorldProgression.initial_world(requested_seed) if not SessionMode.is_landing_practice(session_mode) else FlightWorldScript.new(requested_seed)
 	if world == null:
@@ -574,6 +585,9 @@ func _transition_to_next_world() -> void:
 	queue_redraw()
 
 func _process(delta: float) -> void:
+	if simulation.countdown.state != SimulationSession.Countdown.State.RESET:
+		countdown_overlay.queue_redraw()
+	simulation.countdown.advance_blink(delta)
 	if crash_overlay_dragging:
 		if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 			crash_overlay.global_position = crash_overlay.get_global_mouse_position() - crash_overlay_drag_offset
@@ -607,6 +621,8 @@ func _process(delta: float) -> void:
 	var engine_before_update: bool = flight.engine_running
 	var events := simulation.advance(delta, flight, economy, recorder, cabin_sleeping)
 	var game_delta: float = events.elapsed
+	if events.timer_expired:
+		_on_countdown_expired()
 	if events.world_exit:
 		_transition_to_next_world()
 		return
@@ -657,17 +673,30 @@ func _process(delta: float) -> void:
 		cabin_fog_travel_px += fog_speed * game_delta * (1.0 if _aircraft_mirrored() else -1.0)
 	queue_redraw()
 
-func _update_cabin_sleep(game_delta: float) -> void:
-	simulation.advance_bed(game_delta, economy, cabin_sleeping)
-	_update_cabin_sleep_notice()
-
 func _update_cabin_sleep_notice() -> void:
 	if cabin_sleeping:
-		scene_notice = "Отдых: %d/20 мин • бодрость %d/6 (не выше 2)" % [floori(cabin_sleep_progress_seconds / 60.0), economy.fatigue]
+		scene_notice = "Отдых: %d/60 мин • бодрость %d/6" % [floori(cabin_sleep_progress_seconds / 60.0), economy.fatigue]
+
+func _finish_rest(result: Dictionary) -> void:
+	# Both ground-rest actions publish their terminal events through one path.
+	if result.timer_expired:
+		_on_countdown_expired()
+	if not economy.game_over_reason.is_empty():
+		flight._crash(economy.game_over_reason)
+		_show_crash_map()
+		_update_crash_overlay()
+	_queue_map_redraw()
+	countdown_overlay.queue_redraw()
+	queue_redraw()
 
 func _cycle_time_scale() -> void:
 	time_scale_index = (time_scale_index + 1) % TIME_SCALES.size()
 	queue_redraw()
+
+func _on_countdown_expired() -> void:
+	simulation_paused = true
+	_reset_time_scale()
+	countdown_overlay.queue_redraw()
 
 func _reset_time_scale() -> void:
 	time_scale_index = 0
@@ -892,8 +921,15 @@ func _handle_economy_click(position: Vector2) -> void:
 					scene_notice = "Не хватает денег"
 		ViewMode.HOTEL:
 			if _economy_button_rect(0).has_point(position):
-				if simulation.rest_at_hotel(flight, economy):
+				# Rest advances simulated time; do not bypass the game's pause.
+				if simulation_paused:
+					return
+				var rest := simulation.rest_at_hotel(flight, economy)
+				if rest.paid:
 					scene_notice = "Отдых 20 минут • бодрость %d/6" % economy.fatigue
+					if rest.timer_expired:
+						scene_notice = "Отдых прерван таймером"
+					_finish_rest(rest)
 				else:
 					scene_notice = "Не хватает денег"
 		ViewMode.FUEL:
@@ -1193,9 +1229,10 @@ func _draw() -> void:
 			_draw_economy_scene()
 	if view_mode != ViewMode.COCKPIT:
 		_draw_economy_hud(self, false)
-		_draw_clock(Vector2(109, 172), 34.0, true)
+		_draw_clock(instrument_panel.clock_center(), instrument_panel.clock_radius(), true)
 		_draw_time_controls(true)
 		_draw_side_scene_pause_indicator()
+		side_scenes.draw_bed_skip_button()
 
 func _draw_side_scene_pause_indicator() -> void:
 	if not simulation_paused:
@@ -1462,6 +1499,12 @@ func _gui_input(event: InputEvent) -> void:
 
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	if flight.state == FlightModelScript.State.CRASHED and view_mode not in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY] and (view_mode != ViewMode.COCKPIT or not (map_rect().has_point(event.position) or get_trajectory_button_rect().has_point(event.position))):
+		return
+	if instrument_panel.handle_clock_mouse(event):
+		countdown_overlay.queue_redraw()
+		queue_redraw()
+		return
+	if side_scenes.handle_bed_skip_mouse(event):
 		return
 	if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		if get_time_scale_button_rect(view_mode != ViewMode.COCKPIT).has_point(event.position):

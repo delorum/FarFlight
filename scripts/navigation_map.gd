@@ -1,4 +1,5 @@
 extends RefCounted
+const DurationFormat = preload("res://scripts/duration_format.gd")
 const Palette = preload("res://scripts/ui_palette.gd")
 const UILayout = preload("res://scripts/ui_layout.gd")
 const ViewMode = preload("res://scripts/scene_modes.gd").ViewMode
@@ -1042,7 +1043,7 @@ func _measurement_label_text(a_world: Vector2, b_world: Vector2, cached_max_heig
 				preview_height_next_msec = now + 100
 			max_height = preview_height_m
 	var linked_time: float = host.flight_calculator.line_time_minutes(line_id) if line_id >= 0 else -1.0
-	var time_text := "%.1f мин" % linked_time if linked_time >= 0.0 else measurement_time_text(distance)
+	var time_text := format_minutes(linked_time) if linked_time >= 0.0 else measurement_time_text(distance)
 	# The rotated label can flip to stay upright, so its arrow is represented
 	# by the directed line's geometry rather than by a glyph in this text.
 	var course_text := "%03d°" % direct_course if directed else "%03d° / %03d°" % [direct_course, reverse_course]
@@ -1050,7 +1051,10 @@ func _measurement_label_text(a_world: Vector2, b_world: Vector2, cached_max_heig
 
 func measurement_time_text(distance_km: float) -> String:
 	var ground_speed: float = host.flight.ground_speed_kmh()
-	return "— мин" if ground_speed <= 0.01 else "%.1f мин" % (distance_km / ground_speed * 60.0)
+	return "— мин" if ground_speed <= 0.01 else format_minutes(distance_km / ground_speed * 60.0)
+
+static func format_minutes(minutes: float) -> String:
+	return DurationFormat.minutes_seconds(minutes) + " мин"
 
 func _draw_clipped_map_line(a: Vector2, b: Vector2, color: Color, width: float, dashed := false) -> void:
 	var clipped = _clip_line_to_rect(a, b, map_rect().grow(-maxf(1.0, width * 0.5)))

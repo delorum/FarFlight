@@ -10,6 +10,8 @@ const CANISTER_PRICE := 15
 const FOOD_PRICE := 20
 const HOTEL_PRICE := 30
 const HOTEL_REST_SECONDS := 20.0 * 60.0
+const BED_REST_SECONDS := 60.0 * 60.0
+const BED_SKIP_SECONDS := 20.0 * 60.0
 const HOTEL_REST_PRICE := HOTEL_PRICE / 3
 const SERVICE_PRICE_MULTIPLIERS := [0.7, 1.0, 1.3]
 const REPAIR_PRICE_PER_POINT := 3.0
@@ -414,7 +416,7 @@ func buy_hotel_rest(airport_index: int = -1) -> bool:
 	return true
 
 func recover_aircraft_bed_unit() -> bool:
-	if fatigue >= 2:
+	if fatigue >= NEED_SEGMENTS:
 		return false
 	fatigue += 1
 	return true

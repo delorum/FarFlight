@@ -148,7 +148,10 @@ func _init() -> void:
 	needs.fatigue = 1
 	assert(needs.recover_aircraft_bed_unit())
 	assert(needs.fatigue == 2)
-	assert(not needs.recover_aircraft_bed_unit() and needs.fatigue == 2)
+	assert(needs.recover_aircraft_bed_unit() and needs.fatigue == 3)
+	needs.fatigue = Economy.NEED_SEGMENTS
+	assert(not needs.recover_aircraft_bed_unit() and needs.fatigue == Economy.NEED_SEGMENTS)
+	needs.fatigue = 2
 	var money_before_hotel: int = needs.money
 	var hotel_airport: int = needs.hotel_airports[2]
 	assert(needs.buy_hotel_rest(hotel_airport))

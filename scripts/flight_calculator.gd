@@ -1,4 +1,5 @@
 extends PanelContainer
+const DurationFormat = preload("res://scripts/duration_format.gd")
 const FlightPlanSolver = preload("res://scripts/flight_plan_solver.gd")
 const Localization = preload("res://scripts/localization.gd")
 const Palette = preload("res://scripts/ui_palette.gd")
@@ -389,6 +390,15 @@ func _select_profile(profile_index: int) -> void:
 
 func _text_changed(text: String, key: String) -> void:
 	var normalized := text.strip_edges().replace(",", ".")
+	if key == "time":
+		if normalized.is_empty():
+			return
+		var minutes: float = DurationFormat.parse_minutes_seconds(normalized)
+		if not is_finite(minutes):
+			_show_error("Введите время в формате минуты.секунды (00–59)", key)
+			return
+		_change_value(key, minutes, key)
+		return
 	# Allow incomplete edits ("-", an empty field, etc.) without fighting the
 	# caret or replacing what the player is currently typing.
 	if not normalized.is_valid_float():
@@ -684,7 +694,7 @@ func _apply_validation_style(reason: String) -> void:
 func _refresh_fields(editing_key: String = "") -> void:
 	for key in fields:
 		if key != editing_key:
-			fields[key].text = _format_value(_field_value(key))
+			fields[key].text = DurationFormat.minutes_seconds(_field_value(key)) if key == "time" else _format_value(_field_value(key))
 
 func _field_value(key: String) -> float:
 	return initial_altitude if key == "initial_altitude" else float(values[key])
