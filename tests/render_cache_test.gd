@@ -48,9 +48,10 @@ func _run() -> void:
 	map.map_center += Vector2(1, 2)
 	var moved: PackedVector2Array = map._weather_briefing_contour(storm, storm.center)
 	check(map.geometry_cache.cached_storm_count() == cache_count, "Panning must reuse world-space storm contours")
-	check(moved[0].is_equal_approx(contour[0] - Vector2(1, 2) * map.pixels_per_km()), "Cached storm contours must follow the camera")
+	check(moved[0].distance_to(contour[0] - Vector2(1, 2) * map.pixels_per_km()) < 0.002, "Cached storm contours must follow the camera within floating-point subpixel tolerance")
 	map.refresh_weather_briefing()
 	check(map.geometry_cache.cached_storm_count() == 0, "New weather must invalidate storm geometry")
+	_test_trajectory_cache(scene)
 	check(scene.small_weather_radar_cache.viewport.size == Vector2i(128, 128), "Small radar must use its own small echo texture")
 	for cache in [scene.weather_radar_cache, scene.small_weather_radar_cache]:
 		cache.update_cache(scene.world, scene.flight, 100.0)
@@ -104,3 +105,38 @@ func _run() -> void:
 	if not failed:
 		print("Map layers, contour spatial culling, storm geometry and small radar cache: OK")
 	quit(1 if failed else 0)
+
+func _test_trajectory_cache(scene) -> void:
+	var map = scene.navigation_map
+	var saved: Array = scene.flight_trajectory.duplicate(true)
+	var center: Vector2 = map.map_center
+	var zoom: float = map.map_zoom
+	scene.flight_trajectory.assign([
+		{"position": Vector2(-20, 100)}, {"position": Vector2(100, 100)},
+		{"position": Vector2(220, 120)}, {"position": Vector2(230, 150)},
+	])
+	var points: PackedVector2Array = map.completed_trajectory_segments()
+	var expected := PackedVector2Array()
+	for index in range(1, scene.flight_trajectory.size()):
+		expected.append_array(map._clip_line_to_rect(map.world_to_screen(scene.flight_trajectory[index - 1].position), map.world_to_screen(scene.flight_trajectory[index].position), map.map_rect().grow(-1.0)))
+	check(points.size() == expected.size(), "Batched trajectory must preserve every clipped segment")
+	for index in mini(points.size(), expected.size()):
+		check(points[index].distance_to(expected[index]) < 0.002, "Batched trajectory must preserve clipped positions within floating-point subpixel tolerance")
+	var builds: int = map.trajectory_geometry_build_count
+	map.completed_trajectory_segments()
+	check(map.trajectory_geometry_build_count == builds, "Unchanged trajectory must reuse its geometry")
+	map.map_center += Vector2(10, 0)
+	map.completed_trajectory_segments()
+	check(map.trajectory_geometry_build_count == builds + 1, "Panning must refresh trajectory geometry")
+	map.map_zoom *= 2.0
+	map.completed_trajectory_segments()
+	check(map.trajectory_geometry_build_count == builds + 2, "Zooming must refresh trajectory geometry")
+	scene.flight_trajectory[-1].position += Vector2(0, 10)
+	map.completed_trajectory_segments()
+	check(map.trajectory_geometry_build_count == builds + 3, "Changing the last point must refresh trajectory geometry")
+	scene.flight_trajectory.append({"position": Vector2(180, 150)})
+	map.completed_trajectory_segments()
+	check(map.trajectory_geometry_build_count == builds + 4, "Recording another point must refresh trajectory geometry")
+	scene.flight_trajectory.assign(saved)
+	map.map_center = center
+	map.map_zoom = zoom

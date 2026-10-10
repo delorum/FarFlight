@@ -95,7 +95,17 @@ func _init(controller: Control) -> void:
 	landmarks = SideLandmarks.new(controller)
 	mail_view = MailView.new(controller)
 
+func _can_enter_cockpit() -> bool:
+	# The crash cockpit is a read-only map, not taking the pilot seat.
+	if host.flight.state == FlightModelScript.State.CRASHED or host.economy.carried_item.is_empty():
+		return true
+	scene_notice = "Перед посадкой в кресло пилота освободите руки"
+	host.queue_redraw()
+	return false
+
 func _set_view_mode(next_mode: int) -> void:
+	if next_mode == ViewMode.COCKPIT and not _can_enter_cockpit():
+		return
 	cabin_table_seated = false
 	if next_mode != ViewMode.CABIN:
 		host._stop_cabin_sleep()
@@ -119,12 +129,7 @@ func _set_view_mode(next_mode: int) -> void:
 	host.point_drag_candidate = false
 	host.dragging_measure_point = false
 	host.map_render_layer.visible = view_mode == ViewMode.COCKPIT
-	host.dragging_yoke = false
-	host.dragging_throttle = false
-	host.throttle_up_held = false
-	host.throttle_down_held = false
-	host.steering_left_held = false
-	host.steering_right_held = false
+	host.cockpit_input.reset_held_controls()
 	scene_notice = ""
 	host._update_crash_overlay()
 	host._queue_map_redraw()
@@ -237,6 +242,8 @@ func _draw_scene_hotspots(background_only: bool = false) -> void:
 	host.draw_set_transform_matrix(Transform2D.IDENTITY)
 
 func _click_side_scene(position: Vector2) -> void:
+	if host._side_scene_actions_paused():
+		return
 	if cabin_terrain_zoom > 0:
 		return
 	if host.flight.state == FlightModelScript.State.CRASHED:
@@ -282,6 +289,9 @@ func _enter_apron() -> void:
 	scene_player_x = _aircraft_point(Vector2(AircraftArt.DOOR_X, 0)).x
 	scene_player_facing = 1.0 if apron_aircraft_on_left else -1.0
 func _update_scene_walking(delta: float) -> void:
+	if host.simulation_paused:
+		scene_is_walking = false
+		return
 	if cabin_terrain_zoom > 0:
 		scene_is_walking = false
 		return
@@ -307,6 +317,8 @@ func _update_scene_walking(delta: float) -> void:
 		scene_notice = ""
 	host.queue_redraw()
 func _interact_in_scene() -> void:
+	if host._side_scene_actions_paused():
+		return
 	if host.flight.state == FlightModelScript.State.CRASHED and view_mode not in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY]:
 		return
 	match view_mode:
@@ -361,7 +373,12 @@ func _scene_prompt(text: String) -> void:
 	if host.flight.state == FlightModelScript.State.CRASHED:
 		text = "Enter: траектория полёта • Esc: меню"
 	host.draw_line(Vector2(36, host.size.y - 69), Vector2(host.size.x - 36, host.size.y - 69), AircraftArt.LIGHT, 1.0, true)
-	host.draw_localized_string(ThemeDB.fallback_font, Vector2(36, host.size.y - 39), text, HORIZONTAL_ALIGNMENT_CENTER, host.size.x - 72, 15, AircraftArt.INK)
+	if can_skip_bed_rest():
+		var layout := bed_rest_footer_layout()
+		host.draw_localized_string(ThemeDB.fallback_font, layout.status.position, scene_notice, HORIZONTAL_ALIGNMENT_RIGHT, layout.status.size.x, 15, AircraftArt.INK)
+		UIButton.draw(host, layout.button, "Промотать 20 минут", true, 13, Color.TRANSPARENT, not host.simulation_paused)
+	else:
+		host.draw_localized_string(ThemeDB.fallback_font, Vector2(36, host.size.y - 39), text, HORIZONTAL_ALIGNMENT_CENTER, host.size.x - 72, 15, AircraftArt.INK)
 	var controls_text = "Esc: меню" if host.flight.state == FlightModelScript.State.CRASHED else "ЛКМ: переместиться • клик по двери: перейти • стрелки: идти • Enter: действие • Esc: меню"
 	if view_mode == ViewMode.CABIN and host.flight.state != FlightModelScript.State.CRASHED:
 		controls_text = "ЛКМ / стрелки: идти • Enter: действие • X: за штурвал • Esc: меню"
@@ -391,10 +408,13 @@ func _draw_pilot(position: Vector2, rotation: float = 0.0) -> void:
 	host.draw_circle(Vector2(7,-61), 1, ink)
 	host.draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
 
+func _parcel_route_label(item: Dictionary) -> String:
+	return "%s → %s" % [host.world.airports[int(item.origin)].name, host.world.airports[int(item.destination)].name]
+
 func _item_label(item: Dictionary) -> String:
 	match String(item.get("type", "")):
 		"parcel":
-			return "ПОЧТА\n%s" % host.world.airports[int(item.destination)].name
+			return _parcel_route_label(item)
 		"food": return "ЕДА"
 		"canister": return "%.1f Л" % float(item.get("fuel_l", 0.0))
 	return ""
@@ -522,12 +542,19 @@ func _start_cabin_sleep() -> void:
 func can_skip_bed_rest() -> bool:
 	return view_mode == ViewMode.CABIN and cabin_sleeping and SimulationSession.can_skip_bed_rest(host.flight)
 
-func bed_skip_button_rect() -> Rect2:
-	return Rect2(48, 262, 220, 30)
+func bed_rest_footer_layout() -> Dictionary:
+	# Center the sleep status and compact action together in the footer.
+	var width := 160.0
+	var gap := 12.0
+	var status_width := ThemeDB.fallback_font.get_string_size(Localization.text(scene_notice), HORIZONTAL_ALIGNMENT_LEFT, -1, 15).x
+	var x := minf((host.size.x + status_width + gap - width) * 0.5, host.size.x - 36.0 - width)
+	return {
+		"button": Rect2(x, host.size.y - 62.0, width, 30),
+		"status": Rect2(36, host.size.y - 39.0, x - 48.0, 18),
+	}
 
-func draw_bed_skip_button() -> void:
-	if can_skip_bed_rest():
-		UIButton.draw(host, bed_skip_button_rect(), "Промотать 20 минут", true, 13, Color.TRANSPARENT, not host.simulation_paused)
+func bed_skip_button_rect() -> Rect2:
+	return bed_rest_footer_layout().button
 
 func handle_bed_skip_mouse(event: InputEventMouseButton) -> bool:
 	if not can_skip_bed_rest() or not event.pressed or event.button_index != MOUSE_BUTTON_LEFT or not bed_skip_button_rect().has_point(event.position):
@@ -658,8 +685,7 @@ func _draw_table_food() -> void:
 func _carried_item_caption(item: Dictionary) -> String:
 	match String(item.get("type", "")):
 		"parcel":
-			var destination: String = String(host.world.airports[int(item.destination)].name)
-			return "ПОЧТА → %s" % destination
+			return _parcel_route_label(item)
 		"food":
 			return "ЕДА"
 		"canister":
@@ -667,6 +693,8 @@ func _carried_item_caption(item: Dictionary) -> String:
 	return ""
 
 func _handle_inventory_click(position: Vector2) -> bool:
+	if host._side_scene_actions_paused():
+		return true
 	if host.cabin_interactions.can_refuel() and _set_fuel_amount_from_mouse(position, Vector2(36, host.size.y - 152)):
 		scene_notice = ""
 		return true
@@ -698,7 +726,8 @@ func _handle_inventory_click(position: Vector2) -> bool:
 				host.economy.take_slot(slot)
 				scene_notice = "Вы взяли: " + _item_label(host.economy.carried_item).replace("\n", " — ")
 			else:
-				scene_notice = "Сначала освободите руки"
+				host.economy.exchange_slot(slot)
+				scene_notice = "Вы взяли: " + _item_label(host.economy.carried_item).replace("\n", " — ")
 			return true
 	return false
 
@@ -709,7 +738,7 @@ func _inventory_hover_description(position: Vector2) -> String:
 		if not item.is_empty() and _inventory_rect(slot).grow(4.0).has_point(cabin_position):
 			match String(item.get("type", "")):
 				"parcel":
-					return "Посылка • аэропорт «%s» • оплата %d монет" % [host.world.airports[int(item.destination)].name, host.economy.parcel_reward(item)]
+					return "Посылка • %s • оплата %d монет" % [_parcel_route_label(item), host.economy.parcel_reward(item)]
 				"food":
 					return "Еда • восстанавливает 1 деление сытости"
 				"canister":

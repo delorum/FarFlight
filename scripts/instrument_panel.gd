@@ -508,6 +508,7 @@ func handle_clock_mouse(event: InputEventMouseButton) -> bool:
 func draw_countdown_overlay(canvas: CanvasItem) -> void:
 	var centre := clock_center()
 	var radius := clock_radius()
+	var beige: bool = host.view_mode != ViewMode.COCKPIT
 	var timer = host.simulation.countdown
 	if timer.state == host.SimulationSession.Countdown.State.RESET:
 		return
@@ -518,11 +519,10 @@ func draw_countdown_overlay(canvas: CanvasItem) -> void:
 		var font_size := 14 if radius >= 50.0 else 10
 		var width := radius * 1.25
 		var baseline := centre + Vector2(-width * 0.5, radius * 0.52)
-		# Keep digits readable against the dial, but put clock hands above them.
-		canvas.draw_rect(Rect2(baseline - Vector2(0, font_size), Vector2(width, font_size + 3)), Palette.CLOCK_FACE)
-		var color := Color.WHITE if timer.remaining_seconds > 300.0 else Palette.ERROR
+		# No backing: the original dial remains visible in either theme.
+		# Clock hands are drawn afterwards, above the digits.
+		var color := Palette.countdown_digits(beige, host.VisualTheme.dark, timer.remaining_seconds <= 300.0)
 		canvas.draw_string(ThemeDB.fallback_font, baseline, timer.time_text(), HORIZONTAL_ALIGNMENT_CENTER, width, font_size, color)
-	var beige: bool = host.view_mode != ViewMode.COCKPIT
 	var ink := AircraftArt.INK if beige else Palette.CLOCK_HAND
 	var second_ink := AircraftArt.LIGHT if beige else Palette.CLOCK_SECOND_HAND
 	if beige and host.VisualTheme.dark:

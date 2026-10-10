@@ -394,11 +394,8 @@ func _pause_game() -> void:
 	game.set_process_input(false)
 	game.hide()
 	# Release physical inputs, retaining throttle and elevator positions.
-	game.throttle_up_held = false
-	game.throttle_down_held = false
+	game.cockpit_input.reset_held_controls()
 	game.flight.wheel_brakes_applied = false
-	game.dragging_throttle = false
-	game.dragging_yoke = false
 	game.dragging_map = false
 	game.map_drag_candidate = false
 	game.point_drag_candidate = false

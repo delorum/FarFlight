@@ -32,6 +32,10 @@ var map_zoom := 1.0
 var map_center := Vector2.ONE * FlightWorldScript.SIZE_KM * 0.5
 var contour_segments: Array[Dictionary] = []
 var geometry_cache := MapGeometryCache.new()
+var _trajectory_source: Array = []
+var _trajectory_signature: Array = []
+var _trajectory_segments := PackedVector2Array()
+var trajectory_geometry_build_count := 0
 var terrain_peaks: Array[Dictionary] = []
 var measurement_lines: Array[Dictionary] = []
 var next_measurement_line_id := 1
@@ -756,10 +760,11 @@ func _draw_completed_flight_trajectory() -> void:
 	var aircraft_visible := _map_aircraft_visible()
 	if not trajectory_visible and not aircraft_visible:
 		return
-	var path_color = Color("a83f38") if host.flight.state == FlightModelScript.State.CRASHED else Color("176f75")
+	var path_color = Palette.CRASH_TRAJECTORY if host.flight.state == FlightModelScript.State.CRASHED else Palette.FLIGHT_TRAJECTORY
 	if host.trajectory_finished and trajectory_visible:
-		for point_index in range(1, host.flight_trajectory.size()):
-			_draw_clipped_map_line(world_to_screen(host.flight_trajectory[point_index - 1].position), world_to_screen(host.flight_trajectory[point_index].position), path_color, 2.0)
+		var segments := completed_trajectory_segments()
+		if not segments.is_empty():
+			map_canvas.draw_multiline(segments, path_color, 2.0, true)
 	if not aircraft_visible:
 		return
 	var aircraft_position = world_to_screen(host.flight.position_km)
@@ -767,6 +772,34 @@ func _draw_completed_flight_trajectory() -> void:
 	aircraft_position.x = clampf(aircraft_position.x, safe_rect.position.x, safe_rect.end.x)
 	aircraft_position.y = clampf(aircraft_position.y, safe_rect.position.y, safe_rect.end.y)
 	_draw_map_aircraft(aircraft_position, host.flight.heading_deg, path_color)
+
+func completed_trajectory_segments() -> PackedVector2Array:
+	# The completed log is immutable until reset/restore. Keep exact points,
+	# transform and clip once per camera change, then submit a single draw call.
+	var source: Array = host.flight_trajectory
+	var rect := map_rect().grow(-1.0)
+	var signature: Array = [host.world, source.size(), map_center, map_zoom, rect,
+		source[0].position if not source.is_empty() else Vector2.ZERO,
+		source[-1].position if not source.is_empty() else Vector2.ZERO]
+	if is_same(source, _trajectory_source) and signature == _trajectory_signature:
+		return _trajectory_segments
+	_trajectory_source = source
+	_trajectory_signature = signature
+	_trajectory_segments = PackedVector2Array()
+	trajectory_geometry_build_count += 1
+	var scale := pixels_per_km()
+	var offset := map_rect().get_center() - map_center * scale
+	for point_index in range(1, source.size()):
+		var a: Vector2 = Vector2(source[point_index - 1].position) * scale + offset
+		var b: Vector2 = Vector2(source[point_index].position) * scale + offset
+		if rect.has_point(a) and rect.has_point(b):
+			_trajectory_segments.append(a)
+			_trajectory_segments.append(b)
+		else:
+			var clipped := _clip_line_to_rect(a, b, rect)
+			if clipped.size() == 2:
+				_trajectory_segments.append_array(clipped)
+	return _trajectory_segments
 
 func _trajectory_overlay_visible() -> bool:
 	if host.flight_trajectory.is_empty():

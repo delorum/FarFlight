@@ -23,5 +23,7 @@ static func create_material() -> ShaderMaterial:
 	result.shader = SHADER
 	result.set_shader_parameter("source_paper", Vector3(Palette.PAPER.r, Palette.PAPER.g, Palette.PAPER.b))
 	result.set_shader_parameter("source_route", Vector3(Palette.ROUTE.r, Palette.ROUTE.g, Palette.ROUTE.b))
+	result.set_shader_parameter("source_trajectory", Vector3(Palette.FLIGHT_TRAJECTORY.r, Palette.FLIGHT_TRAJECTORY.g, Palette.FLIGHT_TRAJECTORY.b))
+	result.set_shader_parameter("source_crash_trajectory", Vector3(Palette.CRASH_TRAJECTORY.r, Palette.CRASH_TRAJECTORY.g, Palette.CRASH_TRAJECTORY.b))
 	result.set_shader_parameter("dark_background", Vector3(Palette.DARK_BACKGROUND.r, Palette.DARK_BACKGROUND.g, Palette.DARK_BACKGROUND.b))
 	return result

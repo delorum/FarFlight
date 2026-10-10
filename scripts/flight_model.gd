@@ -306,6 +306,9 @@ func update(delta: float) -> void:
 func update_prediction(delta: float) -> void:
 	_update_simulation(delta, false, false)
 
+func is_stationary_on_ground() -> bool:
+	return state in [State.PARKED, State.LANDED, State.ROLLING] and speed_kmh <= 0.05
+
 func _update_simulation(delta: float, advance_world_weather: bool, include_storms: bool) -> void:
 	_update_message(delta)
 	if advance_world_weather:
@@ -341,6 +344,10 @@ func _update_simulation(delta: float, advance_world_weather: bool, include_storm
 	var roll_authority := 0.32 if stalled else 1.0
 	var storm_roll_command := storm_roll_bias_deg if state == State.FLYING else 0.0
 	bank_deg = move_toward(bank_deg, (yoke.x * 38.0 + storm_roll_command) * roll_authority, delta * 55.0 * roll_authority)
+	if is_stationary_on_ground():
+		# Controls can move on the stand, but the airframe cannot rotate in place.
+		bank_deg = 0.0
+		pitch_deg = 0.0
 	# Pulling the yoke down/towards the pilot raises the nose; pushing it up lowers it.
 	if stalled:
 		# During separated flow the elevator retains only weak authority and
@@ -554,7 +561,7 @@ func _update_ground_roll(delta: float) -> void:
 	speed_kmh = clampf(speed_kmh + acceleration_kmh_s * delta, 0.0, MAX_LEVEL_SPEED_KMH)
 	# On the ground the lateral yoke input stands in for simple nose-wheel/rudder
 	# steering. This lets the pilot remove a crosswind crab after touchdown.
-	var steering_authority := clampf(speed_kmh / 25.0, 0.25, 1.0)
+	var steering_authority := clampf(speed_kmh / 25.0, 0.25, 1.0) if not is_stationary_on_ground() else 0.0
 	heading_deg = fposmod(heading_deg + yoke.x * 28.0 * steering_authority * delta, 360.0)
 	_move_position(world.heading_vector(heading_deg) * (speed_kmh / 3600.0) * delta)
 	altitude_m = 0.0
@@ -585,6 +592,8 @@ func _update_ground_roll(delta: float) -> void:
 	if speed_kmh <= 0.05:
 		speed_kmh = 0.0
 		state = State.LANDED
+		pitch_deg = 0.0
+		bank_deg = 0.0
 		departure_authorized = false
 		_show_message("Успешная посадка в аэропорту «%s»" % airport.name, -1.0)
 

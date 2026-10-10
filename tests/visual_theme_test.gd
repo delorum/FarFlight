@@ -14,6 +14,10 @@ func check(condition: bool, message: String) -> void:
 		push_error(message)
 
 func _run() -> void:
+	check(Palette.countdown_digits(true, false, false) == Palette.SCENE_INK, "Light side countdown digits must match the clock hands")
+	check(Palette.countdown_digits(true, true, false) == Palette.CLOCK_HAND_DARK, "Dark side countdown digits must match the clock hands")
+	check(Palette.countdown_digits(false, false, false) == Color.WHITE and Palette.countdown_digits(false, true, false) == Color.WHITE, "Cockpit countdown digits must remain white in both themes")
+	check(Palette.countdown_digits(true, false, true) == Palette.ERROR_LIGHT and Palette.countdown_digits(true, true, true) == Palette.ERROR, "Countdown warnings must remain red and readable in both themes")
 	var previous_settings := Localization.settings_path
 	var previous_language := Localization.language
 	var previous_dark := VisualTheme.dark
@@ -61,6 +65,8 @@ func _run() -> void:
 	check(scene.map_render_layer.overlay.use_parent_material, "Overlay must use the same theme as map terrain")
 	check(scene.map_render_layer.material.get_shader_parameter("source_paper") == Vector3(Palette.PAPER.r, Palette.PAPER.g, Palette.PAPER.b), "Landscape shader must use the central paper colour")
 	check(scene.map_render_layer.material.get_shader_parameter("source_route") == Vector3(Palette.ROUTE.r, Palette.ROUTE.g, Palette.ROUTE.b), "Landscape shader must preserve the central route colour")
+	check(scene.map_render_layer.material.get_shader_parameter("source_trajectory") == Vector3(Palette.FLIGHT_TRAJECTORY.r, Palette.FLIGHT_TRAJECTORY.g, Palette.FLIGHT_TRAJECTORY.b), "Landscape shader must preserve the normal flight trajectory colour")
+	check(scene.map_render_layer.material.get_shader_parameter("source_crash_trajectory") == Vector3(Palette.CRASH_TRAJECTORY.r, Palette.CRASH_TRAJECTORY.g, Palette.CRASH_TRAJECTORY.b), "Landscape shader must preserve the crash trajectory colour")
 	check(scene.map_render_layer.material.get_shader_parameter("dark_background") == Vector3(Palette.DARK_BACKGROUND.r, Palette.DARK_BACKGROUND.g, Palette.DARK_BACKGROUND.b), "Landscape shader must use the central dark background")
 	await process_frame
 	if DisplayServer.get_name() != "headless":
@@ -79,6 +85,12 @@ func _run() -> void:
 		await RenderingServer.frame_post_draw
 		var pixel := viewport.get_texture().get_image().get_pixel(32, 32)
 		check(absf(pixel.r - Palette.ROUTE.r) < 0.02 and absf(pixel.g - Palette.ROUTE.g) < 0.02 and absf(pixel.b - Palette.ROUTE.b) < 0.02, "Dark map must render user-drawn lines in their original blue, not beige")
+		for trajectory_color in [Palette.FLIGHT_TRAJECTORY, Palette.CRASH_TRAJECTORY]:
+			swatch.color = trajectory_color
+			await process_frame
+			await RenderingServer.frame_post_draw
+			pixel = viewport.get_texture().get_image().get_pixel(32, 32)
+			check(absf(pixel.r - trajectory_color.r) < 0.02 and absf(pixel.g - trajectory_color.g) < 0.02 and absf(pixel.b - trajectory_color.b) < 0.02, "Dark map must render flight and crash trajectories in their original colours")
 		viewport.queue_free()
 	scene._enter_cabin()
 	scene.queue_redraw()

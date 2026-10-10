@@ -49,10 +49,12 @@ func _run() -> void:
 	scene.map_center = Vector2(scene.navigation_map.weather_briefing_storms[0].center)
 	scene.map_zoom = 8.0
 	var storm_screen: Vector2 = scene.world_to_screen(scene.navigation_map.weather_briefing_storms[0].center)
-	check(scene.navigation_map.weather_briefing_storm_at(storm_screen) == 0, "Hovering a mapped storm must find its briefing entry")
-	check(scene.navigation_map.update_weather_storm_hover(0, storm_screen), "Entering a mapped storm must create its motion annotation")
+	# Randomly overlapping cells may produce a stronger return than storm 0.
+	var hovered_storm: int = scene.navigation_map.weather_briefing_storm_at(storm_screen)
+	check(hovered_storm >= 0, "Hovering a mapped storm must find a briefing entry")
+	check(scene.navigation_map.update_weather_storm_hover(hovered_storm, storm_screen), "Entering a mapped storm must create its motion annotation")
 	var fixed_storm_anchor: Vector2 = scene.navigation_map.hovered_weather_storm_anchor
-	check(not scene.navigation_map.update_weather_storm_hover(0, storm_screen + Vector2(12, 7)) and scene.navigation_map.hovered_weather_storm_anchor == fixed_storm_anchor, "Moving inside one storm must not move or redraw its annotation")
+	check(not scene.navigation_map.update_weather_storm_hover(hovered_storm, storm_screen + Vector2(12, 7)) and scene.navigation_map.hovered_weather_storm_anchor == fixed_storm_anchor, "Moving inside one storm must not move or redraw its annotation")
 	check(scene.navigation_map.update_weather_storm_hover(-1, Vector2.ZERO) and scene.navigation_map.hovered_weather_storm_anchor == Vector2.INF, "Leaving a mapped storm must clear its fixed annotation")
 	var motion_text: String = scene.navigation_map.weather_briefing_motion_text(scene.navigation_map.weather_briefing_storms[0])
 	check(motion_text.begins_with("≈") and motion_text.contains("° • ≈") and motion_text.ends_with(" км/ч"), "Mapped storm hover must format an approximate motion label beside its arrow")

@@ -128,9 +128,7 @@ func _table() -> void:
 	host.scene_notice = ""
 
 func _seat() -> void:
-	host._stop_cabin_sleep()
-	host.in_fuel_bay = false
-	host.cabin_table_seated = false
+	# View switching validates boarding before changing any character state.
 	host._set_view_mode(host.ViewMode.COCKPIT)
 
 func _door() -> void:

@@ -21,6 +21,14 @@ func run() -> void:
 	game.economy.need_accumulator_seconds = 0.0
 	game._start_cabin_sleep()
 	check(game.side_scenes.can_skip_bed_rest(), "Stopped sleeping aircraft must offer the skip button")
+	var original_language: String = game.Localization.language
+	for language in [game.Localization.RUSSIAN, game.Localization.ENGLISH]:
+		game.Localization.language = language
+		var button: Rect2 = game.side_scenes.bed_skip_button_rect()
+		var layout: Dictionary = game.side_scenes.bed_rest_footer_layout()
+		check(button.size.x < 220 and button.position.y == game.size.y - 62 and button.end.x <= game.size.x - 36, "Compact skip action must fit in the bottom sleep-status row in either language")
+		check(layout.button == button and layout.status.end.x + 12 == button.position.x, "Sleep status, drawn button and click area must share one layout with a fixed gap")
+	game.Localization.language = original_language
 	var click := InputEventMouseButton.new()
 	click.pressed = true
 	click.button_index = MOUSE_BUTTON_LEFT

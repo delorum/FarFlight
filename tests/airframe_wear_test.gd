@@ -39,6 +39,7 @@ func _run() -> void:
 	flight._update_airframe_condition(60.0)
 	check(flight.state == Flight.State.CRASHED and flight.message.contains("полностью изношена"), "Zero condition must destroy the aircraft in flight")
 	_test_touchdown_damage(world)
+	_test_ground_yoke(world)
 
 	var economy = Economy.new(world)
 	check(economy.repair_airports.size() == 3, "Exactly three airports must have repair shops")
@@ -83,7 +84,10 @@ func _test_touchdown_damage(world) -> void:
 		landing.speed_kmh = 100.0
 		landing.vertical_speed_mps = -sink
 		landing.state = Flight.State.FLYING
+		landing.yoke = Vector2(0.7, -0.6 if sink < 3.0 else 0.6)
+		var landing_yoke: Vector2 = landing.yoke
 		check(landing._try_land() and landing.state == Flight.State.ROLLING, "Nonfatal runway contact must enter ground roll")
+		check(landing.yoke == landing_yoke, "Touchdown must preserve the pilot's yoke position")
 		var damage := Flight.touchdown_damage(-sink)
 		check(is_equal_approx(landing.airframe_condition, 100.0 - damage), "Hard touchdown must deduct its impact damage exactly once")
 		check(damage > previous_damage, "Impact damage must increase with descent speed")
@@ -105,3 +109,31 @@ func _test_touchdown_damage(world) -> void:
 	fatal.state = Flight.State.FLYING
 	fatal.vertical_speed_mps = -5.5
 	check(not fatal._try_land(), "The existing fatal descent-speed limit must remain unchanged")
+
+func _test_ground_yoke(world) -> void:
+	for ground_state in [Flight.State.PARKED, Flight.State.LANDED]:
+		var aircraft = Flight.new(world)
+		aircraft.position_km = Vector2(world.airports[0].position)
+		aircraft.state = ground_state
+		aircraft.engine_running = false
+		var heading: float = aircraft.heading_deg
+		var position: Vector2 = aircraft.position_km
+		for input in [Vector2(1.0, 1.0), Vector2(-1.0, -1.0)]:
+			aircraft.yoke = input
+			for frame in 30:
+				aircraft.update_prediction(1.0 / 30.0)
+			check(aircraft.yoke == input, "A stationary yoke must remain freely adjustable")
+			check(is_equal_approx(aircraft.heading_deg, heading) and aircraft.position_km == position, "Stationary controls must not rotate or move the aircraft")
+			check(is_zero_approx(aircraft.bank_deg) and is_zero_approx(aircraft.pitch_deg) and is_zero_approx(aircraft.vertical_speed_mps), "Stationary controls must not change attitude or vertical speed")
+	var rolling = Flight.new(world)
+	rolling.position_km = Vector2(world.airports[0].position)
+	rolling.state = Flight.State.ROLLING
+	rolling.speed_kmh = 0.1
+	rolling.engine_running = false
+	rolling.wheel_brakes_applied = true
+	rolling.yoke = Vector2(1.0, 1.0)
+	rolling.update_prediction(1.0 / 30.0)
+	check(rolling.state == Flight.State.LANDED and rolling.yoke == Vector2.ONE, "The end of ground roll must preserve the yoke position")
+	rolling.yoke = Vector2.ZERO
+	rolling.update_prediction(1.0 / 30.0)
+	check(rolling.yoke == Vector2.ZERO and rolling.state == Flight.State.LANDED, "The pilot must be able to neutralize the yoke manually after stopping")

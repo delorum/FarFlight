@@ -209,7 +209,11 @@ var trajectory_last_position: Vector2:
 	set(value):
 		recorder.trajectory_last_position = value
 var ils_airport_index := 1
-var simulation_paused := false
+var simulation_paused := false:
+	set(value):
+		simulation_paused = value
+		if value:
+			cockpit_input.reset_held_controls()
 var run_finish_save_attempted := false
 var pause_history_active := false
 var pause_history_return_view_mode := ViewMode.COCKPIT
@@ -457,6 +461,10 @@ func _input(event: InputEvent) -> void:
 		if event is InputEventKey and event.pressed and not event.echo:
 			if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
 				_collapse_crash_overlay()
+			get_viewport().set_input_as_handled()
+		return
+	if _side_scene_actions_paused():
+		if event is InputEventKey:
 			get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_Z or event.physical_keycode == KEY_Z):
@@ -903,6 +911,8 @@ func _refuel_from_carried_canister() -> void:
 		scene_notice = "Перелито %.1f л • в баке %.1f/%.0f л" % [moved, flight.fuel_l, flight.fuel_capacity_l]
 
 func _handle_economy_click(position: Vector2) -> void:
+	if _side_scene_actions_paused():
+		return
 	if side_scenes._economy_exit_rect().has_point(position):
 		_leave_current_scene()
 		return
@@ -1232,7 +1242,6 @@ func _draw() -> void:
 		_draw_clock(instrument_panel.clock_center(), instrument_panel.clock_radius(), true)
 		_draw_time_controls(true)
 		_draw_side_scene_pause_indicator()
-		side_scenes.draw_bed_skip_button()
 
 func _draw_side_scene_pause_indicator() -> void:
 	if not simulation_paused:
@@ -1491,6 +1500,10 @@ func get_weather_radar_rect() -> Rect2:
 func get_weather_briefing_button_rect() -> Rect2:
 	return instrument_panel.get_weather_briefing_button_rect()
 
+func _side_scene_actions_paused() -> bool:
+	# History browsing is read-only and remains available from the pause menu.
+	return simulation_paused and view_mode not in [ViewMode.COCKPIT, ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY]
+
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		_handle_mouse_button(event)
@@ -1498,6 +1511,9 @@ func _gui_input(event: InputEvent) -> void:
 		_handle_mouse_motion(event)
 
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
+	if _side_scene_actions_paused():
+		dragging_fuel_slider = false
+		return
 	if flight.state == FlightModelScript.State.CRASHED and view_mode not in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY] and (view_mode != ViewMode.COCKPIT or not (map_rect().has_point(event.position) or get_trajectory_button_rect().has_point(event.position))):
 		return
 	if instrument_panel.handle_clock_mouse(event):
@@ -1523,6 +1539,9 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	_handle_cockpit_mouse_button(event)
 
 func _handle_side_scene_mouse_button(event: InputEventMouseButton) -> bool:
+	if _side_scene_actions_paused():
+		dragging_fuel_slider = false
+		return true
 	if event.button_index == MOUSE_BUTTON_LEFT and _fuel_slider_is_active():
 		var slider_origin: Vector2 = _active_fuel_slider_origin()
 		if event.pressed and _fuel_slider_rect(slider_origin).has_point(event.position):
@@ -1647,6 +1666,11 @@ func _handle_chart_and_controls_mouse_button(event: InputEventMouseButton) -> vo
 	queue_redraw()
 
 func _handle_panel_controls_mouse_button(event: InputEventMouseButton) -> bool:
+	if not cockpit_input.controls_available():
+		cockpit_input.reset_held_controls()
+		for control_rect in [get_throttle_rect(), get_yoke_rect(), get_center_yoke_button_rect(), get_power_button_rect(), get_engine_button_rect()]:
+			if control_rect.has_point(event.position):
+				return true
 	var hovered_receiver := _receiver_at_point(event.position)
 	if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN] and event.pressed and hovered_receiver >= 0:
 		active_receiver = hovered_receiver
@@ -1658,14 +1682,13 @@ func _handle_panel_controls_mouse_button(event: InputEventMouseButton) -> bool:
 	if get_trip_reset_button_rect().has_point(event.position):
 		_reset_trip_counter()
 	elif get_throttle_rect().has_point(event.position):
-		dragging_throttle = not simulation_paused
+		dragging_throttle = true
 		_update_throttle(event.position)
 	elif get_yoke_rect().has_point(event.position):
-		dragging_yoke = not simulation_paused
+		dragging_yoke = true
 		_update_yoke(event.position)
 	elif get_center_yoke_button_rect().has_point(event.position):
-		if not simulation_paused:
-			flight.yoke = Vector2.ZERO
+		flight.yoke = Vector2.ZERO
 	elif get_power_button_rect().has_point(event.position):
 		flight.toggle_electrical_power()
 		invalidate_weather_radar_caches()
@@ -1682,6 +1705,10 @@ func _handle_panel_controls_mouse_button(event: InputEventMouseButton) -> bool:
 	return true
 
 func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
+	if _side_scene_actions_paused():
+		dragging_fuel_slider = false
+		queue_redraw()
+		return
 	if flight.state == FlightModelScript.State.CRASHED and view_mode != ViewMode.COCKPIT:
 		return
 	if dragging_fuel_slider and _fuel_slider_is_active():
@@ -1735,13 +1762,13 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 		_queue_map_redraw()
 
 func _update_yoke(mouse: Vector2) -> void:
-	if simulation_paused:
+	if not cockpit_input.controls_available():
 		return
 	var rect := get_yoke_rect()
 	flight.yoke = ((mouse - rect.get_center()) / (rect.size.x * 0.38)).limit_length(1.0)
 
 func _update_throttle(mouse: Vector2) -> void:
-	if simulation_paused:
+	if not cockpit_input.controls_available():
 		return
 	var rect := get_throttle_rect()
 	flight.throttle = clamp(inverse_lerp(rect.end.y - 8, rect.position.y + 8, mouse.y), 0.0, 1.0)

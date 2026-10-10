@@ -43,8 +43,15 @@ func _run() -> void:
 	turn_key.pressed = false
 	scene._input(turn_key)
 	scene.flight.yoke.x = 0.0
+	scene.flight.heading_deg = snappedf(scene.flight.heading_deg, 0.1)
+	heading_before_tap = scene.flight.heading_deg
 	turn_key.shift_pressed = true
 	turn_key.pressed = true
+	scene._input(turn_key)
+	check(is_equal_approx(scene.flight.heading_deg, heading_before_tap), "Fine steering must not rotate a stationary aircraft")
+	scene._update_held_steering(1.0)
+	check(is_equal_approx(scene.flight.heading_deg, heading_before_tap), "Held fine steering must not rotate a stationary aircraft")
+	scene.flight.speed_kmh = 10.0
 	scene._input(turn_key)
 	check(is_equal_approx(scene.flight.heading_deg, fposmod(heading_before_tap + 0.1, 360.0)), "Shift+Right must nudge heading by 0.1 degree")
 	turn_key.pressed = false
@@ -61,6 +68,7 @@ func _run() -> void:
 	scene._update_held_steering(1.0)
 	check(is_equal_approx(scene.flight.heading_deg, fposmod(heading_before_tap + 0.2, 360.0)), "Holding Shift+Right must add 0.1 degree per second")
 	check(is_zero_approx(scene.flight.yoke.x), "Fine steering must not deflect the yoke")
+	scene.flight.speed_kmh = 0.0
 	turn_key.pressed = false
 	scene._input(turn_key)
 	var pitch_key := InputEventKey.new()
@@ -160,11 +168,140 @@ func _run() -> void:
 	check(scene.flight.yoke.is_equal_approx(Vector2(0.3, -0.2)), "Pause must block yoke input, fine steps and centering")
 	check(is_equal_approx(scene.flight.heading_deg, paused_heading), "Pause must block fine heading steps")
 	check(not scene.dragging_yoke and not scene.dragging_throttle and not scene.throttle_up_held and not scene.throttle_down_held, "Paused input must not arm controls for resuming")
+	_test_paused_power(scene)
 	scene.simulation_paused = false
 	throttle_key.pressed = true
 	scene._input(throttle_key)
 	check(is_equal_approx(scene.flight.throttle, 0.51), "Throttle control must work again after resuming")
 	throttle_key.pressed = false
 	scene._input(throttle_key)
+	scene.flight.state = scene.flight.State.LANDED
+	scene.flight.speed_kmh = 0.0
+	scene.flight.engine_running = false
+	scene.flight.electrical_power = false
+	scene.flight.yoke = Vector2(0.5, 0.5)
+	Input.action_press("ui_up")
+	scene.cockpit_input.update_keyboard_yoke(0.2)
+	Input.action_release("ui_up")
+	check(scene.flight.yoke.y < 0.5, "Yoke movement must remain available after landing with power and engine off")
+	var center_key := InputEventKey.new()
+	center_key.keycode = KEY_C
+	center_key.pressed = true
+	scene._input(center_key)
+	check(scene.flight.yoke == Vector2.ZERO, "C must center the yoke after landing with power and engine off")
+	_test_heading_tenths(scene)
+	_test_occupied_controls(scene)
+	_test_control_reset(scene)
 	print("Cockpit keyboard control and time scale: ", "FAIL" if failed else "OK")
 	quit(1 if failed else 0)
+
+func _test_control_reset(scene) -> void:
+	var input = scene.cockpit_input
+	var yoke: Vector2 = scene.flight.yoke
+	var throttle: float = scene.flight.throttle
+	for blocked_by_pause in [true, false]:
+		input.throttle_up_held = true
+		input.throttle_down_held = true
+		input.throttle_up_hold_time = 2.0
+		input.throttle_down_hold_time = 2.0
+		input.steering_left_held = true
+		input.steering_right_held = true
+		input.steering_hold_seconds = 0.5
+		scene.dragging_yoke = true
+		scene.dragging_throttle = true
+		if blocked_by_pause:
+			scene.simulation_paused = true
+		else:
+			scene.economy.carried_item = {"type": "food"}
+			input.update_held_throttle(1.0)
+		check(not input.controls_available(), "Pause and occupied hands must share the unavailable-control policy")
+		check(not input.throttle_up_held and not input.throttle_down_held and not input.steering_left_held and not input.steering_right_held, "Blocking controls must clear all held commands")
+		check(input.throttle_up_hold_time == 0 and input.throttle_down_hold_time == 0 and input.steering_hold_seconds == 0 and not scene.dragging_yoke and not scene.dragging_throttle, "Control reset must clear repeat timers and mouse dragging")
+		scene.simulation_paused = false
+		scene.economy.carried_item = {}
+		input.update_held_throttle(1.0)
+		input.update_held_steering(1.0)
+		check(scene.flight.yoke == yoke and scene.flight.throttle == throttle, "Resuming must not replay held controls or change set positions")
+
+func _test_occupied_controls(scene) -> void:
+	scene.economy.carried_item = {"type": "food"}
+	var heading: float = scene.flight.heading_deg
+	var yoke: Vector2 = scene.flight.yoke
+	var throttle: float = scene.flight.throttle
+	var power: bool = scene.flight.electrical_power
+	var engine: bool = scene.flight.engine_running
+	for code in [KEY_W, KEY_S, KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN, KEY_C, KEY_P, KEY_M]:
+		var event := InputEventKey.new()
+		event.keycode = code
+		event.pressed = true
+		event.shift_pressed = true
+		scene._input(event)
+	for rect in [scene.get_throttle_rect(), scene.get_yoke_rect(), scene.get_center_yoke_button_rect(), scene.get_power_button_rect(), scene.get_engine_button_rect()]:
+		var click := InputEventMouseButton.new()
+		click.button_index = MOUSE_BUTTON_LEFT
+		click.pressed = true
+		click.position = rect.get_center()
+		scene._handle_panel_controls_mouse_button(click)
+	scene._update_yoke(scene.get_yoke_rect().position)
+	scene._update_throttle(scene.get_throttle_rect().position)
+	scene.cockpit_input.adjust_throttle_percent(1)
+	check(scene.flight.heading_deg == heading and scene.flight.yoke == yoke and scene.flight.throttle == throttle, "Occupied hands must block course, yoke and throttle control even in a legacy cockpit state")
+	check(scene.flight.electrical_power == power and scene.flight.engine_running == engine, "Occupied hands must block power and engine controls")
+	scene.economy.carried_item = {}
+
+func _test_paused_power(scene) -> void:
+	var original_power: bool = scene.flight.electrical_power
+	var original_engine: bool = scene.flight.engine_running
+	for enabled in [false, true]:
+		scene.flight.electrical_power = enabled
+		scene.flight.engine_running = enabled
+		for code in [KEY_P, KEY_M]:
+			for physical_only in [false, true]:
+				var event := InputEventKey.new()
+				event.keycode = KEY_NONE if physical_only else code
+				event.physical_keycode = code
+				event.pressed = true
+				scene._input(event)
+				check(scene.flight.electrical_power == enabled and scene.flight.engine_running == enabled, "Pause must block power and engine hotkeys in both initial states")
+		for rect in [scene.get_power_button_rect(), scene.get_engine_button_rect()]:
+			var click := InputEventMouseButton.new()
+			click.button_index = MOUSE_BUTTON_LEFT
+			click.pressed = true
+			click.position = rect.get_center()
+			scene._handle_mouse_button(click)
+			check(scene.flight.electrical_power == enabled and scene.flight.engine_running == enabled, "Pause must block power and engine mouse buttons in both initial states")
+	scene.flight.electrical_power = original_power
+	scene.flight.engine_running = original_engine
+
+func _test_heading_tenths(scene) -> void:
+	scene.flight.state = scene.flight.State.FLYING
+	scene.flight.yoke = Vector2.ZERO
+	scene.flight.bank_deg = 0.0
+	var key := InputEventKey.new()
+	key.shift_pressed = true
+	for keycode in [KEY_LEFT, KEY_RIGHT]:
+		key.keycode = keycode
+		scene.flight.heading_deg = 179.349 if keycode == KEY_LEFT else 179.149
+		key.pressed = true
+		scene._input(key)
+		check("%.1f" % scene.flight.heading_deg == "179.2", "A fine tap must reach the neighbouring displayed tenth from either direction")
+		for frame in 30:
+			scene._update_held_steering(1.0 / 60.0)
+		check("%.1f" % scene.flight.heading_deg == "179.2", "A short hold must not drift into a second displayed step")
+		key.pressed = false
+		scene._input(key)
+		scene._update_held_steering(1.0)
+		check("%.1f" % scene.flight.heading_deg == "179.2", "Releasing a fine key must cancel its repeat")
+	scene.flight.heading_deg = 359.9
+	key.keycode = KEY_RIGHT
+	key.pressed = true
+	scene._input(key)
+	check(is_zero_approx(scene.flight.heading_deg), "Fine right steering must wrap 359.9 to 0.0")
+	key.pressed = false
+	scene._input(key)
+	key.keycode = KEY_LEFT
+	key.pressed = true
+	scene._input(key)
+	check(is_equal_approx(scene.flight.heading_deg, 359.9), "Fine left steering must wrap 0.0 to 359.9")
+	key.pressed = false
+	scene._input(key)

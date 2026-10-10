@@ -17,11 +17,115 @@ func click_and_walk(scene: Control, spot: Dictionary) -> void:
 	click.position = Rect2(spot.rect).get_center()
 	scene._handle_mouse_button(click)
 
+func _test_paused_side_actions(scene) -> void:
+	scene._enter_cabin()
+	scene.simulation_paused = true
+	var player_x: float = scene.scene_player_x
+	var walk_phase: float = scene.scene_walk_phase
+	Input.action_press("ui_right")
+	scene._process(0.1)
+	scene._update_scene_walking(1.0)
+	Input.action_release("ui_right")
+	check(scene.scene_player_x == player_x and scene.scene_walk_phase == walk_phase, "Pause must freeze keyboard walking and its animation")
+	for keycode in [KEY_DOWN, KEY_ENTER, KEY_X]:
+		var key := InputEventKey.new()
+		key.keycode = keycode
+		key.pressed = true
+		scene._input(key)
+	check(scene.view_mode == scene.ViewMode.CABIN and not scene.in_fuel_bay, "Pause must block cabin interaction, ramp descent and cockpit switching")
+	scene._click_side_scene(scene._aircraft_point(Vector2(675, scene.AircraftArt.FLOOR_Y)))
+	check(scene.scene_player_x == player_x, "Pause must block click walking")
+	scene.economy.inventory[0] = {"type": "food"}
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	click.position = scene._inventory_rect(0).get_center()
+	scene._handle_mouse_button(click)
+	scene._handle_inventory_click(click.position)
+	check(scene.economy.carried_item.is_empty() and scene.economy.inventory[0].get("type") == "food", "Pause must block taking inventory items")
+	scene.economy.inventory[0] = {}
+	for mode in [scene.ViewMode.OPERATIONS, scene.ViewMode.MAIL, scene.ViewMode.CAFE, scene.ViewMode.HOTEL, scene.ViewMode.FUEL, scene.ViewMode.REPAIR]:
+		scene._set_view_mode(mode)
+		var before: Dictionary = scene.economy.snapshot().duplicate(true)
+		click.position = scene._economy_button_rect(0).get_center()
+		scene._handle_mouse_button(click)
+		scene._handle_economy_click(click.position)
+		scene._interact_in_scene()
+		check(scene.economy.snapshot() == before and scene.view_mode == mode, "Pause must block purchases, mail and building actions in mode %d" % mode)
+	scene.dragging_fuel_slider = true
+	var motion := InputEventMouseMotion.new()
+	motion.position = Vector2(500, 500)
+	var fuel_amount: float = scene.fuel_amount_litres
+	scene._handle_mouse_motion(motion)
+	check(not scene.dragging_fuel_slider and scene.fuel_amount_litres == fuel_amount, "Pause must cancel slider dragging without changing its amount")
+	scene.simulation_paused = false
+	scene._enter_cabin()
+	Input.action_press("ui_right")
+	scene._update_scene_walking(0.1)
+	Input.action_release("ui_right")
+	check(scene.scene_player_x != player_x, "Walking must resume after unpausing")
+
+func _test_cargo_swap_and_seat(scene) -> void:
+	scene._enter_cabin()
+	var inventory_before: Array = scene.economy.inventory.duplicate(true)
+	scene.economy.carried_item = {"type": "food"}
+	scene.economy.inventory[0] = {"type": "canister", "fuel_l": 8.5}
+	var slot_position: Vector2 = scene._cabin_pose() * scene._inventory_rect(0).get_center()
+	scene._handle_inventory_click(slot_position)
+	check(scene.economy.inventory[0].get("type") == "food" and scene.economy.carried_item == {"type": "canister", "fuel_l": 8.5}, "Clicking an occupied slot must swap it with the held item")
+	scene._handle_inventory_click(slot_position)
+	check(scene.economy.carried_item.get("type") == "food" and scene.economy.inventory[0].fuel_l == 8.5, "A second click must swap back without losing fuel")
+	scene.simulation_paused = true
+	scene._handle_inventory_click(slot_position)
+	check(scene.economy.carried_item.get("type") == "food", "Pause must also block exchanging occupied slots")
+	scene.simulation_paused = false
+	var seat: Dictionary = scene.cabin_interactions.entry("seat")
+	scene.in_fuel_bay = true
+	var x_before: float = scene.scene_player_x
+	scene._click_side_scene(seat.transform * Rect2(seat.rect).get_center())
+	check(scene.view_mode == scene.ViewMode.CABIN and scene.scene_notice.contains("освободите руки"), "Occupied hands must block the clickable pilot seat with a clear notice")
+	check(scene.in_fuel_bay and scene.scene_player_x == x_before, "Rejected boarding must not change the character's position or floor state")
+	scene.in_fuel_bay = false
+	scene.scene_player_x = scene._aircraft_point(Vector2(scene.AircraftArt.SEAT_X, 0)).x
+	scene._interact_in_scene()
+	check(scene.view_mode == scene.ViewMode.CABIN, "Occupied hands must block Enter boarding")
+	var key := InputEventKey.new()
+	key.keycode = KEY_X
+	key.pressed = true
+	scene._input(key)
+	check(scene.view_mode == scene.ViewMode.CABIN, "Occupied hands must block X boarding")
+	scene._leave_current_scene()
+	check(scene.view_mode == scene.ViewMode.CABIN, "Occupied hands must block the alternative cockpit-return path")
+	scene.economy.carried_item = {}
+	scene.economy.inventory.assign(inventory_before)
+	scene._input(key)
+	check(scene.view_mode == scene.ViewMode.COCKPIT, "Freeing the hands must allow boarding again")
+
+func _test_parcel_labels(scene) -> void:
+	scene._enter_cabin()
+	var previous: Dictionary = scene.economy.inventory[0]
+	var parcel: Dictionary = scene.economy._make_mail_offer(0, 1, 100, scene.world)
+	scene.economy.inventory[0] = parcel
+	var route := "%s → %s" % [scene.world.airports[0].name, scene.world.airports[1].name]
+	check(scene.side_scenes._item_label(parcel) == route and scene.side_scenes._carried_item_caption(parcel) == route, "Parcel labels must show sender and destination without mail or airport prefixes")
+	var position: Vector2 = scene._cabin_pose() * scene._inventory_rect(0).get_center()
+	var description: String = scene.side_scenes._inventory_hover_description(position)
+	check(description.contains(route) and not description.contains("аэропорт"), "Inventory hover must include the complete parcel route without the airport word")
+	var language: String = scene.Localization.language
+	scene.Localization.set_language(scene.Localization.ENGLISH, false)
+	check(scene.Localization.text(route) == "%s → %s" % [scene.Localization.text(scene.world.airports[0].name), scene.Localization.text(scene.world.airports[1].name)], "Both endpoints must be localized in parcel labels")
+	check(not scene.Localization.text(description).contains("оплата") and not scene.Localization.text(description).contains("airport"), "Inventory route description must retain localized reward text without airport wording")
+	scene.Localization.set_language(language, false)
+	scene.economy.inventory[0] = previous
+
 func _run() -> void:
 	var scene: Control = load("res://scenes/main.tscn").instantiate()
 	root.add_child(scene)
 	await process_frame
 	scene.set_process(false)
+	_test_paused_side_actions(scene)
+	_test_cargo_swap_and_seat(scene)
+	_test_parcel_labels(scene)
 	for panel_index in 4:
 		var window_position: Vector2 = scene.AircraftArt.cabin_panel_window_position(panel_index)
 		var left_rib: float = scene.AircraftArt.CABIN_RIB_X[panel_index]
@@ -189,7 +293,10 @@ func _test_under_ramp_walking(scene: Control) -> void:
 		var seat: Dictionary = scene.cabin_interactions.entry("seat")
 		var seat_click: Vector2 = seat.transform * Rect2(seat.rect).get_center()
 		scene._click_side_scene(seat_click)
-		check(scene.view_mode == scene.ViewMode.COCKPIT and not scene.in_fuel_bay, "Clicking the pilot seat below the ladder must enter the cockpit")
+		check(scene.view_mode == scene.ViewMode.CABIN and scene.in_fuel_bay, "A carried canister must block boarding from below the ladder")
+		check(scene.economy.store_carried(), "The canister must be stowable before boarding")
+		scene._click_side_scene(seat_click)
+		check(scene.view_mode == scene.ViewMode.COCKPIT and not scene.in_fuel_bay, "Clicking the pilot seat below the ladder with free hands must enter the cockpit")
 		scene._set_view_mode(scene.ViewMode.CABIN)
 		scene.scene_player_x = scene._aircraft_point(Vector2(400, 0)).x
 		scene.in_fuel_bay = true

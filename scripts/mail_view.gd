@@ -61,9 +61,7 @@ func draw() -> void:
 			row += 1
 			continue
 		var destination: String = host.world.airports[int(offer.destination)].name
-		var poverty_bonus := int(offer.get("poverty_bonus_percent", 0))
-		var bonus_text := " • надбавка +%d%%" % poverty_bonus if poverty_bonus > 0 else ""
-		_draw_menu_button(_mail_row_rect(row), "%s • маршрут %.0f км • %d монет%s" % [destination, offer.distance_km, host.economy.parcel_reward(offer), bonus_text])
+		_draw_menu_button(_mail_row_rect(row), "%s • маршрут %.0f км • %d монет" % [destination, offer.distance_km, host.economy.parcel_reward(offer)])
 		row += 1
 	if _mail_row_count() > _mail_visible_rows():
 		var track := Rect2(_economy_button_rect(0).end.x + 8.0, 165.0, 4.0, _mail_visible_rows() * 64.0 - 16.0)

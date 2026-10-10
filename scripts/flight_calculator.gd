@@ -364,7 +364,7 @@ func _sanitize_profile_line_links() -> void:
 			used_line_ids[line_id] = true
 		profile_states[profile_index] = state
 
-func _apply_profile_state(state: Dictionary) -> void:
+func _apply_profile_state(state: Dictionary, editing_key: String = "") -> void:
 	values = state.values.duplicate(true)
 	last_changed = state.last_changed
 	initial_altitude = state.initial_altitude
@@ -375,8 +375,8 @@ func _apply_profile_state(state: Dictionary) -> void:
 	derive_vertical = state.derive_vertical
 	bound_line_id = int(state.get("bound_line_id", -1))
 	selecting_line = false
-	_recalculate()
-	_sync_active_profile_from_line()
+	_recalculate(editing_key)
+	_sync_active_profile_from_line(editing_key)
 	_refresh_line_link_button()
 
 func _select_profile(profile_index: int) -> void:
@@ -442,9 +442,11 @@ func _change_value(key: String, number: float, editing_key: String = "") -> void
 		_use_forecast(editing_key)
 	else:
 		_recalculate(editing_key)
-	var line_error := _sync_active_line_from_calculator()
+	var line_error := _sync_active_line_from_calculator(editing_key)
 	if not line_error.is_empty():
-		_apply_profile_state(previous_state)
+		# A partial bearing may temporarily point outside the map. Roll back the
+		# model and line, not the text/caret needed to finish typing the bearing.
+		_apply_profile_state(previous_state, editing_key)
 		_show_error(line_error, editing_key)
 
 func _recent(key: String) -> int:
@@ -536,7 +538,7 @@ func bind_line(line_id: int, a: Vector2, b: Vector2) -> bool:
 	controller.navigation_map._queue_map_redraw()
 	return true
 
-func _sync_values_from_line(a: Vector2, b: Vector2) -> void:
+func _sync_values_from_line(a: Vector2, b: Vector2, editing_key: String = "") -> void:
 	var delta := b - a
 	if delta.length_squared() < 0.000001:
 		return
@@ -550,10 +552,10 @@ func _sync_values_from_line(a: Vector2, b: Vector2) -> void:
 	last_changed = "distance"
 	derive_speed = false
 	derive_vertical = false
-	_recalculate()
+	_recalculate(editing_key)
 	syncing_line = false
 
-func _sync_active_profile_from_line() -> void:
+func _sync_active_profile_from_line(editing_key: String = "") -> void:
 	if bound_line_id < 0 or controller == null:
 		return
 	var line: Dictionary = controller.navigation_map.measurement_line_by_id(bound_line_id)
@@ -566,7 +568,7 @@ func _sync_active_profile_from_line() -> void:
 	var line_track := fposmod(rad_to_deg(atan2(delta.x, -delta.y)), 360.0)
 	var track_difference := absf(fposmod(line_track - float(values.track) + 180.0, 360.0) - 180.0)
 	if not is_equal_approx(delta.length(), float(values.distance)) or track_difference > 0.0001:
-		_sync_values_from_line(line.a, line.b)
+		_sync_values_from_line(line.a, line.b, editing_key)
 	profile_states[active_profile] = _capture_profile_state()
 
 func measurement_line_changed(line: Dictionary) -> void:
@@ -646,7 +648,7 @@ func line_time_minutes(line_id: int) -> float:
 	var state: Dictionary = _capture_profile_state() if profile_index == active_profile else profile_states[profile_index]
 	return float(state.values.time)
 
-func _sync_active_line_from_calculator() -> String:
+func _sync_active_line_from_calculator(editing_key: String = "") -> String:
 	if syncing_line or bound_line_id < 0 or not valid or controller == null:
 		return ""
 	profile_states[active_profile] = _capture_profile_state()
@@ -660,7 +662,7 @@ func _sync_active_line_from_calculator() -> String:
 	else:
 		var actual_distance := Vector2(line.a).distance_to(Vector2(line.b))
 		if not is_equal_approx(actual_distance, float(values.distance)):
-			_sync_values_from_line(line.a, line.b)
+			_sync_values_from_line(line.a, line.b, editing_key)
 	syncing_line = false
 	profile_states[active_profile] = _capture_profile_state()
 	_refresh_line_link_button()

@@ -77,7 +77,7 @@ Landing Practice creates a fresh random world and airfield for every attempt. Th
 - `M` — start or stop the engine;
 - up/down arrows — pitch control: up/forward to descend, down/back to climb;
 - left/right arrows — immediately deflect the yoke and turn;
-- `Shift` + left/right arrow — adjust heading by 0.1°; holding changes it at 0.1° per second without deflecting the yoke;
+- `Shift` + left/right arrow — move to the neighbouring displayed 0.1° heading; holding repeats a 0.1° step once per second without deflecting the yoke;
 - `Shift` + up/down arrow — move the yoke forward/back by a precise 0.1°;
 - mouse over the throttle or yoke — direct control;
 - `X` — leave for the cabin or return to the cockpit from anywhere in the cabin.
@@ -125,6 +125,8 @@ Choose Settings → Display theme in the main menu or pause menu to switch betwe
 - `Z` — immediately return to 1×;
 - `Space` — pause or resume the simulation in any scene;
 - `Esc` — open the pause menu.
+
+While paused, side-view scenes block walking, item interactions, purchases, refuelling, and switching between gameplay scenes. `Space` resumes the game and `Esc` opens the menu; flight-history browsing remains available.
 
 Aircraft or character control after acceleration returns time to 1×. Using the map and its lines does not. Rotation caused by a newly encountered storm resets acceleration immediately.
 
@@ -260,7 +262,7 @@ Deliver 16 parcels on a map to reveal a one-way exit near a reachable lowland ed
 
 ### Cargo and refuelling
 
-Parcels, food, and 20-litre fuel cans must be carried into the aircraft. The cabin has six cargo slots: clicking an empty slot stores an item, while clicking an occupied one retrieves it. A carried item can be stored or discarded.
+Parcels, food, and 20-litre fuel cans must be carried into the aircraft. The cabin has six cargo slots: clicking an empty slot stores an item, while clicking an occupied one retrieves it. If your hands are already occupied, clicking an occupied slot exchanges its item with the one you are carrying. A carried item can be stored or discarded. Free your hands before taking the pilot seat or using aircraft controls; this applies to mouse clicks, Enter, and the X shortcut.
 
 The fuel station sells the can and fuel separately. Sliders use 0.1 L increments. In the technical bay, fuel can be transferred to the tank; the last partial increment fills it exactly. Press the down arrow anywhere on the cockpit ladder to drop onto the lower floor without changing horizontal position, or click the refuelling device. Walk freely beneath the ladder to approach or leave the tank. Refuelling controls and the Enter action are available only beside the device. While beneath the ladder, the pilot-seat label remains faint and drawn behind the character, with an underline only on mouse hover. Clicking the seat still enters the cockpit; Enter does not select the seat from below. Once the pilot has completely cleared the ladder to the left, returning to it climbs toward the cockpit again.
 
@@ -281,6 +283,8 @@ Entering the cabin on the ground stops the engine but does not cancel preparatio
 ## Landing, records, and the end of a flight
 
 Touchdown does not complete a flight. Until the aircraft stops, you may add power and perform a touch-and-go; weather and clearance remain unchanged.
+
+Landing preserves the yoke position; the pilot can return it to neutral manually. While stationary on the ground, it can move freely even with the engine and electrical power off, without changing aircraft position, heading, or attitude; Shift+arrow fine heading adjustments cannot turn a stationary aircraft either.
 
 Flight service and the history screen show the current world number, starting at 1. The history spans all worlds and shows the newest flights first, with world numbers, airfields, actual distance, duration, average ground speed (distance divided by duration), start time, and end time. World transitions appear as separate timestamped rows. A flight crossing into another world remains one flight with its full distance and duration. Repeated routes have a fastest-to-slowest record list, keeping routes from different worlds separate. For older saves, transition separators are reconstructed without claiming an exact crossing time.
 

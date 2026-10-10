@@ -311,6 +311,14 @@ func take_slot(slot: int) -> bool:
 	inventory[slot] = {}
 	return true
 
+func exchange_slot(slot: int) -> bool:
+	if slot < 0 or slot >= inventory.size() or carried_item.is_empty() or inventory[slot].is_empty():
+		return false
+	var stored: Dictionary = inventory[slot]
+	inventory[slot] = carried_item
+	carried_item = stored
+	return true
+
 func discard_carried() -> void:
 	if carried_item.get("type", "") == "parcel":
 		mail.return_parcel(carried_item)

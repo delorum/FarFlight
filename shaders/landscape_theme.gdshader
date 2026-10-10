@@ -6,13 +6,17 @@ uniform bool navigation_map = false;
 // Set once at material creation from UIPalette, not on every frame.
 uniform vec3 source_paper;
 uniform vec3 source_route;
+uniform vec3 source_trajectory;
+uniform vec3 source_crash_trajectory;
 uniform vec3 dark_background;
 varying vec4 drawing_color;
 
 vec3 landscape_color(vec3 source) {
-	// User-drawn routes (including the unfinished segment) keep their blue
-	// ink in both themes; only chart ink is converted to beige.
-	if (navigation_map && distance(source, source_route) < 0.015) {
+	// Routes, flight trails and their aircraft icons retain their original
+	// colours in both themes; only chart ink is converted to beige.
+	if (navigation_map && (distance(source, source_route) < 0.015 ||
+		distance(source, source_trajectory) < 0.015 ||
+		distance(source, source_crash_trajectory) < 0.015)) {
 		return source;
 	}
 	vec3 paper = source_paper;

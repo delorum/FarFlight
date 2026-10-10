@@ -28,6 +28,8 @@ const CLOCK_MARK := Color("d2dde0")
 const ROUTE := Color("254d9a")
 const LINKED_ROUTE := Color("c46f24")
 const ACTIVE_ROUTE := Color("b72f29")
+const FLIGHT_TRAJECTORY := Color("176f75")
+const CRASH_TRAJECTORY := Color("a83f38")
 const MENU_INK := Color("513e2c")
 const MENU_LINK_LIGHT := Color("8a552f")
 const MENU_ERROR_LIGHT := Color("893f2f")
@@ -39,6 +41,13 @@ const MENU_PLACEHOLDER_LIGHT := Color(0.32, 0.25, 0.18)
 
 static func background(dark: bool) -> Color:
 	return DARK_BACKGROUND if dark else PAPER
+
+static func countdown_digits(side_view: bool, dark: bool, warning: bool) -> Color:
+	if warning:
+		return ERROR_LIGHT if side_view and not dark else ERROR
+	if side_view:
+		return CLOCK_HAND_DARK if dark else SCENE_INK
+	return Color.WHITE
 
 static func text_color(dark: bool) -> Color:
 	return PAPER if dark else MAP_INK

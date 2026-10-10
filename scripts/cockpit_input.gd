@@ -6,8 +6,9 @@ const ViewMode = preload("res://scripts/scene_modes.gd").ViewMode
 const THROTTLE_HOLD_DELAY := 0.32
 const THROTTLE_HOLD_RATE := 0.35
 const STEERING_TAP_DEGREES := 0.1
-const STEERING_FINE_RATE_DEG_S := 0.1
+const STEERING_FINE_REPEAT_SECONDS := 1.0
 const YOKE_FINE_STEP_DEG := 0.1
+const AIRCRAFT_CONTROL_KEYS := [KEY_W, KEY_S, KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN, KEY_C, KEY_P, KEY_M]
 
 var host: Control
 var throttle_up_held := false
@@ -16,19 +17,34 @@ var throttle_up_hold_time := 0.0
 var throttle_down_hold_time := 0.0
 var steering_left_held := false
 var steering_right_held := false
+var steering_hold_seconds := 0.0
 
 func _init(owner: Control) -> void:
 	host = owner
 
+func controls_available() -> bool:
+	return not host.simulation_paused and host.economy.carried_item.is_empty()
+
+func reset_held_controls() -> void:
+	throttle_up_held = false
+	throttle_down_held = false
+	throttle_up_hold_time = 0.0
+	throttle_down_hold_time = 0.0
+	steering_left_held = false
+	steering_right_held = false
+	steering_hold_seconds = 0.0
+	host.dragging_yoke = false
+	host.dragging_throttle = false
+
+static func is_aircraft_control_key(event: InputEventKey) -> bool:
+	return event.keycode in AIRCRAFT_CONTROL_KEYS or event.physical_keycode in [KEY_P, KEY_M]
+
 func handle_key(event: InputEvent) -> bool:
 	if not event is InputEventKey:
 		return false
-	if host.simulation_paused and event.keycode in [KEY_W, KEY_S, KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN, KEY_C]:
+	if not controls_available() and is_aircraft_control_key(event):
 		# Consume controls without arming held input or applying single-key steps.
-		throttle_up_held = false
-		throttle_down_held = false
-		steering_left_held = false
-		steering_right_held = false
+		reset_held_controls()
 		return true
 	if event.pressed and not event.echo and not event.ctrl_pressed and (event.keycode == KEY_P or event.physical_keycode == KEY_P):
 		host.flight.toggle_electrical_power()
@@ -56,12 +72,14 @@ func handle_key(event: InputEvent) -> bool:
 		if event.echo:
 			return true
 		var steer_right: bool = event.keycode == KEY_RIGHT
+		steering_hold_seconds = 0.0
 		if event.pressed and event.shift_pressed and not host.dragging_yoke:
 			if steer_right:
 				steering_right_held = true
 			else:
 				steering_left_held = true
-			host.flight.heading_deg = fposmod(host.flight.heading_deg + (STEERING_TAP_DEGREES if steer_right else -STEERING_TAP_DEGREES), 360.0)
+			if not host.flight.is_stationary_on_ground():
+				_step_heading(1 if steer_right else -1)
 		elif steer_right:
 			steering_right_held = false
 		else:
@@ -100,7 +118,8 @@ func handle_key(event: InputEvent) -> bool:
 	return false
 
 func update_keyboard_yoke(delta: float) -> void:
-	if host.simulation_paused:
+	if not controls_available():
+		reset_held_controls()
 		return
 	var steering_axis := 0.0 if steering_left_held or steering_right_held else Input.get_axis("ui_left", "ui_right")
 	var fine_pitch_active := Input.is_key_pressed(KEY_SHIFT) and absf(Input.get_axis("ui_up", "ui_down")) > 0.05
@@ -117,7 +136,7 @@ func update_keyboard_yoke(delta: float) -> void:
 			host.flight.yoke.y = clampf(host.flight.yoke.y + keyboard_yoke.y * delta * 0.75, -1.0, 1.0)
 
 func adjust_throttle_percent(step_percent: int) -> void:
-	if host.simulation_paused:
+	if not controls_available():
 		return
 	var current_percent := roundi(host.flight.throttle * 100.0)
 	if step_percent < 0 and current_percent <= 0 and host._aircraft_is_on_ground():
@@ -128,7 +147,8 @@ func adjust_throttle_percent(step_percent: int) -> void:
 	host.flight.throttle = clampf((current_percent + step_percent) / 100.0, 0.0, 1.0)
 
 func update_held_throttle(delta: float) -> void:
-	if host.simulation_paused:
+	if not controls_available():
+		reset_held_controls()
 		return
 	if throttle_up_held:
 		var previous_time := throttle_up_hold_time
@@ -145,11 +165,26 @@ func update_held_throttle(delta: float) -> void:
 			host.flight.wheel_brakes_applied = true
 
 func update_held_steering(delta: float) -> void:
-	if host.simulation_paused:
+	if not controls_available():
+		reset_held_controls()
 		return
-	var direction := float(int(steering_right_held) - int(steering_left_held))
-	if not is_zero_approx(direction):
-		host.flight.heading_deg = fposmod(host.flight.heading_deg + direction * STEERING_FINE_RATE_DEG_S * delta, 360.0)
+	if host.flight.is_stationary_on_ground():
+		steering_hold_seconds = 0.0
+		return
+	var direction := int(steering_right_held) - int(steering_left_held)
+	if direction == 0:
+		steering_hold_seconds = 0.0
+		return
+	# A tap is exactly one displayed tenth. Holding repeats whole steps rather
+	# than adding sub-tenth drift on every frame immediately after the tap.
+	steering_hold_seconds += maxf(0.0, delta)
+	while steering_hold_seconds >= STEERING_FINE_REPEAT_SECONDS - 0.000001:
+		steering_hold_seconds = maxf(0.0, steering_hold_seconds - STEERING_FINE_REPEAT_SECONDS)
+		_step_heading(direction)
+
+func _step_heading(direction: int) -> void:
+	var tenths := roundi(host.flight.heading_deg / STEERING_TAP_DEGREES)
+	host.flight.heading_deg = float(posmod(tenths + direction, 3600)) * STEERING_TAP_DEGREES
 
 static func key_causes_time_reset(event: InputEventKey) -> bool:
 	var code := event.keycode
