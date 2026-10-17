@@ -27,7 +27,7 @@ func _run() -> void:
 	var airport_centre_before: float = float(parked_airport_view.centre_m)
 	# A stopped crosswind landing may retain a crabbed nose heading. The ground
 	# side view must nevertheless follow the runway axis instead of slicing its
-	# 50 m width diagonally and rendering a detached short strip.
+	# runway width diagonally and rendering a detached short strip.
 	var parked_airport: Dictionary = scene.world.airports[scene.flight.airport_index]
 	var parked_runway_direction: Vector2 = scene.world.heading_vector(float(parked_airport.heading))
 	scene.flight.position_km = Vector2(parked_airport.position)

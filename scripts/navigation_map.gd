@@ -17,6 +17,7 @@ const StormGeometry = preload("res://scripts/storm_geometry.gd")
 const MapGeometryCache = preload("res://scripts/map_geometry_cache.gd")
 const FlightWorldScript = preload("res://scripts/world.gd")
 const FlightModelScript = preload("res://scripts/flight_model.gd")
+const Glideslope = preload("res://scripts/glideslope.gd")
 const WIND_OVERLAY_ALTITUDES = FlightWorldScript.WIND_ALTITUDES_M
 const APPROACH_DETAIL_MIN_ZOOM := 20.0
 const MAX_MAP_ZOOM := 24.0
@@ -992,7 +993,7 @@ func _build_approach_markers() -> void:
 				var distance: float = float(distance_km)
 				if not _approach_path_is_clear(airport, distance, approach_sign):
 					continue
-				var altitude_m = (distance * 1000.0 + FlightModelScript.GLIDE_TOUCHDOWN_OFFSET_KM * 1000.0) * tan(deg_to_rad(FlightModelScript.GLIDE_SLOPE_DEG))
+				var altitude_m = Glideslope.height_at_distance_m(distance)
 				markers.append({"distance_km": distance, "altitude_m": altitude_m})
 			markers_by_direction[str(int(approach_sign))] = markers
 		airport.approach_markers = markers_by_direction
@@ -1004,7 +1005,7 @@ func _approach_path_is_clear(airport: Dictionary, start_distance_km: float, appr
 	for sample_index in sample_count + 1:
 		var distance_km = start_distance_km * sample_index / float(sample_count)
 		var position = threshold - forward * distance_km
-		var glide_altitude_m = (distance_km + FlightModelScript.GLIDE_TOUCHDOWN_OFFSET_KM) * 1000.0 * tan(deg_to_rad(FlightModelScript.GLIDE_SLOPE_DEG))
+		var glide_altitude_m = Glideslope.height_at_distance_m(distance_km)
 		if host.world.height_at(position) >= glide_altitude_m:
 			return false
 	return true

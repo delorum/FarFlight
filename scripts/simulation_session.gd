@@ -36,6 +36,14 @@ func advance_bed(seconds: float, economy, sleeping: bool) -> void:
 		cabin_sleep_progress_seconds -= Economy.BED_REST_SECONDS
 		economy.recover_aircraft_bed_unit()
 
+static func advance_parking(seconds: float, flight, economy) -> void:
+	var on_ground: bool = flight.state in [Flight.State.PARKED, Flight.State.ROLLING, Flight.State.LANDED]
+	economy.advance_parking(seconds, flight.airport_index if on_ground else -1)
+	refresh_departure_clearance(flight, economy)
+
+static func refresh_departure_clearance(flight, economy) -> void:
+	flight.parking_clearance = economy.parking_amount_due() == 0
+
 func advance(real_delta: float, flight, economy, recorder, sleeping: bool) -> Dictionary:
 	var events := {"elapsed": 0.0, "map_changed": false, "landed": false, "crashed": false, "world_exit": false, "timer_expired": false}
 	var real_remaining := maxf(0.0, real_delta)
@@ -47,6 +55,7 @@ func advance(real_delta: float, flight, economy, recorder, sleeping: bool) -> Di
 		var previous_state: int = flight.state
 		var previous_speed: float = flight.speed_kmh
 		var previous_position: Vector2 = flight.position_km
+		advance_parking(step, flight, economy)
 		events.timer_expired = advance_clocks(step, economy, sleeping)
 		advance_bed(step, economy, sleeping)
 		if not economy.game_over_reason.is_empty():
@@ -54,6 +63,9 @@ func advance(real_delta: float, flight, economy, recorder, sleeping: bool) -> Di
 			flight._crash(economy.game_over_reason)
 		else:
 			flight.update(step) # Owns weather evolution as well as aircraft physics.
+		if previous_state != Flight.State.FLYING and flight.state == Flight.State.FLYING:
+			# Reset immediately on liftoff, including a touch-and-go at this airport.
+			advance_parking(0.0, flight, economy)
 		if flight.world_exit_reached:
 			events.world_exit = true
 			events.elapsed += step
@@ -116,6 +128,7 @@ func _advance_ground_rest(seconds: float, flight, economy, bed: bool) -> Diction
 	# Clocks, needs and weather still advance together and stop at fatal events.
 	while remaining > 0.000001 and economy.game_over_reason.is_empty():
 		var step := countdown.limit_step(minf(1.0, remaining))
+		advance_parking(step, flight, economy)
 		result.timer_expired = advance_clocks(step, economy, true)
 		if bed:
 			advance_bed(step, economy, true)

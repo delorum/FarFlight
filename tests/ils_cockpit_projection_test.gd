@@ -62,10 +62,10 @@ func _initialize() -> void:
 	guidance.localizer_tolerance_km = 0.2
 	guidance.localizer_error = 0.5
 	check(Camera.localizer_scale_state(view, guidance).position_severity == 2, "100 metres off axis must be red despite a wide ILS capture tolerance")
-	guidance.localizer_error = 0.2
-	check(Camera.localizer_scale_state(view, guidance).position_severity == 1, "40 metres off axis must be caution")
-	guidance.localizer_error = 0.1
-	check(Camera.localizer_scale_state(view, guidance).position_severity == 0, "20 metres off axis must be inside runway width")
+	guidance.localizer_error = Camera.World.RUNWAY_WIDTH_KM * 0.75 / float(guidance.localizer_tolerance_km)
+	check(Camera.localizer_scale_state(view, guidance).position_severity == 1, "An offset between runway half-width and full width must be caution")
+	guidance.localizer_error = Camera.World.RUNWAY_WIDTH_KM * 0.25 / float(guidance.localizer_tolerance_km)
+	check(Camera.localizer_scale_state(view, guidance).position_severity == 0, "An offset inside runway half-width must be green")
 	guidance.localizer_error = -0.385
 	var distant_scale := Camera.localizer_scale_state(view, guidance)
 	guidance.localizer_tolerance_km = 0.1

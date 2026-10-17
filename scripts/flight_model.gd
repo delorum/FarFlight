@@ -2,8 +2,9 @@ class_name FlightModel
 extends RefCounted
 
 const FlightWorldScript = preload("res://scripts/world.gd")
-const GLIDE_SLOPE_DEG := 3.0
-const GLIDE_TOUCHDOWN_OFFSET_KM := FlightWorldScript.ILS_AIM_OFFSET_KM
+const Glideslope = preload("res://scripts/glideslope.gd")
+const GLIDE_SLOPE_DEG := Glideslope.ANGLE_DEG
+const GLIDE_TOUCHDOWN_OFFSET_KM := Glideslope.AIM_OFFSET_KM
 const STALL_WARNING_AOA_DEG := 12.0
 const STALL_AOA_DEG := 15.0
 const STALL_RECOVERY_AOA_DEG := 10.0
@@ -39,6 +40,7 @@ const VX_KMH := 130.0
 const VY_KMH := 130.0
 const TAKEOFF_CONTACT_GRACE_SECONDS := 0.45
 const DEPARTURE_BLOCKED_MESSAGE := "Запуск и взлёт запрещены: оплатите подготовку и выберите полосу в лётной службе"
+const PARKING_BLOCKED_MESSAGE := "Оплатите стоянку в лётной службе"
 const POWER_REQUIRED_MESSAGE := "Запуск двигателя невозможен: включите питание"
 
 enum State { PARKED, FLYING, ROLLING, LANDED, CRASHED }
@@ -47,7 +49,7 @@ var world
 var position_km := Vector2.ZERO
 # Compensates float32 Vector2 rounding over thousands of tiny frame movements.
 # This becomes important in a 200 km world where uncompensated drift can reach
-# tens of metres—enough to miss a 50 m runway despite an exact heading.
+# tens of metres—enough to miss a narrow runway despite an exact heading.
 var position_integration_error_km := Vector2.ZERO
 var altitude_m := 0.0
 var speed_kmh := 0.0
@@ -68,6 +70,8 @@ var fuel_capacity_l := 40.0
 var electrical_power := false
 var engine_running := false
 var departure_authorized := true
+# Derived from the economy by the session; not a second saved payment state.
+var parking_clearance := true
 var prepared_airport_index := 0
 var prepared_reverse_direction := false
 var state := State.PARKED
@@ -185,6 +189,27 @@ func _init(flight_world) -> void:
 	turbulence_rng.seed = world.seed_value + 918273
 	prepare_at_airport(0)
 
+func adapt_stopped_aircraft_to_runway(previous_size_km: Vector2) -> bool:
+	if state not in [State.PARKED, State.LANDED] or absf(speed_kmh) > 0.05 or altitude_m > 0.01:
+		return false
+	if previous_size_km.is_equal_approx(FlightWorldScript.RUNWAY_SIZE_KM):
+		return false
+	var airport: Dictionary = world.airports[airport_index]
+	var coords: Vector2 = world.runway_coordinates(position_km, airport)
+	var new_half := FlightWorldScript.RUNWAY_SIZE_KM * 0.5
+	if absf(coords.x) <= new_half.x and absf(coords.y) <= new_half.y:
+		return false
+	if absf(coords.x) > previous_size_km.x * 0.5 + 0.00005 or absf(coords.y) > previous_size_km.y * 0.5 + 0.00005:
+		return false # Do not rescue an aircraft already outside its saved runway.
+	var forward: Vector2 = world.heading_vector(float(airport.heading))
+	var right := Vector2(forward.y, -forward.x)
+	var scaled := coords * FlightWorldScript.RUNWAY_SIZE_KM / previous_size_km
+	scaled.x = clampf(scaled.x, -new_half.x + 0.0001, new_half.x - 0.0001)
+	scaled.y = clampf(scaled.y, -new_half.y + 0.0001, new_half.y - 0.0001)
+	position_km = Vector2(airport.position) + forward * scaled.x + right * scaled.y
+	position_integration_error_km = Vector2.ZERO
+	return true
+
 func radio_height_m() -> float:
 	# Simplified downward-looking instrument, not a forward terrain warning.
 	# Negative means no reading (unpowered or above its measuring range).
@@ -204,7 +229,7 @@ func prepare_at_airport(index: int, reverse_direction: bool = false) -> void:
 	prepared_reverse_direction = reverse_direction
 	var airport: Dictionary = world.airports[index]
 	var departure_heading: float = fposmod(float(airport.heading) + (180.0 if reverse_direction else 0.0), 360.0)
-	position_km = Vector2(airport.position) - world.heading_vector(departure_heading) * 0.78
+	position_km = Vector2(airport.position) - world.heading_vector(departure_heading) * (FlightWorldScript.RUNWAY_LENGTH_KM * 0.39)
 	position_integration_error_km = Vector2.ZERO
 	heading_deg = departure_heading
 	altitude_m = 0.0
@@ -267,15 +292,25 @@ func refuel() -> void:
 	fuel_l = fuel_capacity_l
 	_show_message("Самолёт заправлен: %.0f л" % fuel_l, 3.0, "")
 
+func can_depart() -> bool:
+	return departure_authorized and parking_clearance
+
+func departure_block_reason() -> String:
+	if can_depart():
+		return ""
+	return DEPARTURE_BLOCKED_MESSAGE if not departure_authorized else PARKING_BLOCKED_MESSAGE
+
 func toggle_engine() -> void:
 	if state == State.CRASHED:
 		return
 	if not engine_running and not electrical_power:
 		_show_message(POWER_REQUIRED_MESSAGE, 5.0, "", true)
 		return
-	if not engine_running and not departure_authorized:
-		_show_message(DEPARTURE_BLOCKED_MESSAGE, 5.0, "", true)
-		return
+	if not engine_running:
+		var reason := departure_block_reason()
+		if not reason.is_empty():
+			_show_message(reason, 5.0, "", true)
+			return
 	engine_running = not engine_running
 	_show_message("Двигатель запущен" if engine_running else "Двигатель остановлен", 3.0, "")
 
@@ -462,7 +497,7 @@ func _update_simulation(delta: float, advance_world_weather: bool, include_storm
 	if state == State.PARKED or state == State.LANDED:
 		var current_airport: Dictionary = world.airports[airport_index]
 		var coords: Vector2 = world.runway_coordinates(position_km, current_airport)
-		if speed_kmh > 68.0 and target_vs > 0.4 and departure_authorized:
+		if speed_kmh > 68.0 and target_vs > 0.4 and can_depart():
 			state = State.FLYING
 			wheel_brakes_applied = false
 			# Collision grace only protects against numerical re-contact with the
@@ -470,8 +505,10 @@ func _update_simulation(delta: float, advance_world_weather: bool, include_storm
 			takeoff_grace_remaining = TAKEOFF_CONTACT_GRACE_SECONDS
 			_show_message("Взлёт выполнен", 3.0, "")
 		else:
-			if speed_kmh > 68.0 and target_vs > 0.4 and not departure_authorized and message != DEPARTURE_BLOCKED_MESSAGE:
-				_show_message(DEPARTURE_BLOCKED_MESSAGE, 5.0, "", true)
+			if speed_kmh > 68.0 and target_vs > 0.4:
+				var reason := departure_block_reason()
+				if not reason.is_empty() and message != reason:
+					_show_message(reason, 5.0, "", true)
 			next_altitude = 0.0
 			vertical_speed_mps = 0.0
 			if abs(coords.y) > FlightWorldScript.RUNWAY_WIDTH_KM * 0.5 or abs(coords.x) > FlightWorldScript.RUNWAY_LENGTH_KM * 0.5:
@@ -581,7 +618,7 @@ func _update_ground_roll(delta: float) -> void:
 		maxf(0.0, pitch_deg * 0.55 * lift_factor * altitude_power_factor()),
 		max_available_climb_mps()
 	)
-	if departure_authorized and engine_running and speed_kmh > 68.0 and takeoff_vertical_speed > 0.4:
+	if can_depart() and engine_running and speed_kmh > 68.0 and takeoff_vertical_speed > 0.4:
 		state = State.FLYING
 		vertical_speed_mps = takeoff_vertical_speed
 		wheel_brakes_applied = false
@@ -815,8 +852,7 @@ func landing_guidance(index: int, signal_available_override: Variant = null) -> 
 	var actual_distance_to_threshold_km: float = position_km.distance_to(near_threshold)
 	# The ideal glide path intersects the runway 60 m beyond the threshold, not
 	# at its edge. At the threshold it therefore still commands about 3.1 m AGL.
-	var glide_distance_km: float = maxf(0.0, -FlightWorldScript.RUNWAY_LENGTH_KM * 0.5 + GLIDE_TOUCHDOWN_OFFSET_KM - along)
-	var desired_altitude_m: float = glide_distance_km * 1000.0 * tan(deg_to_rad(GLIDE_SLOPE_DEG))
+	var desired_altitude_m := Glideslope.height_at_distance_m(signed_distance_to_threshold_km)
 	var localizer_tolerance_km: float = maxf(FlightWorldScript.RUNWAY_WIDTH_KM * 0.5, distance_to_threshold_km * 0.08)
 	var glide_tolerance_m: float = maxf(15.0, desired_altitude_m * 0.15)
 	var localizer_error: float = cross / localizer_tolerance_km
@@ -828,7 +864,7 @@ func landing_guidance(index: int, signal_available_override: Variant = null) -> 
 	var ground_track_heading: float = world.vector_heading(ground_velocity) if ground_velocity.length_squared() > 0.01 else heading_deg
 	var signed_course_error: float = wrapf(ground_track_heading - approach_heading, -180.0, 180.0)
 	var along_ground_speed_kmh: float = maxf(0.0, ground_velocity.dot(forward))
-	var desired_vertical_speed_mps: float = -(along_ground_speed_kmh / 3.6) * tan(deg_to_rad(GLIDE_SLOPE_DEG))
+	var desired_vertical_speed_mps := Glideslope.vertical_speed_mps(along_ground_speed_kmh)
 	return {
 		"airport": airport,
 		"approach_heading": approach_heading,

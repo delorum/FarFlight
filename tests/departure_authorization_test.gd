@@ -8,6 +8,29 @@ func _initialize() -> void:
 
 func _run() -> void:
 	var flight = Flight.new(World.new(424242))
+	for prepared in [false, true]:
+		for paid in [false, true]:
+			flight.departure_authorized = prepared
+			flight.parking_clearance = paid
+			assert(flight.can_depart() == (prepared and paid), "Departure requires both preparation and paid parking")
+			var expected_reason: String = "" if prepared and paid else (Flight.PARKING_BLOCKED_MESSAGE if prepared else Flight.DEPARTURE_BLOCKED_MESSAGE)
+			assert(flight.departure_block_reason() == expected_reason, "All departure paths must use the same blocking reason")
+	flight.departure_authorized = true
+	flight.parking_clearance = true
+	var blocked_rollout = Flight.new(World.new(424242))
+	blocked_rollout.state = Flight.State.ROLLING
+	blocked_rollout.position_km = blocked_rollout.world.airports[0].position
+	blocked_rollout.electrical_power = true
+	blocked_rollout.engine_running = true
+	blocked_rollout.parking_clearance = false
+	blocked_rollout.speed_kmh = 90.0
+	blocked_rollout.throttle = 1.0
+	blocked_rollout.yoke.y = 1.0
+	blocked_rollout.pitch_deg = 10.0
+	blocked_rollout.update(0.01)
+	assert(blocked_rollout.state == Flight.State.ROLLING, "Unpaid parking must also block a rolling takeoff")
+	blocked_rollout.toggle_engine()
+	assert(not blocked_rollout.engine_running, "A blocked departure must never prevent stopping the engine")
 	assert(flight.departure_authorized, "A new game must begin prepared for departure")
 	assert(not flight.electrical_power, "A prepared aircraft must begin with its electrical power off")
 	flight.toggle_engine()
@@ -117,9 +140,9 @@ func _run() -> void:
 	assert(not scene.flight.engine_running and scene.flight.departure_authorized, "Leaving the pilot seat before takeoff must stop the engine but preserve preparation")
 	scene.flight.departure_authorized = false # Simulate a completed landing and full stop.
 
-	var parking_money: int = scene.economy.money
+	var preparation_money: int = scene.economy.money
 	scene._pay_and_prepare(true)
-	assert(scene.flight.departure_authorized and scene.economy.money == parking_money - scene.EconomyScript.PARKING_PRICE, "Payment and runway selection must restore departure authorization")
+	assert(scene.flight.departure_authorized and scene.economy.money == preparation_money - scene.EconomyScript.DEPARTURE_PREPARATION_PRICE, "Payment and runway selection must restore departure authorization")
 	var selected_heading: float = scene.flight.heading_deg
 	var money_after_preparation: int = scene.economy.money
 	scene.flight.toggle_electrical_power()
@@ -131,7 +154,7 @@ func _run() -> void:
 	assert(scene.scene_notice.contains("оплата не требуется") and scene._operations_status_text().contains("ВПП %03d°" % roundi(selected_heading)), "Flight service must explain the free repeated choice and show the prepared runway")
 	assert(scene._operations_runway_button_text(true).contains("БЕСПЛАТНО") and scene._operations_runway_button_text(false).contains("СМЕНИТЬ ВПП"), "Flight-service buttons must distinguish a free repeated choice from a paid runway change")
 	scene._pay_and_prepare(false)
-	assert(scene.economy.money == money_after_preparation - scene.EconomyScript.PARKING_PRICE and not is_equal_approx(scene.flight.heading_deg, selected_heading), "Changing the prepared runway must charge for a new preparation")
+	assert(scene.economy.money == money_after_preparation - scene.EconomyScript.DEPARTURE_PREPARATION_PRICE and not is_equal_approx(scene.flight.heading_deg, selected_heading), "Changing the prepared runway must charge for a new preparation")
 	selected_heading = scene.flight.heading_deg
 	scene._enter_cabin(false)
 	assert(scene.flight.departure_authorized and is_equal_approx(scene.flight.heading_deg, selected_heading), "Boarding through the cabin after service must preserve the selected runway and authorization")

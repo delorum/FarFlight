@@ -219,7 +219,7 @@ func _init() -> void:
 			break
 	assert(flight.state == FlightModelScript.State.LANDED)
 	assert(flight.speed_kmh == 0.0)
-	assert(is_equal_approx(FlightWorldScript.RUNWAY_WIDTH_KM, 0.05))
+	assert(FlightWorldScript.RUNWAY_SIZE_KM == (FlightWorldScript.SHORT_RUNWAY_SIZE_KM if FlightWorldScript.USE_SHORT_RUNWAYS else FlightWorldScript.LEGACY_RUNWAY_SIZE_KM))
 	flight.toggle_engine()
 	flight.toggle_engine()
 	assert(not flight.engine_running)
@@ -238,7 +238,7 @@ func _init() -> void:
 	var rollout_failure = FlightModelScript.new(test_world)
 	rollout_failure.engine_running = true
 	rollout_failure.state = FlightModelScript.State.ROLLING
-	rollout_failure.position_km = airport.position + test_world.heading_vector(airport.heading) * 0.85
+	rollout_failure.position_km = airport.position + test_world.heading_vector(airport.heading) * (FlightWorldScript.RUNWAY_LENGTH_KM * 0.5 - 0.15)
 	rollout_failure.heading_deg = airport.heading
 	rollout_failure.airport_index = 1
 	rollout_failure.altitude_m = 0.0
@@ -256,7 +256,7 @@ func _init() -> void:
 	var short_airport: Dictionary = test_world.airports[1]
 	var short_direction: Vector2 = test_world.heading_vector(short_airport.heading)
 	short_landing.state = FlightModelScript.State.FLYING
-	short_landing.position_km = short_airport.position - short_direction * 1.2
+	short_landing.position_km = short_airport.position - short_direction * (FlightWorldScript.RUNWAY_LENGTH_KM * 0.5 + 0.2)
 	short_landing.heading_deg = short_airport.heading
 	short_landing.altitude_m = 1.0
 	short_landing.speed_kmh = 90.0
@@ -291,7 +291,7 @@ func _test_approach(airport_index: int, reverse_direction: bool) -> bool:
 	var approach_airport: Dictionary = landing_world.airports[airport_index]
 	var approach_heading: float = fposmod(approach_airport.heading + (180.0 if reverse_direction else 0.0),360.0)
 	var approach_direction: Vector2 = landing_world.heading_vector(approach_heading)
-	approach.position_km = approach_airport.position - approach_direction * 5.0
+	approach.position_km = approach_airport.position - approach_direction * (4.0 + FlightWorldScript.RUNWAY_LENGTH_KM * 0.5)
 	approach.heading_deg = approach_heading
 	approach.altitude_m = 234.098
 	approach.speed_kmh = 100.0
@@ -305,7 +305,7 @@ func _test_approach(airport_index: int, reverse_direction: bool) -> bool:
 	assert(initial_guidance.in_localizer)
 	assert(initial_guidance.in_glide)
 	assert(absf(initial_guidance.desired_altitude_m - (4.0 + FlightModelScript.GLIDE_TOUCHDOWN_OFFSET_KM) * 1000.0 * tan(deg_to_rad(3.0))) < 0.01)
-	assert(absf(initial_guidance.beacon_distance_km - 5.0) < 0.001)
+	assert(absf(initial_guidance.beacon_distance_km - (4.0 + FlightWorldScript.RUNWAY_LENGTH_KM * 0.5)) < 0.001)
 	assert(Vector2(landing_world.beacons[airport_index].position).is_equal_approx(approach_airport.position))
 	assert(is_equal_approx(initial_guidance.approach_sign, -1.0 if reverse_direction else 1.0))
 	assert(absf(initial_guidance.actual_distance_to_threshold_km - 4.0) < 0.001)
@@ -323,7 +323,7 @@ func _test_approach(airport_index: int, reverse_direction: bool) -> bool:
 	assert(not unavailable_guidance.signal_available)
 	assert(not unavailable_guidance.in_localizer)
 	assert(not unavailable_guidance.in_glide)
-	approach.position_km = approach_airport.position - approach_direction * 5.0
+	approach.position_km = approach_airport.position - approach_direction * (4.0 + FlightWorldScript.RUNWAY_LENGTH_KM * 0.5)
 	var touched_down := false
 	for frame in 30000:
 		if frame % 60 == 0:
@@ -363,7 +363,7 @@ func _test_wind_guidance(airport_index: int, reverse_direction: bool) -> bool:
 	var flight = FlightModelScript.new(wind_world)
 	flight.engine_running = true
 	flight.state = FlightModelScript.State.FLYING
-	flight.position_km = Vector2(airport.position)-forward*5.0
+	flight.position_km = Vector2(airport.position)-forward*(4.0 + FlightWorldScript.RUNWAY_LENGTH_KM * 0.5)
 	flight.altitude_m = 234.098
 	flight.speed_kmh = 100.0
 	flight.vertical_speed_mps = -1.5

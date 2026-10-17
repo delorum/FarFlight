@@ -1148,8 +1148,8 @@ func _airport_buildings() -> Array[Dictionary]:
 		buildings.append({"label":"Ремонтный ангар", "kind":ViewMode.REPAIR})
 	return buildings
 
-func get_operations_refuel_rect() -> Rect2:
-	return Rect2(host.size.x * 0.54, host.size.y * 0.32, minf(390.0, host.size.x * 0.40), 52)
+func get_operations_parking_rect() -> Rect2:
+	return Rect2(host.size.x * 0.54, host.size.y * 0.32, minf(390.0, host.size.x * 0.40), 38)
 
 func get_operations_runway_rect(reverse_direction: bool) -> Rect2:
 	return Rect2(host.size.x * 0.54, host.size.y * (0.48 if not reverse_direction else 0.59), minf(390.0, host.size.x * 0.40), 52)
@@ -1170,10 +1170,12 @@ func _draw_operations_scene() -> void:
 	var floor_y = _draw_scene_background("ЛЁТНАЯ СЛУЖБА • МИР %d" % (host.world.level_index + 1))
 	_draw_building(host.size.x * 0.25, floor_y, Vector2(host.size.x * 0.35, minf(SERVICE_BUILDING_HEIGHT, floor_y - 200.0)), "ЛЁТНАЯ СЛУЖБА", AircraftArt.PAPER)
 	host.draw_localized_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.52, 120), "ОБСЛУЖИВАНИЕ САМОЛЁТА", HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.44, 18, Color("34372f"))
-	var status_color = Color("567044") if host.flight.departure_authorized else Color("a3483f")
-	host.draw_localized_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.54, host.size.y * 0.22), host._operations_status_text(), HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.40, 15, status_color)
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.54, 144), "Стоянка: %d монет / 20 мин • до 20 мин бесплатно" % EconomyScript.PARKING_PERIOD_PRICE, HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.40, 11, AircraftArt.INK)
+	var status_text: String = host._operations_status_text()
+	var status_color = Color("567044") if host.flight.can_depart() else Color("a3483f")
+	host.draw_localized_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.54, host.size.y * 0.22), status_text, HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.40, 15, status_color)
 	host.draw_localized_string(ThemeDB.fallback_font, Vector2(host.size.x * 0.54, host.size.y * 0.27), "Топливо: %.1f / %.0f л" % [host.flight.fuel_l, host.flight.fuel_capacity_l], HORIZONTAL_ALIGNMENT_LEFT, host.size.x * 0.40, 16, Color("34372f"))
-	host.draw_localized_string(ThemeDB.fallback_font, get_operations_refuel_rect().position + Vector2(0, 30), "Подготовка или смена ВПП: %d монет" % EconomyScript.PARKING_PRICE, HORIZONTAL_ALIGNMENT_CENTER, get_operations_refuel_rect().size.x, 15, AircraftArt.INK)
+	_draw_menu_button(get_operations_parking_rect(), host._operations_parking_button_text())
 	_draw_menu_button(get_operations_weather_rect(), "ОБНОВИТЬ МЕТЕОСВОДКУ • %s" % host.navigation_map.weather_briefing_age_text())
 	_draw_menu_button(get_operations_runway_rect(false), host._operations_runway_button_text(false))
 	_draw_menu_button(get_operations_runway_rect(true), host._operations_runway_button_text(true))

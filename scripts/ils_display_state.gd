@@ -3,6 +3,7 @@ extends RefCounted
 
 const FlightModel = preload("res://scripts/flight_model.gd")
 const FlightWorld = preload("res://scripts/world.gd")
+const Glideslope = preload("res://scripts/glideslope.gd")
 const LandingPredictor = preload("res://scripts/landing_predictor.gd")
 
 const TEXT := Color("d2dde0")
@@ -12,6 +13,8 @@ const RED := Color("ef645e")
 const MIN_APPROACH_GROUND_SPEED_KMH := 5.0
 const STEEP_ANGLE_CAUTION_MARGIN_DEG := 0.5
 const STEEP_ANGLE_DANGER_MARGIN_DEG := 1.5
+const GLIDE_CAPTURE_TOLERANCE_M := 3.0
+const CYAN := Color("76b8bd")
 
 static func build(flight, airport_index: int, signal_available: bool, prediction: Dictionary, frequency_khz: int) -> Dictionary:
 	var guidance: Dictionary = flight.landing_guidance(airport_index, signal_available)
@@ -41,7 +44,9 @@ static func build(flight, airport_index: int, signal_available: bool, prediction
 	projection["ground_speed_kmh"] = flight.ground_speed_kmh()
 	projection["flight_path_angle_deg"] = rad_to_deg(atan2(flight.vertical_speed_mps, ground_speed_mps))
 	projection["desired_flight_path_angle_deg"] = rad_to_deg(atan2(desired_vs, ground_speed_mps))
+	var capture := glideslope_capture(guidance, flight.altitude_m, flight.state == FlightModel.State.FLYING)
 	return {
+		"glide_capture": capture,
 		"powered": powered,
 		"signal_available": available,
 		"guidance": guidance,
@@ -68,6 +73,29 @@ static func build(flight, airport_index: int, signal_available: bool, prediction
 		"touchdown_color": touchdown_color,
 		"lateral_color": lateral_color,
 	}
+
+static func glideslope_capture(guidance: Dictionary, altitude_m: float, flying: bool) -> Dictionary:
+	var distance := float(guidance.get("signed_distance_to_threshold_km", -1.0))
+	var target := float(guidance.get("desired_altitude_m", 0.0))
+	var error := altitude_m - target
+	var on_glide := absf(error) <= GLIDE_CAPTURE_TOLERANCE_M
+	var capture_threshold_distance := Glideslope.distance_at_height_km(altitude_m)
+	var course_cos := cos(deg_to_rad(float(guidance.get("course_error_deg", 0.0))))
+	var available := flying and distance >= 0.0
+	var intercept_available := available and capture_threshold_distance >= 0.0 and course_cos > 0.0001 and float(guidance.get("along_ground_speed_kmh", 0.0)) >= MIN_APPROACH_GROUND_SPEED_KMH
+	# Level-flight reference, not a prediction of the current descent. Use the
+	# same along-runway glide plane and 60 m aiming offset as landing_guidance;
+	# convert the remaining axial distance to distance along the current track.
+	var remaining := (distance - capture_threshold_distance) / course_cos if intercept_available else 0.0
+	var color := GREEN if on_glide else (RED if error > 0.0 else CYAN)
+	var relation := "НА ГЛИСС" if on_glide else (("ВЫШЕ %.0f м" if error > 0.0 else "НИЖЕ %.0f м") % absf(error))
+	var intercept_text := "ДО ГЛИСС —"
+	if intercept_available:
+		intercept_text = ("ВХОД ПОЗАДИ %.2f км" if remaining < 0.0 and not on_glide else "ДО ГЛИСС %.2f км") % (0.0 if on_glide else absf(remaining))
+	return {"available": available, "error_m": error, "on_glide": on_glide,
+		"relation_text": relation, "color": color,
+		"intercept_available": intercept_available, "level_intercept_distance_km": remaining,
+		"intercept_text": intercept_text}
 
 static func descent_angle_deg(vertical_speed_mps: float, along_ground_speed_kmh: float) -> float:
 	if along_ground_speed_kmh < MIN_APPROACH_GROUND_SPEED_KMH:

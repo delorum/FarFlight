@@ -15,7 +15,9 @@ const BED_SKIP_SECONDS := 20.0 * 60.0
 const HOTEL_REST_PRICE := HOTEL_PRICE / 3
 const SERVICE_PRICE_MULTIPLIERS := [0.7, 1.0, 1.3]
 const REPAIR_PRICE_PER_POINT := 3.0
-const PARKING_PRICE := 12
+const DEPARTURE_PREPARATION_PRICE := 12
+const PARKING_PERIOD_SECONDS := 1200.0
+const PARKING_PERIOD_PRICE := 6
 const BASE_REWARD_50_KM := 80
 const DISTANCE_REWARD_EXPONENT := 1.12
 const POVERTY_REWARD_MULTIPLIERS := [1.35, 1.20, 1.10, 1.0, 1.0]
@@ -23,6 +25,9 @@ const MAX_AIRPORTS_WITHOUT_OPTIONAL_SERVICES := 2
 const DELIVERIES_TO_UNLOCK_EXIT := 16
 
 var money := 160
+var parking_airport := -1
+var parking_elapsed_seconds := 0.0
+var parking_paid_periods := 0
 var hunger := 6
 var fatigue := 6
 var elapsed_seconds := 0.0
@@ -59,6 +64,9 @@ func _init(world = null) -> void:
 
 func configure_world(world, starting_airport_index: int = 0) -> void:
 	world_ref = world
+	parking_airport = starting_airport_index
+	parking_elapsed_seconds = 0.0
+	parking_paid_periods = 0
 	mail.reset_for_world(world.airports.size())
 	visited_airports.clear()
 	var rng := RandomNumberGenerator.new()
@@ -401,11 +409,49 @@ func transfer_carried_fuel(requested_litres: float, aircraft_room_l: float) -> f
 	carried_item.fuel_l = maxf(0.0, current - moved)
 	return moved
 
-func pay_parking() -> bool:
-	if money < PARKING_PRICE:
+func pay_departure_preparation() -> bool:
+	if money < DEPARTURE_PREPARATION_PRICE:
 		return false
-	money -= PARKING_PRICE
+	money -= DEPARTURE_PREPARATION_PRICE
 	return true
+
+func advance_parking(seconds: float, airport_index: int) -> void:
+	# Only the session supplies ground time. Preparing the runway, changing
+	# buildings and sleeping never restart the stay. Payment is manual.
+	if parking_airport != airport_index:
+		parking_airport = airport_index
+		parking_elapsed_seconds = 0.0
+		parking_paid_periods = 0
+	if airport_index < 0 or seconds <= 0.0:
+		return
+	parking_elapsed_seconds += seconds
+
+func parking_billable_periods() -> int:
+	return floori((parking_elapsed_seconds + 0.000001) / PARKING_PERIOD_SECONDS)
+
+func parking_amount_due() -> int:
+	return maxi(0, parking_billable_periods() - parking_paid_periods) * PARKING_PERIOD_PRICE
+
+func pay_parking() -> bool:
+	var price := parking_amount_due()
+	if money < price:
+		return false
+	money -= price
+	parking_paid_periods = parking_billable_periods()
+	return true
+
+static func valid_parking_snapshot(data: Dictionary, airport_count: int) -> bool:
+	var fields := ["parking_airport", "parking_elapsed_seconds", "parking_paid_periods"]
+	if not data.has("parking_paid_periods") and ((not data.has("parking_airport") and not data.has("parking_elapsed_seconds")) or data.has("parking_debt")):
+		return true # Pre-parking and experimental automatic-payment saves start fresh.
+	if not data.has_all(fields):
+		return false
+	return (data.parking_airport is int and data.parking_airport >= -1
+		and data.parking_airport < airport_count
+		and data.parking_elapsed_seconds is float and is_finite(data.parking_elapsed_seconds)
+		and data.parking_elapsed_seconds >= 0.0
+		and data.parking_paid_periods is int and data.parking_paid_periods >= 0
+		and data.parking_paid_periods <= floori((data.parking_elapsed_seconds + 0.000001) / PARKING_PERIOD_SECONDS))
 
 func pay_hotel_rest(airport_index: int = -1) -> bool:
 	var price := hotel_rest_price(airport_index)
@@ -451,6 +497,7 @@ func advance_time(delta: float, resting: bool = false, _unused_sleep_cap: int = 
 func snapshot() -> Dictionary:
 	var data := {
 		"money": money, "hunger": hunger, "fatigue": fatigue,
+		"parking_airport": parking_airport, "parking_elapsed_seconds": parking_elapsed_seconds, "parking_paid_periods": parking_paid_periods,
 		"elapsed_seconds": elapsed_seconds, "need_accumulator_seconds": need_accumulator_seconds,
 		"inventory": inventory, "carried_item": carried_item,
 		"fuel_airports": fuel_airports, "food_airports": food_airports, "hotel_airports": hotel_airports,
@@ -461,6 +508,8 @@ func snapshot() -> Dictionary:
 	return data.duplicate(true)
 
 func restore(data: Dictionary, world = null) -> bool:
+	if not valid_parking_snapshot(data, world.airports.size() if world != null else 8):
+		return false
 	if not data.has_all(["money", "hunger", "fatigue", "elapsed_seconds", "need_accumulator_seconds", "inventory", "carried_item", "offers_by_airport", "fuel_airports", "food_airports", "hotel_airports", "last_landed_airport", "next_parcel_id", "game_over_reason"]):
 		return false
 	if not data.inventory is Array or data.inventory.size() != INVENTORY_CAPACITY:
@@ -488,6 +537,9 @@ func restore(data: Dictionary, world = null) -> bool:
 	if data.hunger < 0 or data.hunger > NEED_SEGMENTS or data.fatigue < 0 or data.fatigue > NEED_SEGMENTS:
 		return false
 	money = int(data.money)
+	parking_airport = int(data.parking_airport) if data.has("parking_paid_periods") else -1
+	parking_elapsed_seconds = float(data.parking_elapsed_seconds) if data.has("parking_paid_periods") else 0.0
+	parking_paid_periods = int(data.get("parking_paid_periods", 0))
 	hunger = int(data.hunger)
 	fatigue = int(data.fatigue)
 	elapsed_seconds = float(data.elapsed_seconds)

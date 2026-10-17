@@ -12,6 +12,22 @@ static var _dynamic_rules: Array[Dictionary] = []
 static var _rules_ready := false
 
 const EN := {
+	"ГС": "GS",
+	"ВЫШЕ %.0f м": "ABOVE %.0f m",
+	"НИЖЕ %.0f м": "BELOW %.0f m",
+	"НА ГЛИСС": "ON GS",
+	"ДО ГЛИСС %.2f км": "GS INT %.2f km",
+	"ДО ГЛИСС —": "GS INT —",
+	"ВХОД ПОЗАДИ %.2f км": "INT BEHIND %.2f km",
+	"Стоянка: %d монет / 20 мин • до 20 мин бесплатно": "Parking: %d coins / 20 min • first 20 min free",
+	"ОПЛАТИТЬ СТОЯНКУ • %d МОНЕТ": "PAY FOR PARKING • %d COINS",
+	"СТОЯНКА: 0 МОНЕТ • ЕЩЁ %d МИН": "PARKING: 0 COINS • %d MIN LEFT",
+	"СТАТУС: ПОДГОТОВЛЕН • ОПЛАТИТЕ СТОЯНКУ": "STATUS: PREPARED • PAY FOR PARKING",
+	"Стоянка оплачена: %d монет": "Parking paid: %d coins",
+	"Не хватает денег на стоянку": "Not enough money for parking",
+	"Оплатите стоянку в лётной службе": "Pay for parking at flight service",
+	"Не хватает денег на подготовку • выбранная ВПП не изменена": "Not enough money for preparation • selected runway unchanged",
+	"Не хватает денег на подготовку": "Not enough money for preparation",
 	"Далекий полет": "Far Flight",
 	"Далекий полет — Почтовая авиация": "Far Flight — Airmail",
 	"ПОЧТОВАЯ АВИАЦИЯ": "AIRMAIL",

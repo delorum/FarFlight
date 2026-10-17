@@ -3,6 +3,7 @@ extends RefCounted
 const Localization = preload("res://scripts/localization.gd")
 const FlightWorld = preload("res://scripts/world.gd")
 const FlightModel = preload("res://scripts/flight_model.gd")
+const Glideslope = preload("res://scripts/glideslope.gd")
 const ILSDisplayState = preload("res://scripts/ils_display_state.gd")
 const CockpitProjection = preload("res://scripts/ils_cockpit_projection.gd")
 # Set false to restore the previous runway-centred large ILS immediately.
@@ -41,7 +42,35 @@ static func draw_large(canvas: CanvasItem, rect: Rect2, state: Dictionary) -> vo
 	var display_guidance: Dictionary = state.projection
 	var layout := display_layout(rect)
 	_draw_combined_scope(canvas, layout.scope, display_guidance, prediction)
+	if state.glide_capture.available:
+		_draw_glideslope_scale(canvas, layout.scope.grow(-18.0), state.glide_capture)
 	_draw_information(canvas, layout.left_info, layout.right_info, state)
+
+static func glideslope_scale_geometry(view: Rect2, error_m: float) -> Dictionary:
+	var centre := Vector2(view.position.x + 14.0, view.get_center().y)
+	var half_height := minf(80.0, view.size.y * 0.22)
+	return {"centre": centre, "half_height": half_height,
+		"pointer": centre - Vector2(0, clampf(error_m / 100.0, -1.0, 1.0) * half_height),
+		"offscale": absf(error_m) > 100.0}
+
+static func _draw_glideslope_scale(canvas: CanvasItem, view: Rect2, capture: Dictionary) -> void:
+	var geometry := glideslope_scale_geometry(view, float(capture.error_m))
+	var centre: Vector2 = geometry.centre
+	var half_height: float = geometry.half_height
+	canvas.draw_rect(Rect2(centre - Vector2(10, half_height + 20), Vector2(30, half_height * 2 + 30)), SCOPE_BACKGROUND)
+	Localization.draw_string(canvas, ThemeDB.fallback_font, centre - Vector2(9, half_height + 8), "ГС", HORIZONTAL_ALIGNMENT_LEFT, 24, 10, TEXT)
+	canvas.draw_line(centre - Vector2(0, half_height), centre + Vector2(0, half_height), FRAME, 1.0)
+	for tick in [-2, -1, 1, 2]:
+		canvas.draw_circle(centre + Vector2(0, tick * half_height * 0.5), 1.5, FRAME)
+	canvas.draw_line(centre - Vector2(6, 0), centre + Vector2(6, 0), TEXT, 1.5)
+	var pointer: Vector2 = geometry.pointer
+	var color: Color = capture.color
+	if geometry.offscale:
+		var direction := -1.0 if float(capture.error_m) > 0.0 else 1.0
+		canvas.draw_line(pointer + Vector2(4, -direction * 5), pointer + Vector2(8, 0), color, 2.0, true)
+		canvas.draw_line(pointer + Vector2(12, -direction * 5), pointer + Vector2(8, 0), color, 2.0, true)
+	else:
+		canvas.draw_colored_polygon(PackedVector2Array([pointer + Vector2(3, 0), pointer + Vector2(11, -4), pointer + Vector2(11, 4)]), color)
 
 static func display_layout(rect: Rect2) -> Dictionary:
 	var margin := 24.0
@@ -182,13 +211,13 @@ static func _draw_perspective_cue(canvas: CanvasItem, view: Rect2, point: Vector
 static func projected_runway_geometry(view: Rect2, guidance: Dictionary) -> Dictionary:
 	var fallback_distance_km := float(guidance.get("actual_distance_to_threshold_km", 1.0))
 	var signed_distance_km := float(guidance.get("signed_distance_to_threshold_km", fallback_distance_km))
-	var fallback_altitude_m := maxf(0.0, fallback_distance_km) * 1000.0 * tan(deg_to_rad(FlightModel.GLIDE_SLOPE_DEG))
+	var fallback_altitude_m := maxf(0.0, fallback_distance_km) * Glideslope.HEIGHT_PER_KM
 	var altitude_km := maxf(MIN_EYE_HEIGHT_M, float(guidance.get("aircraft_altitude_m", guidance.get("desired_altitude_m", fallback_altitude_m)))) / 1000.0
 	# A fixed focal length and horizon represent a camera whose view angle never
 	# changes. Ground points move toward the observer as their signed distance
 	# approaches zero instead of the whole runway being re-centred every frame.
 	var focal_length := view.size.y * 0.5 / tan(deg_to_rad(DISPLAY_VERTICAL_FOV_DEG * 0.5))
-	var horizon_y := view.get_center().y - focal_length * tan(deg_to_rad(FlightModel.GLIDE_SLOPE_DEG))
+	var horizon_y := view.get_center().y - focal_length * Glideslope.SLOPE
 	var runway_center_x := view.get_center().x
 	var runway_half_width_km := FlightWorld.RUNWAY_WIDTH_KM * 0.5
 	var bottom_room := maxf(1.0, view.end.y - 2.0 - horizon_y)
@@ -416,7 +445,8 @@ static func _draw_information(canvas: CanvasItem, left: Rect2, right: Rect2, sta
 	# Repeat the small ILS' compact information layout on the right.
 	var show_forecast: bool = state.show_forecast
 	var has_prediction: bool = state.has_prediction
-	var row_count := 3 + (1 if show_forecast else 0) + (1 if USE_COCKPIT_PERSPECTIVE else 0)
+	var show_capture: bool = state.glide_capture.available
+	var row_count := 3 + (1 if show_forecast else 0) + (1 if USE_COCKPIT_PERSPECTIVE else 0) + (1 if show_capture else 0)
 	var row_offset: float = (row_count - 1) * 0.5
 	var right_y := right.get_center().y - line_height * row_offset
 	draw_info_segments(canvas, right.position.x, right_y, [
@@ -439,6 +469,13 @@ static func _draw_information(canvas: CanvasItem, left: Rect2, right: Rect2, sta
 		right_y += line_height
 	_draw_info_line(canvas, right.position.x, right_y, right.size.x, state.descent_angle_text, state.descent_angle_color, font_size)
 	right_y += line_height
+	if show_capture:
+		var capture: Dictionary = state.glide_capture
+		draw_info_segments(canvas, right.position.x, right_y, [
+			{"text": capture.relation_text, "color": capture.color},
+			{"text": capture.intercept_text, "color": capture.color},
+		], font_size, right.size.x)
+		right_y += line_height
 	if has_prediction:
 		draw_info_segments(canvas, right.position.x, right_y, [
 			{"text": state.touchdown_text, "color": state.touchdown_color},

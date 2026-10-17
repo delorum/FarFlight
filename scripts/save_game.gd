@@ -13,6 +13,7 @@ const MailStock = preload("res://scripts/mail_stock.gd")
 const SessionMode = preload("res://scripts/session_mode.gd")
 const ClockCountdown = preload("res://scripts/clock_countdown.gd")
 const Economy = preload("res://scripts/economy.gd")
+const SimulationSession = preload("res://scripts/simulation_session.gd")
 const ViewMode = preload("res://scripts/scene_modes.gd").ViewMode
 static var last_validation_error := ""
 
@@ -115,6 +116,11 @@ static func valid(data: Variant) -> bool:
 			if not item is Dictionary:
 				return false
 	if world.airports.size() != 8 or world.beacons.size() != 24 or world.wind_layers.size() < 2:
+		return false
+	if world.has("runway_size_km"):
+		if not world.runway_size_km is Vector2 or not world.runway_size_km.is_finite() or world.runway_size_km.x <= 0.0 or world.runway_size_km.y <= 0.0:
+			return false
+	if not Economy.valid_parking_snapshot(data.economy, world.airports.size()):
 		return false
 	if data.has("flight_history") and not FlightHistoryScript.valid_snapshot(data.flight_history, world.airports.size()):
 		return false
@@ -293,6 +299,8 @@ static func restore(game, data: Dictionary) -> bool:
 		return false
 	if not new_flight.restore_snapshot(data.flight, data.rng_state):
 		return false
+	var runway_position_adapted: bool = new_flight.adapt_stopped_aircraft_to_runway(data.world.get("runway_size_km", game.FlightWorldScript.LEGACY_RUNWAY_SIZE_KM))
+	SimulationSession.refresh_departure_clearance(new_flight, new_economy)
 	if data.has("flight_history") and not game.simulation.flight_history.restore_snapshot(data.flight_history, new_world.airports.size()):
 		return false
 	if not data.has("flight_history"):
@@ -324,6 +332,13 @@ static func restore(game, data: Dictionary) -> bool:
 			game.set(field, float(data.ui[field]))
 		else:
 			game.set(field, data.ui[field])
+	if runway_position_adapted:
+		# A compatibility relocation is not a flown segment or a new trip.
+		game.trajectory_last_position = new_flight.position_km
+		if not game.trajectory_recording_started and game.flight_trajectory.size() == 1:
+			var start_point: Dictionary = game.flight_trajectory[0].duplicate()
+			start_point.position = new_flight.position_km
+			game.flight_trajectory[0] = start_point
 	# A legacy ui.clock_seconds field is intentionally ignored. The displayed
 	# clock now derives solely from economy.elapsed_seconds, as does the journal.
 	if not data.has("flight_history") and new_flight.state in [game.FlightModelScript.State.FLYING, game.FlightModelScript.State.ROLLING] and game.trajectory_recording_started and not game.trajectory_finished:

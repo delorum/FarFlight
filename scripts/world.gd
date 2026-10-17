@@ -1,6 +1,7 @@
 class_name FlightWorld
 extends RefCounted
 const StormGeometry = preload("res://scripts/storm_geometry.gd")
+const Glideslope = preload("res://scripts/glideslope.gd")
 
 const SIZE_KM := 200.0
 const REGION_SIZE_KM := 100.0
@@ -12,8 +13,13 @@ const MAX_REGIONAL_AIRPORT_DISTANCE_KM := 58.0
 const AIRPORT_COUNT := REGIONS_PER_AXIS * REGIONS_PER_AXIS * AIRPORTS_PER_REGION
 const ROUTE_NDB_COUNT := REGIONS_PER_AXIS * REGIONS_PER_AXIS * ROUTE_NDB_PER_REGION
 const BEACON_COUNT := AIRPORT_COUNT + ROUTE_NDB_COUNT
-const RUNWAY_LENGTH_KM := 2.0
-const RUNWAY_WIDTH_KM := 0.05
+# One switch restores the previous runway geometry for every consumer.
+const USE_SHORT_RUNWAYS := true
+const LEGACY_RUNWAY_SIZE_KM := Vector2(2.0, 0.05)
+const SHORT_RUNWAY_SIZE_KM := Vector2(0.8, 0.02)
+const RUNWAY_SIZE_KM := SHORT_RUNWAY_SIZE_KM if USE_SHORT_RUNWAYS else LEGACY_RUNWAY_SIZE_KM
+const RUNWAY_LENGTH_KM := RUNWAY_SIZE_KM.x
+const RUNWAY_WIDTH_KM := RUNWAY_SIZE_KM.y
 const BEACON_MIN_FREQUENCY_KHZ := 300
 const BEACON_MAX_FREQUENCY_KHZ := 400
 const LOCATOR_RANGE_KM := 15.0
@@ -22,7 +28,7 @@ const ROUTE_NDB_SITE_ATTEMPTS := 384
 const ROUTE_NDB_CLEARANCE_RADIUS_KM := 3.0
 const ILS_RANGE_KM := 15.0
 const ILS_HALF_CONE_DEG := 30.0
-const ILS_AIM_OFFSET_KM := 0.06
+const ILS_AIM_OFFSET_KM := Glideslope.AIM_OFFSET_KM
 const MIN_RADIO_BLOCKING_TERRAIN_M := 250.0
 const STORMS_PER_REGION := 9
 const WEATHER_STORM_COUNT := REGIONS_PER_AXIS * REGIONS_PER_AXIS * STORMS_PER_REGION
@@ -51,6 +57,7 @@ var _route_distance_cache: Dictionary = {}
 # Explicit model snapshot. Runtime noise/cache objects never enter the save.
 func snapshot() -> Dictionary:
 	return {"seed": seed_value, "airports": airports, "beacons": beacons,
+		"runway_size_km": RUNWAY_SIZE_KM,
 		"wind_layers": wind_layers, "storms": storms, "time": weather_time_seconds,
 		"weather_generation": weather_generation,
 		"level_index": level_index, "exit_portal": exit_portal}.duplicate(true)

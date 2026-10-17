@@ -843,6 +843,7 @@ func _reset_trip_counter() -> void:
 
 func _prepare_from_operations(reverse_direction: bool) -> void:
 	flight.prepare_at_airport(flight.airport_index, reverse_direction)
+	SimulationSession.refresh_departure_clearance(flight, economy)
 	_reset_flight_trajectory()
 	_tune_receivers_to_departure_airport()
 	_update_receiver_signals()
@@ -855,11 +856,11 @@ func _pay_and_prepare(reverse_direction: bool) -> void:
 	if _operations_runway_is_selected(reverse_direction):
 		scene_notice = "Самолёт уже подготовлен к вылету с ВПП %03d° • оплата не требуется" % _operations_runway_heading(reverse_direction)
 		return
-	if not economy.pay_parking():
-		scene_notice = "Не хватает денег на стоянку и подготовку • выбранная ВПП не изменена" if flight.departure_authorized else "Не хватает денег на стоянку и подготовку"
+	if not economy.pay_departure_preparation():
+		scene_notice = "Не хватает денег на подготовку • выбранная ВПП не изменена" if flight.departure_authorized else "Не хватает денег на подготовку"
 		return
 	_prepare_from_operations(reverse_direction)
-	scene_notice += " • оплачено %d монет" % EconomyScript.PARKING_PRICE
+	scene_notice += " • оплачено %d монет" % EconomyScript.DEPARTURE_PREPARATION_PRICE
 
 func _operations_runway_heading(reverse_direction: bool) -> int:
 	var airport: Dictionary = world.airports[flight.airport_index]
@@ -869,17 +870,36 @@ func _operations_runway_is_selected(reverse_direction: bool) -> bool:
 	return flight.is_prepared_for(flight.airport_index, reverse_direction)
 
 func _operations_status_text() -> String:
-	if not flight.departure_authorized:
+	SimulationSession.refresh_departure_clearance(flight, economy)
+	var reason: String = flight.departure_block_reason()
+	if reason == FlightModelScript.DEPARTURE_BLOCKED_MESSAGE:
 		return "СТАТУС: САМОЛЁТ НЕ ПОДГОТОВЛЕН К ВЫЛЕТУ"
+	if reason == FlightModelScript.PARKING_BLOCKED_MESSAGE:
+		return "СТАТУС: ПОДГОТОВЛЕН • ОПЛАТИТЕ СТОЯНКУ"
 	return "СТАТУС: ПОДГОТОВЛЕН К ВЫЛЕТУ С ВПП %03d°" % roundi(flight.prepared_heading_deg())
+
+func _operations_parking_button_text() -> String:
+	var due: int = economy.parking_amount_due()
+	if due > 0:
+		return "ОПЛАТИТЬ СТОЯНКУ • %d МОНЕТ" % due
+	var remaining := EconomyScript.PARKING_PERIOD_SECONDS - fposmod(economy.parking_elapsed_seconds, EconomyScript.PARKING_PERIOD_SECONDS)
+	return "СТОЯНКА: 0 МОНЕТ • ЕЩЁ %d МИН" % ceili(remaining / 60.0)
+
+func _pay_airport_stay() -> void:
+	var due: int = economy.parking_amount_due()
+	if not economy.pay_parking():
+		scene_notice = "Не хватает денег на стоянку"
+		return
+	SimulationSession.refresh_departure_clearance(flight, economy)
+	scene_notice = "Стоянка оплачена: %d монет" % due
 
 func _operations_runway_button_text(reverse_direction: bool) -> String:
 	var heading := _operations_runway_heading(reverse_direction)
 	if _operations_runway_is_selected(reverse_direction):
 		return "ПОДГОТОВЛЕНО • ВПП %03d° • БЕСПЛАТНО" % heading
 	if flight.departure_authorized:
-		return "СМЕНИТЬ ВПП НА %03d° • %d МОНЕТ" % [heading, EconomyScript.PARKING_PRICE]
-	return "ПОДГОТОВИТЬ К ВЫЛЕТУ • ВПП %03d° • %d МОНЕТ" % [heading, EconomyScript.PARKING_PRICE]
+		return "СМЕНИТЬ ВПП НА %03d° • %d МОНЕТ" % [heading, EconomyScript.DEPARTURE_PREPARATION_PRICE]
+	return "ПОДГОТОВИТЬ К ВЫЛЕТУ • ВПП %03d° • %d МОНЕТ" % [heading, EconomyScript.DEPARTURE_PREPARATION_PRICE]
 
 func _refresh_weather_briefing() -> void:
 	navigation_map.refresh_weather_briefing()
@@ -1572,6 +1592,8 @@ func _handle_side_scene_mouse_button(event: InputEventMouseButton) -> bool:
 				_set_view_mode(ViewMode.FLIGHT_HISTORY)
 			elif get_operations_weather_rect().has_point(event.position):
 				_refresh_weather_briefing()
+			elif side_scenes.get_operations_parking_rect().has_point(event.position):
+				_pay_airport_stay()
 			elif get_operations_runway_rect(false).has_point(event.position):
 				_pay_and_prepare(false)
 			elif get_operations_runway_rect(true).has_point(event.position):
