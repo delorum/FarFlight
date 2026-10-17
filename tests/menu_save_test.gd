@@ -37,6 +37,16 @@ func generated_world_signature(world) -> Dictionary:
 		"storms": world.storms.duplicate(true),
 	}
 
+func check_browser_navigation(shell, first_action: String, last_action: String) -> void:
+	# The browser test uses real keyboard input, independent of pixels and text.
+	var focused: Control = shell.get_viewport().gui_get_focus_owner()
+	check(focused is Button and shell.content.is_ancestor_of(focused), "Rebuilt menu must focus its first action for browser navigation")
+	if not focused is Button:
+		return
+	check(String(focused.pressed.get_connections()[0].callable.get_method()) == first_action, "First menu action must match the browser navigation contract")
+	var previous: Control = focused.find_prev_valid_focus()
+	check(previous is Button and String(previous.pressed.get_connections()[0].callable.get_method()) == last_action, "Reverse Tab from the first action must reach the last menu action")
+
 func _run() -> void:
 	var shell = load("res://scenes/game_shell.tscn").instantiate()
 	shell.save_path = slot
@@ -47,6 +57,7 @@ func _run() -> void:
 	check(shell.version_label != null and shell.version_label.text.begins_with("v" + GameVersion.base_version()), "Title and pause shell must display the configured game version")
 	check(shell.menu_open and shell.game == null, "Startup must show title menu without running a flight")
 	check(button_texts(shell) == ["Новая игра", "Посадка", "Об игре", "Настройки", "Авторы", "Выход"], "Startup without a save must hide Continue and keep the requested order")
+	check_browser_navigation(shell, "_open_new_game_setup", "_exit_game")
 	shell._open_about()
 	check(shell.about_open, "About page must open")
 	var about_links: Array[Node] = shell.content.find_children("*", "LinkButton", true, false)
@@ -59,6 +70,7 @@ func _run() -> void:
 	shell._close_authors()
 	shell._open_new_game_setup()
 	check(shell.new_game_setup_open and shell.new_game_seed_field != null, "New Game must open seed configuration before replacing the current session")
+	check(shell.get_viewport().gui_get_focus_owner() == shell.new_game_seed_field, "Seed setup must focus its input so Enter can start the game")
 	shell.new_game_seed_field.text = "not-a-seed"
 	shell._start_configured_new_game()
 	check(shell.game == null and shell.new_game_setup_open and not shell.error_text.is_empty(), "Invalid seed text must keep the setup open and explain the error")
@@ -129,6 +141,7 @@ func _run() -> void:
 	await process_frame
 	check(shell.menu_open and not game.is_processing() and not game.visible, "Escape must pause and cover cabin with title menu")
 	check(button_texts(shell) == ["Продолжить • seed 424242", "Статистика полётов", "Об игре", "Настройки", "Новая игра", "Сохранить и выйти"], "Pause menu must expose flight statistics, About, and Settings while keeping the requested button order")
+	check_browser_navigation(shell, "_resume_game", "_save_and_exit")
 	shell._open_about()
 	check(shell.about_open and shell.content.get_node_or_null("AboutScroll") != null, "Pause-menu About must open the shared scrollable game description")
 	shell._close_about()

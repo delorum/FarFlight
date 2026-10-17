@@ -338,6 +338,8 @@ python3 -m http.server 8000 --directory build/web
 
 Workflow `.github/workflows/web-pages.yml` при push в `main` и вручную запускает тесты, собирает Web-версию и публикует GitHub Pages. Для pull request выполняется сборка без публикации. Архив доступен как `FarFlight-Web`.
 
+Браузерный smoke test проходит создание игры с выбором seed, сохранение, перезагрузку страницы, продолжение и восстановление после ошибки квоты хранилища через клавиатуру, без фиксированных координат кнопок. Падение проверки блокирует публикацию и сохраняет артефакт `FarFlight-Web-Smoke-Diagnostics`: скриншоты, журнал консоли и трассировку Playwright. До успешного прохождения проверок GitHub Pages оставляет последнюю опубликованную сборку.
+
 Ссылки: [веб-экспорт Godot](https://docs.godotengine.org/en/stable/tutorials/export/exporting_for_web.html), [GitHub Pages через Actions](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages).
 
 ### Архитектура

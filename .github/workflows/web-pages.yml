@@ -66,7 +66,15 @@ jobs:
           python3 -m http.server 8765 --bind 127.0.0.1 --directory build/web &
           web_server_pid=$!
           trap 'kill "$web_server_pid"' EXIT
-          NODE_PATH="$RUNNER_TEMP/browser-test/node_modules" node tests/web_smoke.cjs
+          NODE_PATH="$RUNNER_TEMP/browser-test/node_modules" WEB_SMOKE_ARTIFACT_DIR="$RUNNER_TEMP/web-smoke/1280x800" node tests/web_smoke.cjs
+          NODE_PATH="$RUNNER_TEMP/browser-test/node_modules" WEB_SMOKE_ARTIFACT_DIR="$RUNNER_TEMP/web-smoke/960x720" WEB_SMOKE_WIDTH=960 WEB_SMOKE_HEIGHT=720 node tests/web_smoke.cjs
+      - name: Upload browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FarFlight-Web-Smoke-Diagnostics
+          path: ${{ runner.temp }}/web-smoke/
+          if-no-files-found: ignore
       - name: Upload downloadable Web release
         uses: actions/upload-artifact@v4
         with:

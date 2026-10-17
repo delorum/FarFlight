@@ -338,6 +338,8 @@ Open `http://localhost:8000`, not `index.html` through `file://`.
 
 On pushes to `main` and manual runs, `.github/workflows/web-pages.yml` runs tests, builds the Web version, and publishes GitHub Pages. Pull requests are built without publication. The downloadable artifact is named `FarFlight-Web`.
 
+The browser smoke test exercises new-game seed setup, saving, page reload, continuing, and recovery from a storage quota error through keyboard navigation, without fixed button coordinates. A failed browser check blocks publication and uploads `FarFlight-Web-Smoke-Diagnostics` with screenshots, a console log, and a Playwright trace. GitHub Pages retains the last successfully published build until all checks pass.
+
 References: [Godot Web export](https://docs.godotengine.org/en/stable/tutorials/export/exporting_for_web.html), [GitHub Pages with Actions](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages).
 
 ### Architecture
