@@ -2,6 +2,7 @@ extends SceneTree
 
 const ILSDisplayArt = preload("res://scripts/ils_display_art.gd")
 const ILSDisplayState = preload("res://scripts/ils_display_state.gd")
+const CockpitProjection = preload("res://scripts/ils_cockpit_projection.gd")
 
 var failed := false
 
@@ -186,6 +187,21 @@ func _run() -> void:
 		check(state.touchdown_color == (ILSDisplayState.GREEN if sample.along_ok else ILSDisplayState.RED), "Along-runway forecast colour must not depend on lateral miss")
 		check(state.lateral_color == (ILSDisplayState.GREEN if sample.cross_ok else ILSDisplayState.RED), "Lateral forecast colour must not depend on along-runway miss")
 	var unavailable := ILSDisplayState.build(game.flight, 0, true, {"valid": false}, departure_frequency)
+	var original_heading: float = game.flight.heading_deg
+	for reverse in [false, true]:
+		game.flight.heading_deg = fposmod(float(airport.heading) + (180.0 if reverse else 0.0), 360.0)
+		var approach_forward: Vector2 = game.world.heading_vector(game.flight.heading_deg)
+		game.flight.position_km = Vector2(airport.position) - approach_forward * 4.0
+		for sample in [{"cross": 0.097, "text": "БОК -97 м"}, {"cross": -0.097, "text": "БОК +97 м"}, {"cross": 0.0, "text": "БОК +0 м"}]:
+			var forecast := {"valid": true, "distance_from_threshold_km": 0.13, "cross_track_km": sample.cross}
+			var unchanged := forecast.duplicate(true)
+			var state := ILSDisplayState.build(game.flight, 0, true, forecast, departure_frequency)
+			check(state.lateral_text == sample.text, "Both ILS readouts must show minus left and plus right for either runway direction")
+			var axis: Vector2 = CockpitProjection.project(projection, CockpitProjection.camera_point(state.projection, 0.13, 0.0))
+			var marker: Vector2 = CockpitProjection.project(projection, CockpitProjection.camera_point(state.projection, 0.13, sample.cross))
+			check(is_zero_approx(sample.cross) or signf(marker.x - axis.x) == -signf(sample.cross), "Readout sign must agree with the projected marker relative to the runway axis")
+			check(forecast == unchanged and state.prediction == unchanged, "Display sign conversion must not change prediction coordinates")
+	game.flight.heading_deg = original_heading
 	for angle in [0.5, 3.0, -6.0]:
 		var aligned := ILSDisplayState.build(game.flight, 0, true, {"valid": true, "distance_from_threshold_km": 0.1, "cross_track_km": 0.0, "touchdown_course_error_deg": angle}, departure_frequency)
 		check(aligned.touchdown_course_text == "К ОСИ %+.1f°" % angle, "Forecast row must show the predicted touchdown angle")

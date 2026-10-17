@@ -29,6 +29,9 @@ static func build(flight, airport_index: int, signal_available: bool, prediction
 	var speed_color := GREEN if flight.speed_kmh <= 100.0 else (YELLOW if flight.speed_kmh <= 115.0 else RED)
 	var along := float(prediction.get("distance_from_threshold_km", 0.0))
 	var cross := absf(float(prediction.get("cross_track_km", 0.0)))
+	# Prediction coordinates are positive left; pilot-facing readouts are
+	# positive right, matching the cockpit camera and lateral speed readout.
+	var lateral_m := 0.0 - float(prediction.get("cross_track_km", 0.0)) * 1000.0
 	# Diagnose each geometric miss independently. The projected marker still
 	# uses the combined result, including touchdown safety.
 	var touchdown_color := GREEN if has_prediction and along >= 0.0 and along <= FlightWorld.RUNWAY_LENGTH_KM else (RED if has_prediction else YELLOW)
@@ -63,7 +66,7 @@ static func build(flight, airport_index: int, signal_available: bool, prediction
 		"course_text": "ОТКЛ. ПУТИ %+.1f°" % float(guidance.get("course_error_deg", 0.0)),
 		"distance_text": "ДО ВПП %.2f км" % float(guidance.get("actual_distance_to_threshold_km", 0.0)),
 		"touchdown_text": "КАС. %+.2f км" % float(prediction.get("distance_from_threshold_km", 0.0)) if has_prediction else "КАСАНИЕ — НЕ ПРОГНОЗИРУЕТСЯ",
-		"lateral_text": "БОК %+.0f м" % (float(prediction.get("cross_track_km", 0.0)) * 1000.0) if has_prediction else "",
+		"lateral_text": "БОК %+.0f м" % lateral_m if has_prediction else "",
 		"touchdown_course_text": "К ОСИ %+.1f°" % float(prediction.touchdown_course_error_deg) if has_prediction and prediction.has("touchdown_course_error_deg") else "К ОСИ —",
 		"touchdown_course_color": parameter_color(absf(float(prediction.get("touchdown_course_error_deg", 0.0))), 1.0, 5.0) if has_prediction and prediction.has("touchdown_course_error_deg") else TEXT,
 		"altitude_color": altitude_color,
