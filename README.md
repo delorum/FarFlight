@@ -325,6 +325,8 @@ Open `project.godot` in Godot 4.7 and run the project (`F5`). The main screen is
 
 ### Web and GitHub Pages
 
+UI fonts are bundled with the game: the original Open Sans SemiBold for text and DejaVu Sans as a symbol fallback (`■ □ ✓ ⇧` and arrows). Web builds do not rely on system fonts. Licenses are in `assets/fonts/`; `font_coverage_test.gd` checks UI glyphs with system fallback disabled.
+
 The `Web` preset uses Compatibility/WebGL 2 without threads or a service worker. Godot 4.7 and export templates are required for a local build:
 
 ```sh
