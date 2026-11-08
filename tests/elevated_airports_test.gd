@@ -68,6 +68,7 @@ func run() -> void:
 		flight.prepare_at_airport(index, reverse)
 		flight.electrical_power = true
 		check(flight.altitude_m == height and flight.radio_height_m() == 0.0, "Parked aircraft must sit on its runway, not sea level")
+		check(State.build(flight, index, true, {}, 350).altitude_text == "H 0.0 м", "Both ILS sizes must display zero height when parked on an elevated runway")
 		flight.state = Flight.State.FLYING
 		flight.electrical_power = true
 		var forward: Vector2 = world.heading_vector(flight.heading_deg)
@@ -76,6 +77,8 @@ func run() -> void:
 		flight.speed_kmh = 100
 		flight.current_wind_kmh = Vector2.ZERO
 		var state := State.build(flight, index, true, {}, 350)
+		check(state.altitude_text == "H %.1f м" % (flight.altitude_m - height), "Shared ILS readout must show height above the selected runway in both approach directions")
+		check(state.projection.aircraft_altitude_m == flight.altitude_m, "Relative height readout must preserve the absolute altitude used by runway projection")
 		check(state.glide_capture.on_glide and absf(float(state.guidance.desired_altitude_m) - height - 212.78) < 0.1, "ILS glide height must add runway elevation for both directions")
 		var elevated_point := Camera.camera_point(state.projection, 0.1, 0.0)
 		var low_guidance: Dictionary = state.projection.duplicate()

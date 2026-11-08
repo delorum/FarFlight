@@ -198,6 +198,8 @@ En-route NDBs have a 30 km range; approach beacons have a 15 km range. NDBs are 
 
 ### ILS and landing
 
+The `H` readout in both ILS sizes shows height above the selected runway: it is zero on the runway. The barometric altimeter and map approach markers continue to show absolute altitude.
+
 Runways measure 800 × 20 m: 10 m on either side of the centreline. Braking, the 3° glideslope, and the aiming point 60 m past the threshold are unchanged. To restore the previous 2000 × 50 m geometry, set `USE_SHORT_RUNWAYS = false` in `scripts/world.gd`: physics, ILS, map, and side views share this profile. When switching to a smaller profile, a saved stationary aircraft inside the old runway but outside the new boundary is moved inside at the same relative position, without changing money, fuel, or controls. Airborne and moving aircraft are not relocated, so the separate landing-practice mode is the safest place for an initial trial. Its start remains 6 km from the new threshold.
 
 ILS uses receiver 1. Tune an approach beacon: the instrument activates within 15 km, inside the forward sector, and with a suitable aircraft heading. The vertical needle shows localizer deviation and the horizontal needle shows deviation from the 3° glideslope. Green indicates capture within tolerance.

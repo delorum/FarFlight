@@ -60,7 +60,7 @@ static func build(flight, airport_index: int, signal_available: bool, prediction
 		"show_forecast": show_forecast,
 		"has_prediction": has_prediction,
 		"title": "ILS %03d кГц" % frequency_khz,
-		"altitude_text": "H %.1f м" % flight.altitude_m,
+		"altitude_text": "H %.1f м" % (flight.altitude_m - float(guidance.get("runway_elevation_m", 0.0))),
 		"vertical_speed_text": "VS %+.2f м/с" % flight.vertical_speed_mps,
 		"speed_text": "V %.1f км/ч" % flight.speed_kmh,
 		"descent_angle_text": "УГОЛ %.1f°" % descent_angle if angle_available else "УГОЛ —",
