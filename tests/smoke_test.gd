@@ -27,6 +27,9 @@ func _init() -> void:
 			var route_beacon: Dictionary = world.beacons[beacon_index]
 			assert(world.raw_height_at(route_beacon.position) < FlightWorldScript.MIN_RADIO_BLOCKING_TERRAIN_M, "Route NDB must be generated on low terrain")
 	var test_world = FlightWorldScript.new(424242, false)
+	# Basic airframe/stall checks must not depend on the generated storm layout.
+	# Weather generation and disturbed-flight behavior have separate tests.
+	test_world.storms.clear()
 	var out_of_range := test_world.beacon_signal(test_world.beacons[0], test_world.beacons[0].position + Vector2(16.0, 0.0), FlightModelScript.ABSOLUTE_CEILING_M)
 	assert(not out_of_range.available)
 	assert(out_of_range.reason == "НЕТ СИГНАЛА")

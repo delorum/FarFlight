@@ -20,6 +20,12 @@ func _initialize() -> void:
 		check(world.airports.size() == World.AIRPORT_COUNT, "World must contain eight airports")
 		check(world.beacons.size() == World.BEACON_COUNT, "World must contain eight airport and sixteen route beacons")
 		check(world.storms.size() == World.WEATHER_STORM_COUNT, "Storm density must scale with world area")
+		for layer in world.wind_layers:
+			var limit := World.LOW_WIND_MAX_KMH if layer.altitude_m <= World.LOW_WIND_CEILING_M else World.HIGH_WIND_MAX_KMH
+			check(layer.speed_kmh >= 0.0 and layer.speed_kmh <= limit, "Generated wind must respect the low/high altitude speed limits")
+		for altitude_m in [0.0, 100.0, 199.9, 200.0, 200.1, 225.0, 250.0, 400.0, 700.0]:
+			var limit := World.LOW_WIND_MAX_KMH if altitude_m <= World.LOW_WIND_CEILING_M else World.HIGH_WIND_MAX_KMH
+			check(world.wind_at(altitude_m).length() <= limit + 0.0001, "Interpolated wind must respect the 200 m boundary")
 		for storm in world.storms:
 			check(float(storm.radius_km) >= 6.0 and float(storm.radius_km) <= 10.5, "Storm cells must use the broader route-blocking size range")
 		for first_index in world.airports.size():
@@ -84,5 +90,14 @@ func _initialize() -> void:
 	shape_world.refresh_weather()
 	restored_weather_world.refresh_weather()
 	check(restored_weather_world.weather_generation == 2 and restored_weather_world.wind_layers == shape_world.wind_layers and restored_weather_world.storms == shape_world.storms, "A saved weather generation must continue the deterministic sequence")
+	for layer in shape_world.wind_layers:
+		layer.from_deg = 0.0
+		layer.speed_kmh = 32.0 if layer.altitude_m <= 200.0 else 45.0
+	check(is_equal_approx(shape_world.wind_at(200.0).length(), 32.0), "The low-altitude maximum must apply at exactly 200 m")
+	check(is_equal_approx(shape_world.wind_at(250.0).length(), 45.0), "Wind above the boundary must be able to reach 45 km/h")
+	check(shape_world.wind_at(200.001).distance_to(shape_world.wind_at(200.0)) < 0.001, "Wind must remain continuous at the altitude boundary")
+	for layer in shape_world.wind_layers:
+		layer.speed_kmh = 0.0
+	check(shape_world.wind_at(100.0).is_zero_approx() and shape_world.wind_at(400.0).is_zero_approx(), "Calm wind must work at both low and high altitude")
 	print("200×200 world: evenly distributed; shortest airport pair %.2f km; highest raw airport site %.0f m: %s" % [shortest_airport_distance, highest_airport_site, "FAIL" if failed else "OK"])
 	quit(1 if failed else 0)

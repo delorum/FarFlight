@@ -35,7 +35,10 @@ const MIN_RADIO_BLOCKING_TERRAIN_M := 250.0
 const STORMS_PER_REGION := 9
 const WEATHER_STORM_COUNT := REGIONS_PER_AXIS * REGIONS_PER_AXIS * STORMS_PER_REGION
 const AIRPORT_NAMES := ["Северный", "Озёрный", "Речной", "Степной", "Туманный", "Каменный", "Западный", "Дальний"]
-const WIND_ALTITUDES_M := [0.0, 250.0, 500.0, 700.0]
+const LOW_WIND_CEILING_M := 200.0
+const LOW_WIND_MAX_KMH := 32.0
+const HIGH_WIND_MAX_KMH := 45.0
+const WIND_ALTITUDES_M := [0.0, LOW_WIND_CEILING_M, 250.0, 500.0, 700.0]
 const ROUTE_GRID_STEP_KM := 1.0
 const ROUTE_CEILING_M := 700.0
 const ROUTE_CLEARANCE_M := 150.0
@@ -151,7 +154,8 @@ func _generate_storms(rng: RandomNumberGenerator) -> void:
 func _generate_wind(rng: RandomNumberGenerator) -> void:
 	wind_layers.clear()
 	for altitude_m in WIND_ALTITUDES_M:
-		wind_layers.append({"altitude_m": altitude_m, "from_deg": rng.randf_range(0.0, 360.0), "speed_kmh": rng.randf_range(8.0, 32.0)})
+		var max_speed := LOW_WIND_MAX_KMH if altitude_m <= LOW_WIND_CEILING_M else HIGH_WIND_MAX_KMH
+		wind_layers.append({"altitude_m": altitude_m, "from_deg": rng.randf_range(0.0, 360.0), "speed_kmh": rng.randf_range(0.0, max_speed)})
 
 func update_weather(delta: float) -> void:
 	weather_time_seconds += delta

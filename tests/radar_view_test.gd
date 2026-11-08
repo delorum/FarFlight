@@ -155,7 +155,7 @@ func _run() -> void:
 		layer.from_deg = 270.0
 		layer.speed_kmh = 20.0
 	scene.wind_overlay_index = 1
-	check(scene._wind_arrow_description() == "от 270° • 20 км/ч • 250 м", "Wind description must show FROM direction, speed and selected altitude")
+	check(scene._wind_arrow_description() == "от 270° • 20 км/ч • %d м" % roundi(float(scene.WIND_OVERLAY_ALTITUDES[scene.wind_overlay_index])), "Wind description must show FROM direction, speed and selected altitude")
 	for zoom in [1.0, 2.0, 4.0, 8.0, 12.0, 16.0, 20.0, 24.0]:
 		scene.map_zoom = zoom
 		var centers: PackedVector2Array = scene._wind_arrow_centers(scene.map_rect())

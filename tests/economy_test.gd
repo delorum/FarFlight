@@ -118,7 +118,8 @@ func _init() -> void:
 	assert(economy.offers_at(destination).size() == 7)
 	assert(world.wind_layers == initial_wind and world.storms == initial_storms, "Economy arrivals must not mutate physical weather")
 	for layer in world.wind_layers:
-		assert(layer.speed_kmh >= 8.0 and layer.speed_kmh <= 32.0)
+		var limit := World.LOW_WIND_MAX_KMH if layer.altitude_m <= World.LOW_WIND_CEILING_M else World.HIGH_WIND_MAX_KMH
+		assert(layer.speed_kmh >= 0.0 and layer.speed_kmh <= limit)
 		assert(layer.from_deg >= 0.0 and layer.from_deg <= 360.0)
 	var arrival_wind: Array = world.wind_layers.duplicate(true)
 	economy.arrive_at_airport(destination, world)
