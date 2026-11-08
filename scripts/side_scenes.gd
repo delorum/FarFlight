@@ -243,6 +243,8 @@ func _draw_scene_hotspots(background_only: bool = false) -> void:
 
 func _click_side_scene(position: Vector2) -> void:
 	if host._side_scene_actions_paused():
+		if view_mode == ViewMode.CABIN and cabin_terrain_zoom == 0 and host.flight.state != FlightModelScript.State.CRASHED:
+			host.cabin_interactions.click(position, "seat")
 		return
 	if cabin_terrain_zoom > 0:
 		return

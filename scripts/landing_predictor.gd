@@ -55,6 +55,7 @@ class PredictionJob extends RefCounted:
 			_finish(LandingPredictor.no_touchdown("invalid_airport"))
 			return
 		simulated = FlightModel.new(source.world)
+		simulated.approach_gusts_enabled = source.approach_gusts_enabled
 		if not simulated.restore_snapshot(source.snapshot(), source.turbulence_rng.state):
 			_finish(LandingPredictor.no_touchdown("invalid_state"))
 			return
@@ -78,7 +79,7 @@ class PredictionJob extends RefCounted:
 			if previous_state == FlightModel.State.FLYING and simulated.state == FlightModel.State.ROLLING:
 				_finish(LandingPredictor._impact_result(simulated, airport, approach_sign, elapsed, true, Vector2(simulated.position_km) - previous_position))
 			elif simulated.state == FlightModel.State.CRASHED:
-				var contact: bool = simulated.altitude_m <= float(simulated.world.height_at(simulated.position_km)) + FlightModel.GROUND_CONTACT_CLEARANCE_M + 0.01
+				var contact: bool = simulated.altitude_m <= float(simulated.world.height_at(simulated.position_km)) + simulated.ground_contact_clearance_m() + 0.01
 				_finish(LandingPredictor._impact_result(simulated, airport, approach_sign, elapsed, false, Vector2(simulated.position_km) - previous_position) if contact else LandingPredictor.no_touchdown("airborne_crash"))
 			elif mode == LandingPredictor.Mode.SHORT_TRAJECTORY and elapsed >= SHORT_HORIZON_SECONDS - 0.0001:
 				_finish(LandingPredictor._trajectory_result(simulated, airport, approach_sign, elapsed))
@@ -96,8 +97,9 @@ static func _trajectory_result(simulated, airport: Dictionary, approach_sign: fl
 	# and descent: this is an aiming estimate, not knowledge of future wind layers.
 	if simulated.vertical_speed_mps >= -0.05:
 		return no_touchdown("not_descending")
-	var height: float = simulated.altitude_m - simulated.world.height_at(Vector2(airport.position))
-	var seconds: float = maxf(0.0, height) / -simulated.vertical_speed_mps
+	var contact := FlightModel.LandingContact.assess(simulated.pitch_deg, simulated.vertical_speed_mps, simulated.speed_kmh)
+	var height: float = simulated.altitude_m - simulated.world.airport_elevation_m(airport)
+	var seconds: float = maxf(0.0, height - float(contact.contact_height_m)) / -simulated.vertical_speed_mps
 	if seconds + elapsed > MAX_PREDICTION_SECONDS:
 		return no_touchdown("timeout")
 	var velocity: Vector2 = simulated.world.heading_vector(simulated.heading_deg) * simulated.speed_kmh + simulated.current_wind_kmh
@@ -110,7 +112,9 @@ static func _trajectory_result(simulated, airport: Dictionary, approach_sign: fl
 		"touchdown_course_error_deg": touchdown_course_error_deg(simulated, airport, approach_sign, velocity),
 		"predicted_position": position,
 		"prediction_seconds": elapsed + seconds,
-		"safe_landing": simulated.vertical_speed_mps > -FlightModel.FATAL_TOUCHDOWN_SINK_MPS,
+		"safe_landing": contact.safe,
+		"touchdown_pitch_deg": simulated.pitch_deg,
+		"touchdown_part": contact.part,
 		"reason": "trajectory_estimate",
 	}
 
@@ -121,6 +125,7 @@ static func touchdown_course_error_deg(simulated, airport: Dictionary, approach_
 
 static func _impact_result(simulated, airport: Dictionary, approach_sign: float, elapsed: float, safe_landing: bool, displacement: Vector2) -> Dictionary:
 	var coords: Vector2 = simulated.world.runway_coordinates(simulated.position_km, airport)
+	var contact: Dictionary = simulated.last_touchdown
 	return {
 		"valid": true,
 		"distance_from_threshold_km": coords.x * approach_sign + FlightWorld.RUNWAY_LENGTH_KM * 0.5,
@@ -130,6 +135,8 @@ static func _impact_result(simulated, airport: Dictionary, approach_sign: float,
 		"touchdown_course_error_deg": touchdown_course_error_deg(simulated, airport, approach_sign, displacement),
 		"predicted_position": simulated.position_km,
 		"prediction_seconds": elapsed,
-		"safe_landing": safe_landing,
+		"safe_landing": safe_landing and bool(contact.get("safe", true)),
+		"touchdown_pitch_deg": contact.get("pitch_deg", simulated.pitch_deg),
+		"touchdown_part": contact.get("part", ""),
 		"reason": "landing" if safe_landing else "ground_impact",
 	}

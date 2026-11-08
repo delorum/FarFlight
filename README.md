@@ -62,11 +62,13 @@ For level cruise, use roughly 87% throttle and 200 km/h as a starting point. The
 
 The 200×200 km map is procedurally generated. Each of its four 100×100 km regions contains two airfields and four en-route radio beacons. Any two airfields are separated by at least 45 km.
 
+New airfields have elevations from 0 to 300 m. The generator selects natural lowland sites and runway headings with a clear 6 km approach corridor at both ends, checking lateral clearance and terrain below the 3° glide path. Only the runway/apron surroundings are levelled, with smooth transitions; a bounded engineered-corridor fallback guarantees a usable approach for unlucky layouts. Map runway labels and airport hover information show runway elevation. Glide-path markers show absolute (barometric) altitude, not height above the runway; markers above the aircraft's practical ceiling are omitted. For example, the 4 km marker is about 213 m for a sea-level runway and 413 m for a runway at 200 m. Physics, radio height, both ILS projections, capture guidance and touchdown prediction use the same runway datum.
+
 Before a new game, you may enter a positive `seed` from 1 to 2147483647 or leave the field blank. The same seed reproduces the terrain, airfields, beacons, services, and weather sequence. You can share it with another player to compare records in the same world. Before a campaign starts, the game checks that all airfields and a future exit are reachable. A rare unusable requested seed is deterministically replaced by a playable one; the actual seed appears on the Continue button in both the title and pause menus.
 
 The title screen offers continuation or results for the saved run, a new game, Landing Practice, About, Settings, Credits, and Quit. About links to this complete guide. Settings is also available in the pause menu and contains Language (Russian or English) and Display theme (Light or Dark). Both preferences are saved independently of the current game.
 
-Landing Practice creates a fresh random world and airfield for every attempt. The aircraft starts on a six-kilometre final at 234 m, 150 km/h, 70% throttle, with electrical power and engine on, 40 litres of fuel, random wind, no thunderstorms, and the large ILS open. The mode can be restarted or left for the title screen and never reads, creates, or replaces the main campaign save.
+Landing Practice creates a fresh random world and airfield for every attempt. The aircraft starts on a six-kilometre final at 234 m above the runway, 150 km/h, 70% throttle, with electrical power and engine on, 40 litres of fuel, random wind, no thunderstorms, and the large ILS open. The mode can be restarted or left for the title screen and never reads, creates, or replaces the main campaign save.
 
 ## Controls
 
@@ -126,7 +128,7 @@ Choose Settings → Display theme in the main menu or pause menu to switch betwe
 - `Space` — pause or resume the simulation in any scene;
 - `Esc` — open the pause menu.
 
-While paused, side-view scenes block walking, item interactions, purchases, refuelling, and switching between gameplay scenes. `Space` resumes the game and `Esc` opens the menu; flight-history browsing remains available.
+While paused, side-view scenes block walking, item interactions, purchases, and refuelling. `X` still switches between the cockpit and cabin; clicking the pilot seat also returns to the cockpit without unpausing. Boarding requires free hands. Other gameplay scene transitions remain blocked. `Space` resumes the game and `Esc` opens the menu; flight-history browsing remains available.
 
 Aircraft or character control after acceleration returns time to 1×. Using the map and its lines does not. Rotation caused by a newly encountered storm resets acceleration immediately.
 
@@ -208,13 +210,19 @@ At the two most detailed map scales, dashed lines show the capture sector: side 
 
 To intercept glideslope from below, the large ILS has a vertical `GS` scale inside the left edge of its window: the fixed centre represents glideslope and the moving marker represents the aircraft. Below is cyan, above is red, and within 3 m is green. Dots represent 50 and 100 m deviations; an arrow indicates off-scale deviation. A single right-hand row such as `BELOW 30 m • GS INT 0.57 km` shows the vertical difference and distance to glideslope interception while maintaining current altitude. The glideslope altitude itself is not displayed. Above glideslope, `INT BEHIND` warns that the level-flight intersection is behind the aircraft. This uses the same 3° plane and touchdown point 60 m past the threshold as the map markers and small ILS; oblique approaches use current ground track, not nose heading, to calculate distance flown. It is a height-holding reference before descent, not a forecast using current vertical speed or a promise of centreline interception. Without motion towards the runway, the distance is replaced by a dash; beyond the threshold or on the ground these extra cues are hidden.
 
-As a throttle reference, join the runway extension 4 km before the near runway threshold at about 230 m and 100 km/h, set neutral pitch and 30% throttle. Reduce to 10% about 50 m before the threshold. The stable segment runs at 90–92 km/h on a roughly 3° glide path.
+For a sea-level runway, a throttle reference is to join the runway extension 4 km before the near threshold at about 230 m and 100 km/h, set neutral pitch and 30% throttle. Reduce to 10% about 50 m before the threshold. The stable segment runs at 90–92 km/h on a roughly 3° glide path. For an elevated runway, add its elevation to the entry altitude and adjust throttle using ILS; altitude and wind affect the required settings.
+
+Touchdown checks actual aircraft pitch, not yoke position. The side-view propeller, main gear and fuselage-tail geometry give a wheel-contact range of approximately −14.0° to +6.8°; the tailwheel itself is allowed to touch normally. Outside this range, the nose/propeller or tail can strike before the main wheels reach the ground. Minor strikes damage the airframe in addition to existing hard-touchdown damage; severe impacts or exhausted condition cause a crash. Severity is a simplified estimate using descent speed, airspeed and excess pitch, not a full rigid-body simulation. The large ILS shows `NOSE LOW` / `NOSE HIGH` on the angle row; the forecast circle turns red for a predicted body strike. Both prediction modes use the same contact rules, and the short estimate retains its existing four-second inertia horizon. Takeoff rotation and its existing contact grace are unchanged.
 
 ## Weather
 
 ### Wind
 
 Wind is defined at 0, 250, 500, and 700 m and interpolated between them. It affects ground speed, drift, range, and economical regimes. New weather is generated after a completed landing; a touch-and-go does not change it.
+
+Mean layer speeds remain 8–32 km/h and layer directions remain independent. On final approach, horizontal gusts are added below 100 m above the local terrain, within 5 km of a runway end and within its approach corridor. Their strength fades near the zone boundaries; crossing the runway sideways, flying away, being on the ground or climbing away does not enable them. Smooth targets change every 5–12 simulation seconds, with occasional calm intervals; their maximum magnitude varies from 5 to 12 km/h with the mean wind. Gusts affect ground velocity, not the yoke, nose attitude, indicated airspeed or vertical speed directly. They freeze with the game pause and accelerate with simulation time. Both ILS forecast modes hold the currently known gust without drawing future random targets; only the mean wind changes with future altitude as before. Gust state and its independent RNG are saved.
+
+Independent rollback switches are in `scripts/experimental_features.gd`: set `APPROACH_GUSTS = false` for the old steady layer wind, or `ELEVATED_AIRPORTS = false` for the old sea-level airport generator. Restart the game after changing them; use a new game, Landing Practice or the next world to test newly generated terrain. Existing charts are not regenerated or moved to new airport sites when loaded.
 
 ### Thunderstorms and weather report
 

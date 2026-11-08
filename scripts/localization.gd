@@ -12,6 +12,15 @@ static var _dynamic_rules: Array[Dictionary] = []
 static var _rules_ready := false
 
 const EN := {
+	"%s: %.0f м • %s": "%s: %.0f m • %s",
+	"%s  %03d°/%03d° • %.0f м": "%s  %03d°/%03d° • %.0f m",
+	"НОС НИЗКО": "NOSE LOW",
+	"НОС ВЫСОКО": "NOSE HIGH",
+	"Крушение при ударе носом о ВПП": "Crash: nose strike on runway",
+	"Крушение при ударе хвостом о ВПП": "Crash: tail strike on runway",
+	"Разрушение планера при ударе о ВПП: прочность исчерпана": "Airframe destroyed by runway strike: condition exhausted",
+	"Удар носом • планер −%.1f%%": "Nose strike • airframe −%.1f%%",
+	"Удар хвостом • планер −%.1f%%": "Tail strike • airframe −%.1f%%",
 	"ГС": "GS",
 	"ВЫШЕ %.0f м": "ABOVE %.0f m",
 	"НИЖЕ %.0f м": "BELOW %.0f m",

@@ -463,6 +463,15 @@ func _input(event: InputEvent) -> void:
 				_collapse_crash_overlay()
 			get_viewport().set_input_as_handled()
 		return
+	# Switching between cabin and instruments is navigation, not a paused action.
+	if event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_X or event.physical_keycode == KEY_X) and view_mode in [ViewMode.COCKPIT, ViewMode.CABIN]:
+		_reset_time_scale_for_action()
+		if view_mode == ViewMode.COCKPIT:
+			_enter_cabin(true)
+		else:
+			_set_view_mode(ViewMode.COCKPIT)
+		get_viewport().set_input_as_handled()
+		return
 	if _side_scene_actions_paused():
 		if event is InputEventKey:
 			get_viewport().set_input_as_handled()
@@ -476,13 +485,6 @@ func _input(event: InputEvent) -> void:
 		return
 	if event is InputEventKey and event.pressed and not event.echo and _key_causes_time_reset(event):
 		_reset_time_scale_for_action()
-	if event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_X or event.physical_keycode == KEY_X) and view_mode in [ViewMode.COCKPIT, ViewMode.CABIN]:
-		if view_mode == ViewMode.COCKPIT:
-			_enter_cabin(true)
-		else:
-			_set_view_mode(ViewMode.COCKPIT)
-		get_viewport().set_input_as_handled()
-		return
 	if view_mode != ViewMode.COCKPIT:
 		if event is InputEventKey and event.pressed and not event.echo:
 			if side_scenes.handle_history_key(event.keycode):
@@ -1532,7 +1534,7 @@ func _gui_input(event: InputEvent) -> void:
 
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	if _side_scene_actions_paused():
-		dragging_fuel_slider = false
+		_handle_side_scene_mouse_button(event)
 		return
 	if flight.state == FlightModelScript.State.CRASHED and view_mode not in [ViewMode.FLIGHT_HISTORY, ViewMode.ROUTE_HISTORY] and (view_mode != ViewMode.COCKPIT or not (map_rect().has_point(event.position) or get_trajectory_button_rect().has_point(event.position))):
 		return
@@ -1561,6 +1563,8 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 func _handle_side_scene_mouse_button(event: InputEventMouseButton) -> bool:
 	if _side_scene_actions_paused():
 		dragging_fuel_slider = false
+		if view_mode == ViewMode.CABIN and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			_click_side_scene(event.position)
 		return true
 	if event.button_index == MOUSE_BUTTON_LEFT and _fuel_slider_is_active():
 		var slider_origin: Vector2 = _active_fuel_slider_origin()

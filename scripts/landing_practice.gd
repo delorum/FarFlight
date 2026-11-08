@@ -23,7 +23,7 @@ static func configure(world, flight) -> void:
 	flight.position_km = near_threshold - approach_forward * 6.0
 	flight.position_integration_error_km = Vector2.ZERO
 	flight.heading_deg = approach_heading
-	flight.altitude_m = 234.0
+	flight.altitude_m = world.airport_elevation_m(airport) + FlightWorld.AirportGeometry.PRACTICE_ENTRY_HEIGHT_M
 	flight.speed_kmh = 150.0
 	flight.vertical_speed_mps = 0.0
 	flight.pitch_deg = 0.0

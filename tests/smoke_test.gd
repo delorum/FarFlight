@@ -15,18 +15,18 @@ func _init() -> void:
 			assert(distance >= 45.0 and distance <= 58.0, "Airport distance %.2f for seed %d" % [distance, seed_value])
 		for airport in world.airports:
 			var direction: Vector2 = world.heading_vector(airport.heading)
-			assert(world.height_at(airport.position) < 1.0)
-			assert(world.height_at(airport.position + direction * 4.0) < 50.0)
-			assert(world.height_at(airport.position - direction * 4.0) < 50.0)
+			assert(is_equal_approx(world.height_at(airport.position), world.airport_elevation_m(airport)))
+			assert(world.height_at(airport.position + direction * 4.0) < world.glide_altitude_m(airport, 4.0))
+			assert(world.height_at(airport.position - direction * 4.0) < world.glide_altitude_m(airport, 4.0))
 			var approach_point: Vector2 = airport.position - direction * 5.0
 			var approach_right := Vector2(direction.y, -direction.x)
-			assert(world.height_at(approach_point) < 1.0)
-			assert(world.height_at(approach_point + approach_right * 0.8) < 250.0)
-			assert(world.height_at(approach_point - approach_right * 0.8) < 250.0)
+			assert(world.height_at(approach_point) < world.glide_altitude_m(airport, 5.0))
+			assert(world.height_at(approach_point + approach_right * 0.25) < world.glide_altitude_m(airport, 5.0))
+			assert(world.height_at(approach_point - approach_right * 0.25) < world.glide_altitude_m(airport, 5.0))
 		for beacon_index in range(world.airports.size(), world.beacons.size()):
 			var route_beacon: Dictionary = world.beacons[beacon_index]
 			assert(world.raw_height_at(route_beacon.position) < FlightWorldScript.MIN_RADIO_BLOCKING_TERRAIN_M, "Route NDB must be generated on low terrain")
-	var test_world = FlightWorldScript.new(424242)
+	var test_world = FlightWorldScript.new(424242, false)
 	var out_of_range := test_world.beacon_signal(test_world.beacons[0], test_world.beacons[0].position + Vector2(16.0, 0.0), FlightModelScript.ABSOLUTE_CEILING_M)
 	assert(not out_of_range.available)
 	assert(out_of_range.reason == "НЕТ СИГНАЛА")
@@ -282,11 +282,12 @@ func _test_approach(airport_index: int, reverse_direction: bool) -> bool:
 	# A centre-mounted beacon is 5 km away at 4 km before the threshold.
 	# The target glide path aims 60 m beyond the threshold. The aircraft starts
 	# slightly above the new three-degree path, still within its capture tolerance.
-	var landing_world = FlightWorldScript.new(424242)
+	var landing_world = FlightWorldScript.new(424242, false)
 	landing_world.storms.clear()
 	for layer in landing_world.wind_layers:
 		layer.speed_kmh = 0.0
 	var approach = FlightModelScript.new(landing_world)
+	approach.approach_gusts_enabled = false # Fixed-throttle baseline; new gusts have dedicated tests.
 	approach.engine_running = true
 	var approach_airport: Dictionary = landing_world.airports[airport_index]
 	var approach_heading: float = fposmod(approach_airport.heading + (180.0 if reverse_direction else 0.0),360.0)
@@ -364,13 +365,13 @@ func _test_wind_guidance(airport_index: int, reverse_direction: bool) -> bool:
 	flight.engine_running = true
 	flight.state = FlightModelScript.State.FLYING
 	flight.position_km = Vector2(airport.position)-forward*(4.0 + FlightWorldScript.RUNWAY_LENGTH_KM * 0.5)
-	flight.altitude_m = 234.098
+	flight.altitude_m = wind_world.airport_elevation_m(airport) + 234.098
 	flight.speed_kmh = 100.0
 	flight.vertical_speed_mps = -1.5
 	flight.heading_deg = runway_heading
 	var calm_prediction: Dictionary = flight.touchdown_prediction(airport_index)
 	var calm_guidance: Dictionary = flight.landing_guidance(airport_index)
-	var seconds_to_touchdown: float = flight.altitude_m/-flight.vertical_speed_mps
+	var seconds_to_touchdown: float = (flight.altitude_m - wind_world.airport_elevation_m(airport))/-flight.vertical_speed_mps
 	for along_wind in [-20.0,20.0]:
 		_set_test_wind(wind_world,forward*along_wind)
 		flight.current_wind_kmh = wind_world.wind_at(flight.altitude_m)

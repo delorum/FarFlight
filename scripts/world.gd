@@ -2,6 +2,8 @@ class_name FlightWorld
 extends RefCounted
 const StormGeometry = preload("res://scripts/storm_geometry.gd")
 const Glideslope = preload("res://scripts/glideslope.gd")
+const Features = preload("res://scripts/experimental_features.gd")
+const AirportGeometry = preload("res://scripts/airport_geometry.gd")
 
 const SIZE_KM := 200.0
 const REGION_SIZE_KM := 100.0
@@ -42,6 +44,7 @@ const EDGE_INSET_KM := 2.0
 const EDGE_SIDES := ["right", "bottom", "left", "top"]
 
 var seed_value: int
+var elevated_airports := Features.ELEVATED_AIRPORTS
 var noise := FastNoiseLite.new()
 var airports: Array[Dictionary] = []
 var beacons: Array[Dictionary] = []
@@ -53,10 +56,12 @@ var level_index := 0
 var exit_portal: Dictionary = {}
 var _route_grid: AStarGrid2D
 var _route_distance_cache: Dictionary = {}
+var _terrain_patches: Array[AirportGeometry.TerrainPatch] = []
 
 # Explicit model snapshot. Runtime noise/cache objects never enter the save.
 func snapshot() -> Dictionary:
 	return {"seed": seed_value, "airports": airports, "beacons": beacons,
+		"elevated_airports": elevated_airports,
 		"runway_size_km": RUNWAY_SIZE_KM,
 		"wind_layers": wind_layers, "storms": storms, "time": weather_time_seconds,
 		"weather_generation": weather_generation,
@@ -66,6 +71,7 @@ func restore_snapshot(data: Dictionary) -> void:
 	# SaveGame validates the schema and constructs this world using data.seed.
 	# Detach collections so simulation cannot mutate the source snapshot.
 	airports.assign(data.airports.duplicate(true))
+	elevated_airports = Features.ELEVATED_AIRPORTS and bool(data.get("elevated_airports", false))
 	beacons.assign(data.beacons.duplicate(true))
 	wind_layers.assign(data.wind_layers.duplicate(true))
 	storms.assign(data.storms.duplicate(true))
@@ -78,7 +84,8 @@ func restore_snapshot(data: Dictionary) -> void:
 	exit_portal = data.get("exit_portal", {}).duplicate(true)
 	_invalidate_route_cache()
 
-func _init(requested_seed: int = 0) -> void:
+func _init(requested_seed: int = 0, use_elevated_airports: bool = Features.ELEVATED_AIRPORTS) -> void:
+	elevated_airports = use_elevated_airports
 	var random_world := requested_seed == 0
 	seed_value = requested_seed if not random_world else randi_range(10000, 99999999)
 	for attempt in 32:
@@ -178,17 +185,17 @@ func storm_intensity_at(position_km: Vector2) -> float:
 	return result
 
 func weather_report(airport: Dictionary) -> String:
-	var layer: Dictionary = wind_layers[0]
+	var wind := wind_at(airport_elevation_m(airport))
 	var nearest_storm := INF
 	for storm in storms:
 		nearest_storm = minf(nearest_storm, Vector2(airport.position).distance_to(storm_position(storm)))
 	var storm_text := "гроз нет" if nearest_storm > 30.0 else "гроза %.0f км" % nearest_storm
-	return "%s: ветер %03d° %.0f км/ч • %s" % [airport.name, roundi(float(layer.from_deg)) % 360, float(layer.speed_kmh), storm_text]
+	return "%s: ветер %03d° %.0f км/ч • %s" % [airport.name, roundi(vector_heading(-wind)) % 360, wind.length(), storm_text]
 
 func wind_forecast_reports() -> Array[String]:
 	var reports: Array[String] = []
 	for layer in wind_layers:
-		var altitude_label := "У поверхности" if float(layer.altitude_m) <= 0.0 else "%d м" % roundi(float(layer.altitude_m))
+		var altitude_label := "У поверхности" if float(layer.altitude_m) <= 0.0 and not elevated_airports else "%d м" % roundi(float(layer.altitude_m))
 		reports.append("%s: %03d° %.0f км/ч" % [altitude_label, roundi(float(layer.from_deg)) % 360, float(layer.speed_kmh)])
 	return reports
 
@@ -201,20 +208,53 @@ func raw_height_at(point_km: Vector2) -> float:
 
 func height_at(point_km: Vector2) -> float:
 	var height: float = raw_height_at(point_km)
-	for airport in airports:
-		var along_cross := runway_coordinates(point_km, airport)
-		var along: float = along_cross.x
-		var cross: float = abs(along_cross.y)
-		# Clear the strip plus a broad, gently widening approach at both ends.
-		var end_distance: float = max(0.0, abs(along) - RUNWAY_LENGTH_KM * 0.5)
-		# Keep the published approach point and its surroundings visibly clear
-		# on the topographic map, not merely the exact runway centerline.
-		var corridor_width: float = 0.70 + end_distance * 0.18
-		if abs(along) < 8.5 and cross < corridor_width:
-			var cross_blend := smoothstep(corridor_width, corridor_width * 0.55, cross)
-			var end_blend := smoothstep(8.5, 6.5, abs(along))
-			height = lerp(height, 0.0, cross_blend * end_blend)
+	if _terrain_patches.size() != airports.size():
+		_rebuild_airport_terrain_cache()
+	for patch in _terrain_patches:
+		var offset := point_km - patch.position
+		if absf(offset.x) > patch.radius or absf(offset.y) > patch.radius:
+			continue
+		var along_cross := Vector2(offset.dot(patch.forward), offset.dot(patch.lateral))
+		if not patch.engineered:
+			if absf(along_cross.y) < 0.75 and absf(along_cross.x) < RUNWAY_LENGTH_KM * 0.5 + 1.2:
+				height = AirportGeometry.terrain_height(height, along_cross, patch.airport, RUNWAY_LENGTH_KM * 0.5)
+			continue
+		var outer_length := 8.5 if not elevated_airports else RUNWAY_LENGTH_KM * 0.5 + AirportGeometry.APPROACH_LENGTH_KM + 2.1
+		if absf(along_cross.x) < outer_length:
+			height = AirportGeometry.engineered_height(height, along_cross, airport_elevation_m(patch.airport), RUNWAY_LENGTH_KM * 0.5, patch.legacy)
 	return height
+
+func _rebuild_airport_terrain_cache() -> void:
+	_terrain_patches.clear()
+	for airport in airports:
+		_terrain_patches.append(AirportGeometry.TerrainPatch.new(airport, RUNWAY_LENGTH_KM * 0.5, elevated_airports))
+
+func airport_elevation_m(airport: Dictionary) -> float:
+	return AirportGeometry.elevation(airport) if elevated_airports else 0.0
+
+func glide_altitude_m(airport: Dictionary, distance_km: float) -> float:
+	return airport_elevation_m(airport) + Glideslope.height_at_distance_m(distance_km)
+
+func approach_is_clear(airport: Dictionary, heading: float) -> bool:
+	var forward := heading_vector(heading)
+	var lateral := Vector2(forward.y, -forward.x)
+	for sign_value in [-1.0, 1.0]:
+		var threshold: Vector2 = Vector2(airport.position) - forward * sign_value * RUNWAY_LENGTH_KM * 0.5
+		for sample in range(1, roundi(AirportGeometry.APPROACH_LENGTH_KM / AirportGeometry.APPROACH_STEP_KM) + 1):
+			var distance := sample * AirportGeometry.APPROACH_STEP_KM
+			# Keep the lower, level 234 m practice entry clear too, not just
+			# the ideal 3-degree path (which is higher at six kilometres).
+			var limit := minf(glide_altitude_m(airport, distance), airport_elevation_m(airport) + AirportGeometry.PRACTICE_ENTRY_HEIGHT_M) - minf(15.0, distance * 15.0)
+			for offset in [-1.0, 0.0, 1.0]:
+				var position: Vector2 = threshold - forward * sign_value * distance + lateral * offset * (0.1 + distance * 0.05)
+				if position.x < 0 or position.y < 0 or position.x > SIZE_KM or position.y > SIZE_KM:
+					return false
+				var coords := Vector2((position - Vector2(airport.position)).dot(forward), (position - Vector2(airport.position)).dot(lateral))
+				var terrain := raw_height_at(position)
+				terrain = AirportGeometry.engineered_height(terrain, coords, airport_elevation_m(airport), RUNWAY_LENGTH_KM * 0.5, not elevated_airports) if not elevated_airports or airport.get("engineered_approach", false) else AirportGeometry.terrain_height(terrain, coords, airport, RUNWAY_LENGTH_KM * 0.5)
+				if terrain > limit:
+					return false
+	return true
 
 func planned_route_distance_km(origin_index: int, destination_index: int) -> float:
 	if origin_index == destination_index:
@@ -374,6 +414,7 @@ func _ensure_route_grid() -> void:
 
 func _invalidate_route_cache() -> void:
 	_route_grid = null
+	_rebuild_airport_terrain_cache()
 	_route_distance_cache.clear()
 
 func runway_coordinates(point_km: Vector2, airport: Dictionary) -> Vector2:
@@ -418,18 +459,60 @@ func _generate_airports() -> void:
 			for pair_index in AIRPORTS_PER_REGION:
 				var airport_index := pair_start + pair_index
 				var base_heading: float = route_heading + (180.0 if pair_index == 1 else 0.0)
-				airports.append({
+				var airport := {
 					"name": AIRPORT_NAMES[airport_index],
 					"position": positions[airport_index],
 					"heading": fmod(base_heading + rng.randf_range(-28.0, 28.0) + 360.0, 360.0),
 					"region": Vector2i(region_x, region_y),
-				})
+					"elevation_m": clampf(snappedf(raw_height_at(positions[airport_index]), 10.0), 0.0, AirportGeometry.MAX_ELEVATION_M) if elevated_airports else 0.0,
+				}
+				if elevated_airports:
+					var heading := _clear_airport_heading(airport)
+					if is_nan(heading):
+						# Prefer another natural site over cutting a valley through a
+						# mountain. Preserve region, pair length and all separations.
+						for site_attempt in 128:
+							var candidate := Vector2(region_x, region_y) * REGION_SIZE_KM + Vector2(rng.randf_range(12.0, 88.0), rng.randf_range(12.0, 88.0))
+							var candidate_height := raw_height_at(candidate)
+							if candidate_height > (10.0 if airport_index == 0 else AirportGeometry.MAX_ELEVATION_M):
+								continue
+							var separated := true
+							for other_index in positions.size():
+								if other_index != airport_index and candidate.distance_to(positions[other_index]) < MIN_AIRPORT_SEPARATION_KM:
+									separated = false
+									break
+							var partner_index := pair_start + (1 - pair_index)
+							if not separated or candidate.distance_to(positions[partner_index]) > MAX_REGIONAL_AIRPORT_DISTANCE_KM:
+								continue
+							var alternative: Dictionary = airport.duplicate()
+							alternative.position = candidate
+							alternative.elevation_m = clampf(snappedf(candidate_height, 10.0), 0.0, AirportGeometry.MAX_ELEVATION_M)
+							heading = _clear_airport_heading(alternative)
+							if not is_nan(heading):
+								airport = alternative
+								positions[airport_index] = candidate
+								break
+					# Bounded fallback for unlucky seeds: retain the old broad
+					# engineered approach rather than ship an inaccessible runway.
+					airport.engineered_approach = is_nan(heading)
+					if not is_nan(heading):
+						airport.heading = heading
+				airports.append(airport)
+
+func _clear_airport_heading(airport: Dictionary) -> float:
+	for rotation in 24:
+		var heading := fposmod(float(airport.heading) + rotation * 15.0, 360.0)
+		if approach_is_clear(airport, heading):
+			return heading
+	return NAN
 
 func _find_airport_pair(rng: RandomNumberGenerator, region_origin: Vector2, occupied: Array[Vector2]) -> Array[Vector2]:
 	# Search pairs directly: every 100 km region gets two low sites separated by
 	# a useful route, while no airport may approach any earlier one too closely.
 	var best_pair: Array[Vector2] = []
 	var best_score := INF
+	var target_first := rng.randf_range(0.0, AirportGeometry.MAX_ELEVATION_M) if elevated_airports and not occupied.is_empty() else 0.0
+	var target_second := rng.randf_range(0.0, AirportGeometry.MAX_ELEVATION_M) if elevated_airports else 0.0
 	for attempt in 2600:
 		var first := region_origin + Vector2(rng.randf_range(12.0, 88.0), rng.randf_range(12.0, 88.0))
 		var second := first + heading_vector(rng.randf_range(0.0, 360.0)) * rng.randf_range(MIN_AIRPORT_SEPARATION_KM, MAX_REGIONAL_AIRPORT_DISTANCE_KM)
@@ -446,6 +529,10 @@ func _find_airport_pair(rng: RandomNumberGenerator, region_origin: Vector2, occu
 		var first_height := raw_height_at(first)
 		var second_height := raw_height_at(second)
 		var score := maxf(first_height, second_height) + (first_height + second_height) * 0.20
+		if elevated_airports:
+			if maxf(first_height, second_height) > AirportGeometry.MAX_ELEVATION_M:
+				continue
+			score = absf(first_height - target_first) + absf(second_height - target_second)
 		if score < best_score:
 			best_score = score
 			best_pair = [first, second]

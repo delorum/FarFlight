@@ -58,9 +58,13 @@ func active(id: String) -> bool:
 		return false
 	return item.near.call() or item.rect.has_point(item.transform.affine_inverse() * host.get_local_mouse_position())
 
-func click(position: Vector2) -> bool:
+func click(position: Vector2, only_id: String = "") -> bool:
 	for item in entries():
 		if item.rect.has_point(item.transform.affine_inverse() * position):
+			# Preserve normal hotspot priority: clicking fuel or furniture must
+			# not fall through to the wider pilot-seat hitbox on pause.
+			if not only_id.is_empty() and item.id != only_id:
+				return false
 			item.action.call()
 			return true
 	return false

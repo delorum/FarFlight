@@ -33,7 +33,7 @@ func _run() -> void:
 	var guidance: Dictionary = training.flight.landing_guidance(training.flight.airport_index, true)
 	check(SessionMode.is_landing_practice(training.session_mode) and training.flight.state == training.FlightModelScript.State.FLYING, "Practice must start directly in flight")
 	check(is_equal_approx(float(guidance.actual_distance_to_threshold_km), 6.0), "Practice must begin 6 km before the threshold")
-	check(is_equal_approx(training.flight.altitude_m, 234.0) and is_equal_approx(training.flight.throttle, 0.70) and is_equal_approx(training.flight.fuel_l, 40.0), "Practice must set altitude, throttle and fuel")
+	check(is_equal_approx(training.flight.altitude_m - float(guidance.runway_elevation_m), 234.0) and is_equal_approx(training.flight.throttle, 0.70) and is_equal_approx(training.flight.fuel_l, 40.0), "Practice must set height above runway, throttle and fuel")
 	check(training.flight.electrical_power and training.flight.engine_running and training.large_ils, "Practice must open powered large ILS")
 	check(training.world.storms.is_empty() and not training.world.wind_layers.is_empty(), "Practice must clear storms and retain the wind-layer structure")
 	check(training.world.wind_layers.any(func(layer: Dictionary): return float(layer.speed_kmh) > 0.0), "Practice must retain generated wind")

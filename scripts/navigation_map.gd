@@ -525,7 +525,7 @@ func map_footer_text_at(screen_position: Vector2) -> String:
 		var airport: Dictionary = host.world.airports[airport_index]
 		var services: Array[String] = host.economy.services_at(airport_index)
 		services[0] = "почта (%d)" % host.economy.remaining_parcels_at(airport_index)
-		return "%s: %s" % [airport.name, ", ".join(services)]
+		return "%s: %.0f м • %s" % [airport.name, host.world.airport_elevation_m(airport), ", ".join(services)] if host.world.elevated_airports else "%s: %s" % [airport.name, ", ".join(services)]
 	if not host.world.exit_portal.is_empty() and world_to_screen(Vector2(host.world.exit_portal.position)).distance_to(screen_position) <= 13.0:
 		return Localization.text("Переход на новую карту • недоставленная почта останется здесь")
 	var line_text := measurement_line_description_at(screen_position)
@@ -913,7 +913,10 @@ func _draw_airport(airport: Dictionary) -> void:
 	var direct_course = int(round(airport.heading)) % 360
 	var reverse_course = (direct_course + 180) % 360
 	var upper_runway_end = a if a.y <= b.y else b
-	_draw_clamped_map_text(upper_runway_end + Vector2(10, -9), "%s  %03d°/%03d°" % [airport.name, direct_course, reverse_course], 12, Color("20241f"))
+	var airport_label := "%s  %03d°/%03d°" % [airport.name, direct_course, reverse_course]
+	if host.world.elevated_airports:
+		airport_label = "%s  %03d°/%03d° • %.0f м" % [airport.name, direct_course, reverse_course, host.world.airport_elevation_m(airport)]
+	_draw_clamped_map_text(upper_runway_end + Vector2(10, -9), airport_label, 12, Color("20241f"))
 
 func _draw_approach_point(airport: Dictionary) -> void:
 	# Keep the overview map readable: detailed glide-path markings appear only
@@ -993,7 +996,9 @@ func _build_approach_markers() -> void:
 				var distance: float = float(distance_km)
 				if not _approach_path_is_clear(airport, distance, approach_sign):
 					continue
-				var altitude_m = Glideslope.height_at_distance_m(distance)
+				var altitude_m: float = host.world.glide_altitude_m(airport, distance)
+				if altitude_m > FlightModelScript.PRACTICAL_CEILING_M:
+					continue
 				markers.append({"distance_km": distance, "altitude_m": altitude_m})
 			markers_by_direction[str(int(approach_sign))] = markers
 		airport.approach_markers = markers_by_direction
@@ -1005,7 +1010,7 @@ func _approach_path_is_clear(airport: Dictionary, start_distance_km: float, appr
 	for sample_index in sample_count + 1:
 		var distance_km = start_distance_km * sample_index / float(sample_count)
 		var position = threshold - forward * distance_km
-		var glide_altitude_m = Glideslope.height_at_distance_m(distance_km)
+		var glide_altitude_m: float = host.world.glide_altitude_m(airport, distance_km)
 		if host.world.height_at(position) >= glide_altitude_m:
 			return false
 	return true

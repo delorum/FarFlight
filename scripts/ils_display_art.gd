@@ -212,7 +212,8 @@ static func projected_runway_geometry(view: Rect2, guidance: Dictionary) -> Dict
 	var fallback_distance_km := float(guidance.get("actual_distance_to_threshold_km", 1.0))
 	var signed_distance_km := float(guidance.get("signed_distance_to_threshold_km", fallback_distance_km))
 	var fallback_altitude_m := maxf(0.0, fallback_distance_km) * Glideslope.HEIGHT_PER_KM
-	var altitude_km := maxf(MIN_EYE_HEIGHT_M, float(guidance.get("aircraft_altitude_m", guidance.get("desired_altitude_m", fallback_altitude_m)))) / 1000.0
+	var runway_elevation_m := float(guidance.get("runway_elevation_m", 0.0))
+	var altitude_km := maxf(MIN_EYE_HEIGHT_M, float(guidance.get("aircraft_altitude_m", guidance.get("desired_altitude_m", runway_elevation_m + fallback_altitude_m))) - runway_elevation_m) / 1000.0
 	# A fixed focal length and horizon represent a camera whose view angle never
 	# changes. Ground points move toward the observer as their signed distance
 	# approaches zero instead of the whole runway being re-centred every frame.
@@ -467,7 +468,14 @@ static func _draw_information(canvas: CanvasItem, left: Rect2, right: Rect2, sta
 			{"text": motion.motion_text, "color": motion.motion_color},
 		], font_size, right.size.x)
 		right_y += line_height
-	_draw_info_line(canvas, right.position.x, right_y, right.size.x, state.descent_angle_text, state.descent_angle_color, font_size)
+	var attitude_warning := String(state.get("attitude_warning", ""))
+	if attitude_warning.is_empty():
+		_draw_info_line(canvas, right.position.x, right_y, right.size.x, state.descent_angle_text, state.descent_angle_color, font_size)
+	else:
+		draw_info_segments(canvas, right.position.x, right_y, [
+			{"text": state.descent_angle_text, "color": state.descent_angle_color},
+			{"text": attitude_warning, "color": RED},
+		], font_size, right.size.x)
 	right_y += line_height
 	if show_capture:
 		var capture: Dictionary = state.glide_capture

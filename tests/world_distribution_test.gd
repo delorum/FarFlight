@@ -39,7 +39,7 @@ func _initialize() -> void:
 						airports_here += 1
 						var raw_site_height: float = world.raw_height_at(airport.position)
 						highest_airport_site = maxf(highest_airport_site, raw_site_height)
-						check(raw_site_height < 250.0, "Airport sites must start below the first contour before clearing")
+						check(raw_site_height <= World.AirportGeometry.MAX_ELEVATION_M, "Natural airport sites must remain within the supported elevation range")
 				for beacon in world.beacons:
 					if int(beacon.runway) < 0 and region_of(beacon.position) == region:
 						ndbs_here += 1

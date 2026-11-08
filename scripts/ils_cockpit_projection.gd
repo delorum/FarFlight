@@ -35,7 +35,7 @@ static func camera_point(guidance: Dictionary, along_km: float, cross_km: float)
 	# The simulation's runway cross axis points left; camera X points right.
 	var x := aircraft_cross - cross_km
 	var z := float(guidance.get("signed_distance_to_threshold_km", guidance.get("actual_distance_to_threshold_km", 1.0))) + along_km
-	var y := -maxf(2.0, float(guidance.get("aircraft_altitude_m", 0.0))) / 1000.0
+	var y := -maxf(2.0, float(guidance.get("aircraft_altitude_m", 0.0)) - float(guidance.get("runway_elevation_m", 0.0))) / 1000.0
 	var yaw := deg_to_rad(float(guidance.get("heading_error_deg", 0.0)))
 	var pitch := deg_to_rad(float(guidance.get("aircraft_pitch_deg", 0.0)))
 	var forward := x * sin(yaw) + z * cos(yaw)

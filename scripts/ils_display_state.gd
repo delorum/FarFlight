@@ -48,7 +48,9 @@ static func build(flight, airport_index: int, signal_available: bool, prediction
 	projection["flight_path_angle_deg"] = rad_to_deg(atan2(flight.vertical_speed_mps, ground_speed_mps))
 	projection["desired_flight_path_angle_deg"] = rad_to_deg(atan2(desired_vs, ground_speed_mps))
 	var capture := glideslope_capture(guidance, flight.altitude_m, flight.state == FlightModel.State.FLYING)
+	var attitude_part := FlightModel.LandingContact.part(flight.pitch_deg) if available and show_forecast else ""
 	return {
+		"attitude_warning": "НОС НИЗКО" if attitude_part == "nose" else ("НОС ВЫСОКО" if attitude_part == "tail" else ""),
 		"glide_capture": capture,
 		"powered": powered,
 		"signal_available": available,
@@ -82,7 +84,7 @@ static func glideslope_capture(guidance: Dictionary, altitude_m: float, flying: 
 	var target := float(guidance.get("desired_altitude_m", 0.0))
 	var error := altitude_m - target
 	var on_glide := absf(error) <= GLIDE_CAPTURE_TOLERANCE_M
-	var capture_threshold_distance := Glideslope.distance_at_height_km(altitude_m)
+	var capture_threshold_distance := Glideslope.distance_at_height_km(altitude_m - float(guidance.get("runway_elevation_m", 0.0)))
 	var course_cos := cos(deg_to_rad(float(guidance.get("course_error_deg", 0.0))))
 	var available := flying and distance >= 0.0
 	var intercept_available := available and capture_threshold_distance >= 0.0 and course_cos > 0.0001 and float(guidance.get("along_ground_speed_kmh", 0.0)) >= MIN_APPROACH_GROUND_SPEED_KMH

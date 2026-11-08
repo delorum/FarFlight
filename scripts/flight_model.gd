@@ -3,6 +3,9 @@ extends RefCounted
 
 const FlightWorldScript = preload("res://scripts/world.gd")
 const Glideslope = preload("res://scripts/glideslope.gd")
+const LandingContact = preload("res://scripts/landing_contact.gd")
+const Features = preload("res://scripts/experimental_features.gd")
+const ApproachGust = preload("res://scripts/approach_gust.gd")
 const GLIDE_SLOPE_DEG := Glideslope.ANGLE_DEG
 const GLIDE_TOUCHDOWN_OFFSET_KM := Glideslope.AIM_OFFSET_KM
 const STALL_WARNING_AOA_DEG := 12.0
@@ -21,7 +24,7 @@ const BREAKUP_SPEED_KMH := 280.0
 const MAX_AIRFRAME_STRESS := 100.0
 const MAX_AIRFRAME_CONDITION := 100.0
 const HARD_TOUCHDOWN_SINK_MPS := 2.0
-const FATAL_TOUCHDOWN_SINK_MPS := 5.5
+const FATAL_TOUCHDOWN_SINK_MPS := LandingContact.FATAL_IMPACT_SPEED_MPS
 const MIN_TOUCHDOWN_DAMAGE := 2.0
 const MAX_TOUCHDOWN_DAMAGE := 20.0
 const NORMAL_WEAR_PER_HOUR := MAX_AIRFRAME_CONDITION / 6.0
@@ -46,6 +49,10 @@ const POWER_REQUIRED_MESSAGE := "Запуск двигателя невозмо�
 enum State { PARKED, FLYING, ROLLING, LANDED, CRASHED }
 
 var world
+var last_touchdown: Dictionary = {} # Transient contact evidence for the predictor.
+var approach_gusts_enabled := Features.APPROACH_GUSTS
+var approach_gust_state: Dictionary = {}
+var approach_gust_kmh := Vector2.ZERO
 var position_km := Vector2.ZERO
 # Compensates float32 Vector2 rounding over thousands of tiny frame movements.
 # This becomes important in a 200 km world where uncompensated drift can reach
@@ -97,6 +104,7 @@ var turbulence_rng := RandomNumberGenerator.new()
 
 # Explicit persisted contract: adding a runtime/cache field does not change saves.
 const SAVE_FIELDS := [
+	"approach_gust_state", "approach_gust_kmh",
 	"position_km",
 	"position_integration_error_km",
 	"altitude_m",
@@ -139,16 +147,18 @@ const SAVE_FIELDS := [
 	"prepared_airport_index",
 	"prepared_reverse_direction",
 ]
-const OPTIONAL_SAVE_FIELDS := ["airframe_condition", "departure_authorized",
+const OPTIONAL_SAVE_FIELDS := ["approach_gust_state", "approach_gust_kmh", "airframe_condition", "departure_authorized",
 	"message_is_error", "electrical_power", "prepared_airport_index", "prepared_reverse_direction"]
 
 func snapshot() -> Dictionary:
 	var result := {}
 	for field in SAVE_FIELDS:
-		result[field] = get(field)
+		result[field] = approach_gust_state.duplicate(true) if field == "approach_gust_state" else get(field)
 	return result
 
 func restore_snapshot(data: Dictionary, rng_state: int) -> bool:
+	if data.has("approach_gust_state") and not ApproachGust.valid(data.approach_gust_state):
+		return false
 	# Validate the complete snapshot before assigning anything.
 	for field in SAVE_FIELDS:
 		if not data.has(field):
@@ -161,7 +171,8 @@ func restore_snapshot(data: Dictionary, rng_state: int) -> bool:
 		return false
 	for field in SAVE_FIELDS:
 		if data.has(field):
-			set(field, data[field])
+			set(field, data[field].duplicate(true) if field == "approach_gust_state" else data[field])
+	last_touchdown = {}
 	if not data.has("departure_authorized") and state == State.LANDED:
 		departure_authorized = false
 	if not data.has("electrical_power"):
@@ -190,7 +201,7 @@ func _init(flight_world) -> void:
 	prepare_at_airport(0)
 
 func adapt_stopped_aircraft_to_runway(previous_size_km: Vector2) -> bool:
-	if state not in [State.PARKED, State.LANDED] or absf(speed_kmh) > 0.05 or altitude_m > 0.01:
+	if state not in [State.PARKED, State.LANDED] or absf(speed_kmh) > 0.05 or absf(altitude_m - world.airport_elevation_m(world.airports[airport_index])) > 0.01:
 		return false
 	if previous_size_km.is_equal_approx(FlightWorldScript.RUNWAY_SIZE_KM):
 		return false
@@ -224,6 +235,9 @@ func ground_speed_kmh() -> float:
 	return (world.heading_vector(heading_deg) * speed_kmh + current_wind_kmh).length()
 
 func prepare_at_airport(index: int, reverse_direction: bool = false) -> void:
+	last_touchdown = {}
+	approach_gust_state = ApproachGust.initial(world.seed_value + index * 7919 + world.weather_generation * 100003)
+	approach_gust_kmh = Vector2.ZERO
 	airport_index = index
 	prepared_airport_index = index
 	prepared_reverse_direction = reverse_direction
@@ -232,7 +246,7 @@ func prepare_at_airport(index: int, reverse_direction: bool = false) -> void:
 	position_km = Vector2(airport.position) - world.heading_vector(departure_heading) * (FlightWorldScript.RUNWAY_LENGTH_KM * 0.39)
 	position_integration_error_km = Vector2.ZERO
 	heading_deg = departure_heading
-	altitude_m = 0.0
+	altitude_m = world.airport_elevation_m(airport)
 	speed_kmh = 0.0
 	throttle = 0.0
 	yoke = Vector2.ZERO
@@ -362,7 +376,17 @@ func _update_simulation(delta: float, advance_world_weather: bool, include_storm
 		storm_roll_target_deg = 0.0
 		storm_pitch_target_deg = 0.0
 		storm_wind_target_kmh = Vector2.ZERO
-	current_wind_kmh = world.wind_at(altitude_m) + storm_wind_gust_kmh if state == State.FLYING else Vector2.ZERO
+	var mean_wind: Vector2 = world.wind_at(altitude_m)
+	if approach_gusts_enabled:
+		var gust_weight := ApproachGust.weight(world, position_km, altitude_m, heading_deg, vertical_speed_mps, state == State.FLYING)
+		if advance_world_weather:
+			ApproachGust.advance(approach_gust_state, delta, gust_weight > 0.0, mean_wind.length())
+			approach_gust_kmh = Vector2(approach_gust_state.current) * gust_weight
+		elif gust_weight <= 0.0:
+			approach_gust_kmh = Vector2.ZERO
+	else:
+		approach_gust_kmh = Vector2.ZERO
+	current_wind_kmh = mean_wind + storm_wind_gust_kmh + approach_gust_kmh if state == State.FLYING else Vector2.ZERO
 	if state == State.CRASHED:
 		return
 	if fuel_l <= 0.0:
@@ -509,7 +533,7 @@ func _update_simulation(delta: float, advance_world_weather: bool, include_storm
 				var reason := departure_block_reason()
 				if not reason.is_empty() and message != reason:
 					_show_message(reason, 5.0, "", true)
-			next_altitude = 0.0
+			next_altitude = world.airport_elevation_m(current_airport)
 			vertical_speed_mps = 0.0
 			if abs(coords.y) > FlightWorldScript.RUNWAY_WIDTH_KM * 0.5 or abs(coords.x) > FlightWorldScript.RUNWAY_LENGTH_KM * 0.5:
 				_crash("Выехали за пределы ВПП «%s»: боковое отклонение %.1f м" % [current_airport.name, absf(coords.y) * 1000.0] if abs(coords.y) > FlightWorldScript.RUNWAY_WIDTH_KM * 0.5 else "Выехали за торец ВПП «%s»" % current_airport.name)
@@ -526,7 +550,7 @@ func _update_simulation(delta: float, advance_world_weather: bool, include_storm
 
 	# Altitude represents the aircraft's contact point in this simplified model,
 	# so both touchdown prediction and actual terrain contact use the same level.
-	if state == State.FLYING and takeoff_grace_remaining <= 0.0 and altitude_m <= terrain + GROUND_CONTACT_CLEARANCE_M and (altitude_m > GROUND_CONTACT_CLEARANCE_M or vertical_speed_mps <= 0.0):
+	if state == State.FLYING and takeoff_grace_remaining <= 0.0 and altitude_m <= terrain + GROUND_CONTACT_CLEARANCE_M + LandingContact.MAX_CONTACT_HEIGHT_M and altitude_m <= terrain + ground_contact_clearance_m() and (altitude_m < terrain - GROUND_CONTACT_CLEARANCE_M or vertical_speed_mps <= 0.0):
 		if _try_land():
 			return
 		var landing_failure := _landing_failure_reason()
@@ -550,6 +574,10 @@ func _glide_vertical_speed_mps() -> float:
 	var sink_from_separation := maxf(0.0,angle_of_attack_deg-STALL_AOA_DEG)*0.5
 	return maxf(speed_kmh/3.6,8.0)*sin(deg_to_rad(path_angle))-sink_from_separation
 
+func ground_contact_clearance_m() -> float:
+	# Landing geometry only: retain the existing takeoff rotation/grace model.
+	return GROUND_CONTACT_CLEARANCE_M + (LandingContact.contact_height_m(pitch_deg) if vertical_speed_mps <= 0.0 else 0.0)
+
 func _try_land() -> bool:
 	for i in world.airports.size():
 		var airport: Dictionary = world.airports[i]
@@ -561,21 +589,27 @@ func _try_land() -> bool:
 		# must keep the aircraft inside the runway boundaries.
 		if abs(coords.x) <= FlightWorldScript.RUNWAY_LENGTH_KM * 0.5 and abs(coords.y) <= FlightWorldScript.RUNWAY_WIDTH_KM * 0.5 and vertical_speed_mps <= 0.0 and vertical_speed_mps > -FATAL_TOUCHDOWN_SINK_MPS:
 			var touchdown_vertical_speed := vertical_speed_mps
+			last_touchdown = LandingContact.assess(pitch_deg, touchdown_vertical_speed, speed_kmh)
+			if last_touchdown.fatal:
+				_crash("Крушение при ударе носом о ВПП" if last_touchdown.part == "nose" else "Крушение при ударе хвостом о ВПП")
+				return true
 			state = State.ROLLING
 			airport_index = i
-			altitude_m = 0.0
+			altitude_m = world.airport_elevation_m(airport)
 			vertical_speed_mps = 0.0
 			pitch_deg = 0.0
 			bank_deg = 0.0
 			stalled = false
 			stall_recovery_time = 0.0
 			wheel_brakes_applied = false
-			var damage := touchdown_damage(touchdown_vertical_speed)
+			var damage := touchdown_damage(touchdown_vertical_speed) + float(last_touchdown.damage)
 			airframe_condition = maxf(0.0, airframe_condition - damage)
 			if airframe_condition <= 0.0:
-				_crash("Разрушение планера при жёстком касании: прочность исчерпана")
+				_crash("Разрушение планера при жёстком касании: прочность исчерпана" if String(last_touchdown.part).is_empty() else "Разрушение планера при ударе о ВПП: прочность исчерпана")
 				return true
 			var touchdown_description := "Жёсткое касание • планер −%.1f%%" % damage if damage > 0.0 else "Касание"
+			if not String(last_touchdown.part).is_empty():
+				touchdown_description = ("Удар носом • планер −%.1f%%" if last_touchdown.part == "nose" else "Удар хвостом • планер −%.1f%%") % damage
 			_show_message("%s ВПП «%s» на %.1f км/ч — газ 0%%, удерживайте S для торможения" % [touchdown_description, airport.name, speed_kmh], -1.0)
 			return true
 	return false
@@ -601,7 +635,7 @@ func _update_ground_roll(delta: float) -> void:
 	var steering_authority := clampf(speed_kmh / 25.0, 0.25, 1.0) if not is_stationary_on_ground() else 0.0
 	heading_deg = fposmod(heading_deg + yoke.x * 28.0 * steering_authority * delta, 360.0)
 	_move_position(world.heading_vector(heading_deg) * (speed_kmh / 3600.0) * delta)
-	altitude_m = 0.0
+	altitude_m = world.airport_elevation_m(airport)
 	vertical_speed_mps = 0.0
 	var coords: Vector2 = world.runway_coordinates(position_km, airport)
 	var half_length := FlightWorldScript.RUNWAY_LENGTH_KM * 0.5
@@ -852,9 +886,10 @@ func landing_guidance(index: int, signal_available_override: Variant = null) -> 
 	var actual_distance_to_threshold_km: float = position_km.distance_to(near_threshold)
 	# The ideal glide path intersects the runway 60 m beyond the threshold, not
 	# at its edge. At the threshold it therefore still commands about 3.1 m AGL.
-	var desired_altitude_m := Glideslope.height_at_distance_m(signed_distance_to_threshold_km)
+	var runway_elevation_m: float = world.airport_elevation_m(airport)
+	var desired_altitude_m: float = world.glide_altitude_m(airport, signed_distance_to_threshold_km)
 	var localizer_tolerance_km: float = maxf(FlightWorldScript.RUNWAY_WIDTH_KM * 0.5, distance_to_threshold_km * 0.08)
-	var glide_tolerance_m: float = maxf(15.0, desired_altitude_m * 0.15)
+	var glide_tolerance_m: float = maxf(15.0, (desired_altitude_m - runway_elevation_m) * 0.15)
 	var localizer_error: float = cross / localizer_tolerance_km
 	var glide_error: float = (altitude_m - desired_altitude_m) / glide_tolerance_m
 	# ILS localizer describes position relative to the runway centreline. With a
@@ -867,6 +902,7 @@ func landing_guidance(index: int, signal_available_override: Variant = null) -> 
 	var desired_vertical_speed_mps := Glideslope.vertical_speed_mps(along_ground_speed_kmh)
 	return {
 		"airport": airport,
+		"runway_elevation_m": runway_elevation_m,
 		"approach_heading": approach_heading,
 		"approach_sign": approach_sign,
 		"signal_available": signal_available,
@@ -893,7 +929,7 @@ func touchdown_prediction(index: int) -> Dictionary:
 	if not valid:
 		return {"valid": false, "distance_from_threshold_km": 0.0, "cross_track_km": 0.0}
 	var airport: Dictionary = world.airports[index]
-	var seconds_to_surface: float = altitude_m / -vertical_speed_mps
+	var seconds_to_surface: float = maxf(0.0, altitude_m - world.airport_elevation_m(airport)) / -vertical_speed_mps
 	var ground_velocity: Vector2 = world.heading_vector(heading_deg) * speed_kmh + current_wind_kmh
 	var predicted_position: Vector2 = position_km + ground_velocity / 3600.0 * seconds_to_surface
 	var approach_sign: float = world.runway_approach_sign(airport, heading_deg)

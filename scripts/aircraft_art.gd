@@ -1,5 +1,6 @@
 extends RefCounted
 const Palette = preload("res://scripts/ui_palette.gd")
+const LandingContact = preload("res://scripts/landing_contact.gd")
 ## One airframe, two views. Coordinates and door/cockpit positions are shared
 ## with navigation in main.gd; changing the skin never changes the floor plan.
 const INK := Palette.SCENE_INK
@@ -10,7 +11,7 @@ const FLOOR_Y := 330.0
 const COCKPIT_FLOOR_Y := 258.0
 const COCKPIT_RAMP_TOP_X := 312.0
 const COCKPIT_RAMP_BOTTOM_X := 395.0
-const GROUND_Y := 426.0
+const GROUND_Y := LandingContact.MAIN_WHEEL_CONTACT.y
 const SEAT_X := 275.0
 const DOOR_X := 630.0
 const WALK_MIN := 265.0
@@ -145,7 +146,7 @@ static func propeller_blade_points(phase: float, opposite: bool = false) -> Pack
 	for point in [Vector2(-1,-8), Vector2(-9,-40), Vector2(-6,-93), Vector2(0,-107), Vector2(3,-62), Vector2(4,-9)]:
 		# Side projection of rotation around the engine shaft, not a windmill
 		# spinning in the screen plane. A little depth keeps motion legible.
-		points.append(Vector2(107 + point.x + point.y * sin(angle) * 0.08, 264 + point.y * cos(angle)))
+		points.append(LandingContact.PROPELLER_CENTER + Vector2(point.x + point.y * sin(angle) * 0.08, point.y * cos(angle)))
 	return points
 
 static func _draw_propeller(c: CanvasItem, powered: bool, phase: float) -> void:
@@ -156,7 +157,7 @@ static func _draw_propeller(c: CanvasItem, powered: bool, phase: float) -> void:
 		var disk := PackedVector2Array()
 		for step in 41:
 			var angle := TAU * step / 40.0
-			disk.append(Vector2(107 + sin(angle) * 10, 264 + cos(angle) * 107))
+			disk.append(LandingContact.PROPELLER_CENTER + Vector2(sin(angle) * 10, cos(angle) * LandingContact.PROPELLER_RADIUS))
 		poly(c, disk, Color(INK,0.05), Color(INK,0.16), 0.8)
 		for trail in [0.3,0.6]:
 			for opposite in [false,true]:
@@ -209,8 +210,8 @@ static func draw_aircraft(c: CanvasItem, origin: Vector2, scale_value: float, mi
 	line(c, Vector2(343,327), Vector2(359,391), LIGHT, 4)
 	c.draw_circle(Vector2(361,396), 28, SHADE)
 	c.draw_arc(Vector2(361,396), 28, 0, TAU, 40, LIGHT, 2, true)
-	c.draw_circle(Vector2(327,393), 33, PAPER)
-	c.draw_arc(Vector2(327,393), 33, 0, TAU, 48, INK, 3, true)
+	c.draw_circle(LandingContact.MAIN_WHEEL_CENTER, LandingContact.MAIN_WHEEL_RADIUS, PAPER)
+	c.draw_arc(LandingContact.MAIN_WHEEL_CENTER, LandingContact.MAIN_WHEEL_RADIUS, 0, TAU, 48, INK, 3, true)
 	c.draw_arc(Vector2(327,393), 24, 0, TAU, 40, INK, 1.5, true)
 	c.draw_arc(Vector2(327,393), 10, 0, TAU, 24, INK, 2, true)
 	line(c, Vector2(890,360), Vector2(902,405), INK, 3)
@@ -221,7 +222,7 @@ static func draw_aircraft(c: CanvasItem, origin: Vector2, scale_value: float, mi
 		Vector2(150,214), Vector2(192,203), Vector2(222,166), Vector2(241,152),
 		Vector2(287,150), Vector2(313,178), Vector2(370,189), Vector2(706,230), Vector2(788,272),
 		Vector2(865,296), Vector2(918,316), Vector2(934,336), Vector2(918,350),
-		Vector2(845,364), Vector2(706,355), Vector2(540,345), Vector2(329,345),
+		LandingContact.TAIL_UNDERSIDE, Vector2(706,355), Vector2(540,345), Vector2(329,345),
 		Vector2(212,330), Vector2(153,314), Vector2(137,296), Vector2(132,236)])))
 	# A lightly shaded belly gives volume while keeping the reference's line art.
 	poly(c, PackedVector2Array([Vector2(214,316), Vector2(331,329), Vector2(538,331), Vector2(707,343), Vector2(844,351), Vector2(918,346), Vector2(845,364), Vector2(706,355), Vector2(540,345), Vector2(329,345), Vector2(212,330)]), SHADE, LIGHT, 1)

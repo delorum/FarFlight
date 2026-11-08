@@ -58,6 +58,9 @@ static func transition(previous_world, flight, economy, simulation) -> Dictionar
 	flight.altitude_m = maxf(flight.altitude_m, next_chart.height_at(entry) + World.ROUTE_CLEARANCE_M)
 	flight.world_exit_reached = false
 	flight.current_wind_kmh = next_chart.wind_at(flight.altitude_m)
+	flight.approach_gust_state = flight.ApproachGust.initial(next_chart.seed_value)
+	flight.approach_gust_kmh = Vector2.ZERO
+	flight.last_touchdown = {}
 	flight.storm_intensity = 0.0
 	flight.storm_vertical_flow_mps = 0.0
 	flight.storm_roll_bias_deg = 0.0

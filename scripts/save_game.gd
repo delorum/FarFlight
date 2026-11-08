@@ -13,6 +13,7 @@ const MailStock = preload("res://scripts/mail_stock.gd")
 const SessionMode = preload("res://scripts/session_mode.gd")
 const ClockCountdown = preload("res://scripts/clock_countdown.gd")
 const Economy = preload("res://scripts/economy.gd")
+const ApproachGust = preload("res://scripts/approach_gust.gd")
 const SimulationSession = preload("res://scripts/simulation_session.gd")
 const ViewMode = preload("res://scripts/scene_modes.gd").ViewMode
 static var last_validation_error := ""
@@ -96,6 +97,12 @@ static func valid(data: Variant) -> bool:
 		if not data.get(key) is Dictionary:
 			return false
 	var world: Dictionary = data.world
+	if data.flight.has("approach_gust_state") and not ApproachGust.valid(data.flight.approach_gust_state):
+		return false
+	if data.flight.has("approach_gust_kmh") and (not data.flight.approach_gust_kmh is Vector2 or not data.flight.approach_gust_kmh.is_finite() or data.flight.approach_gust_kmh.length() > ApproachGust.MAX_SPEED_KMH + 0.001):
+		return false
+	if world.has("elevated_airports") and not world.elevated_airports is bool:
+		return false
 	if data.ui.has("countdown_state") and not ClockCountdown.valid_snapshot(data.ui.countdown_state):
 		return false
 	if not world.get("seed") is int or not world.get("time") is float or not data.get("rng_state") is int:
@@ -126,6 +133,11 @@ static func valid(data: Variant) -> bool:
 		return false
 	for airport in world.airports:
 		if not airport.get("position") is Vector2 or not airport.get("heading") is float or not airport.get("name") is String:
+			return false
+		if bool(world.get("elevated_airports", false)):
+			if not airport.get("elevation_m") is float or not is_finite(airport.elevation_m) or airport.elevation_m < 0.0 or airport.elevation_m > 300.0:
+				return false
+		if airport.has("engineered_approach") and not airport.engineered_approach is bool:
 			return false
 	for beacon in world.beacons:
 		if not beacon.get("position") is Vector2 or not beacon.has_all(["frequency", "range_km", "runway", "name"]):

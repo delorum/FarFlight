@@ -27,12 +27,12 @@ func _test_paused_side_actions(scene) -> void:
 	scene._update_scene_walking(1.0)
 	Input.action_release("ui_right")
 	check(scene.scene_player_x == player_x and scene.scene_walk_phase == walk_phase, "Pause must freeze keyboard walking and its animation")
-	for keycode in [KEY_DOWN, KEY_ENTER, KEY_X]:
+	for keycode in [KEY_DOWN, KEY_ENTER]:
 		var key := InputEventKey.new()
 		key.keycode = keycode
 		key.pressed = true
 		scene._input(key)
-	check(scene.view_mode == scene.ViewMode.CABIN and not scene.in_fuel_bay, "Pause must block cabin interaction, ramp descent and cockpit switching")
+	check(scene.view_mode == scene.ViewMode.CABIN and not scene.in_fuel_bay, "Pause must block cabin interaction and ramp descent")
 	scene._click_side_scene(scene._aircraft_point(Vector2(675, scene.AircraftArt.FLOOR_Y)))
 	check(scene.scene_player_x == player_x, "Pause must block click walking")
 	scene.economy.inventory[0] = {"type": "food"}
@@ -101,6 +101,60 @@ func _test_cargo_swap_and_seat(scene) -> void:
 	scene._input(key)
 	check(scene.view_mode == scene.ViewMode.COCKPIT, "Freeing the hands must allow boarding again")
 
+func _test_paused_view_switching(scene) -> void:
+	var key := InputEventKey.new()
+	key.keycode = KEY_X
+	key.pressed = true
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	for paused in [false, true]:
+		scene.simulation_paused = paused
+		for zoom in range(4):
+			scene._set_view_mode(scene.ViewMode.COCKPIT)
+			scene._input(key)
+			check(scene.view_mode == scene.ViewMode.CABIN, "X must open the cabin with or without simulation pause")
+			scene.cabin_terrain_zoom = zoom
+			key.echo = true
+			scene._input(key)
+			check(scene.view_mode == scene.ViewMode.CABIN, "Held X must not repeatedly toggle on pause")
+			key.echo = false
+			scene._input(key)
+			check(scene.view_mode == scene.ViewMode.COCKPIT and scene.simulation_paused == paused and scene.cabin_terrain_zoom == 0, "X must restore the cockpit at every zoom without changing pause")
+		for under_ramp in [false, true]:
+			scene._enter_cabin()
+			scene.in_fuel_bay = under_ramp
+			var seat: Dictionary = scene.cabin_interactions.entry("seat")
+			click.position = seat.transform * Rect2(seat.rect).get_center()
+			scene._handle_mouse_button(click)
+			check(scene.view_mode == scene.ViewMode.COCKPIT and scene.simulation_paused == paused, "Pilot seat must be clickable on pause, including below the stairs")
+	scene.simulation_paused = true
+	scene._enter_cabin()
+	var player_x: float = scene.scene_player_x
+	for id in ["bed", "table", "fuel", "door"]:
+		var item: Dictionary = scene.cabin_interactions.entry(id)
+		if item.is_empty():
+			continue
+		click.position = item.transform * Rect2(item.rect).get_center()
+		scene._handle_mouse_button(click)
+		check(scene.view_mode == scene.ViewMode.CABIN and scene.scene_player_x == player_x and not scene.cabin_sleeping and not scene.cabin_table_seated and not scene.in_fuel_bay, "Only the pilot seat, not other cabin hotspots, must work on pause")
+	var seat: Dictionary = scene.cabin_interactions.entry("seat")
+	click.position = seat.transform * Rect2(seat.rect).get_center()
+	scene.economy.carried_item = {"type": "food"}
+	scene._handle_mouse_button(click)
+	scene._input(key)
+	check(scene.view_mode == scene.ViewMode.CABIN and scene.economy.carried_item.get("type") == "food", "Paused view switching must retain the free-hands requirement")
+	scene.economy.carried_item = {}
+	key.keycode = KEY_NONE
+	key.physical_keycode = KEY_X
+	scene._input(key)
+	check(scene.view_mode == scene.ViewMode.COCKPIT and scene.simulation_paused, "Physical X must return to the cockpit without unpausing")
+	var elapsed: float = scene.economy.elapsed_seconds
+	var position: Vector2 = scene.flight.position_km
+	scene._process(1.0)
+	check(scene.economy.elapsed_seconds == elapsed and scene.flight.position_km == position, "Switching views must leave the simulation frozen")
+	scene.simulation_paused = false
+
 func _test_parcel_labels(scene) -> void:
 	scene._enter_cabin()
 	var previous: Dictionary = scene.economy.inventory[0]
@@ -125,6 +179,7 @@ func _run() -> void:
 	scene.set_process(false)
 	_test_paused_side_actions(scene)
 	_test_cargo_swap_and_seat(scene)
+	_test_paused_view_switching(scene)
 	_test_parcel_labels(scene)
 	for panel_index in 4:
 		var window_position: Vector2 = scene.AircraftArt.cabin_panel_window_position(panel_index)

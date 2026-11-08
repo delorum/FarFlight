@@ -407,8 +407,8 @@ func _run() -> void:
 	assert(widget.visible and widget.expanded)
 	scene.world.storms.clear()
 	scene.flight.state = Flight.State.FLYING
-	scene.flight.position_km = Vector2(100, 100)
-	scene.flight.altitude_m = 5000
+	scene.flight.position_km = scene.world.airports[0].position
+	scene.flight.altitude_m = scene.world.airport_elevation_m(scene.world.airports[0]) + 200.0
 	scene.flight.heading_deg = 0
 	scene.flight.speed_kmh = 180
 	scene.flight.engine_running = true
