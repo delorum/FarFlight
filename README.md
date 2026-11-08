@@ -117,6 +117,8 @@ Below 100 m above ground, standalone radio beacons appear in both cabin side vie
 
 When crossing the runway at an angle, the side view shows the short intersected section, with one transverse light stripe at its centre instead of dashed markings. Buildings and the tower form a compact, overlapping schematic cluster beside the strip, outside its bounds; farther buildings are drawn behind nearer ones. Longitudinal views retain normal building spacing and dashed markings.
 
+On the ground, the close cabin cutaway shows a continuous runway across the scene. In flight, the runway, its clearance and weather share the aircraft's scale; distant views use the common terrain scale. Longitudinal markings stay fixed on the runway and scale with it, while the transverse stripe remains on the runway axis when panning or clipping at the window edges.
+
 ### Display theme
 
 Choose Settings → Display theme in the main menu or pause menu to switch between Light and Dark. Dark mode uses the weather-radar background with beige map lines and text, and also applies to the flight calculator and side-view scenes. The main and pause menus use matching night-time artwork and light text in dark mode; light mode retains the original daytime artwork. Weather and warning colours remain distinct. The choice is saved as an interface preference, separately from campaign saves.

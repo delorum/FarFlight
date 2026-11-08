@@ -13,6 +13,7 @@ const CABIN_TABLE_SEAT_X = UILayout.CABIN_TABLE_SEAT_X
 const FlightWorldScript = preload("res://scripts/world.gd")
 const UIButton = preload("res://scripts/ui_button.gd")
 const SERVICE_BUILDING_HEIGHT := 270.0
+const SIDE_AIRCRAFT_LENGTH_M := 12.0
 var host: Control
 var view_mode := ViewMode.COCKPIT
 var scene_player_x := 180.0
@@ -909,7 +910,7 @@ func _draw_cabin_terrain() -> void:
 	var rect = Rect2(36, 115, host.size.x - 72, host.size.y - 200)
 	# Equal horizontal/vertical scale preserves terrain slopes. The schematic
 	# airframe is represented as a 12 m aircraft instead of a screen-sized cabin.
-	var pixels_per_m = minf(rect.size.x / _cabin_terrain_span_m(), rect.size.y / 190.0)
+	var pixels_per_m = _cabin_world_scale()
 	var anchor = Vector2(rect.get_center().x, rect.position.y + rect.size.y * 0.28)
 	var previous = Vector2.ZERO
 	_draw_cabin_weather(false)
@@ -929,8 +930,10 @@ func _draw_cabin_terrain() -> void:
 		previous = point
 	if ground_visible and not airport_view.is_empty():
 		_draw_side_runway(airport_view, rect, anchor, pixels_per_m)
-	var aircraft_scale = 12.0 * pixels_per_m / 1000.0
-	AircraftArt.draw_small_aircraft(host, anchor - Vector2(500, AircraftArt.GROUND_Y) * aircraft_scale, aircraft_scale, _aircraft_mirrored(), _cabin_pitch())
+	var aircraft_scale = SIDE_AIRCRAFT_LENGTH_M * pixels_per_m / 1000.0
+	var aircraft_origin = anchor - Vector2(500, AircraftArt.GROUND_Y) * aircraft_scale
+	aircraft_origin += anchor - AircraftArt.wheel_contact_screen(aircraft_origin, aircraft_scale, _aircraft_mirrored(), _cabin_pitch())
+	AircraftArt.draw_small_aircraft(host, aircraft_origin, aircraft_scale, _aircraft_mirrored(), _cabin_pitch())
 	_draw_cabin_weather(true)
 	var prompt = "Колесо: масштаб • Enter / Esc: в салон • X: за штурвал"
 	if host.flight.stall_warning_active():
@@ -941,16 +944,19 @@ func _draw_cabin_terrain() -> void:
 func _draw_cabin_airport_close_view() -> void:
 	if not _cabin_ground_visible():
 		return
-	var airport_view = _cabin_visible_airport()
 	var rect = Rect2(36, 115, host.size.x - 72, host.size.y - 200)
-	# The landscape keeps the 500 m overview scale behind the full-size cutaway.
-	# Its ground reference is the aircraft's wheels, so the runway sits beneath
-	# them while parked and rises into view naturally during the last descent.
-	var pixels_per_m = minf(rect.size.x / _cabin_terrain_span_m(), rect.size.y / 190.0)
-	var wheel_ground_y = _aircraft_origin().y + AircraftArt.GROUND_Y * _aircraft_scale()
-	var anchor = Vector2(rect.get_center().x, wheel_ground_y)
-	if not airport_view.is_empty():
-		_draw_side_runway(airport_view, rect, anchor, pixels_per_m)
+	var pixels_per_m = _cabin_world_scale()
+	var anchor = AircraftArt.wheel_contact_screen(_aircraft_origin(), _aircraft_scale(), _aircraft_mirrored(), _cabin_pitch())
+	if host.flight.state != FlightModelScript.State.FLYING:
+		# The full-size cabin is schematic, not the 500 m overview scale. Keep
+		# its ground strip continuous beneath the wheels, including at a threshold.
+		_draw_runway_strip_screen(rect.position.x, rect.end.x, anchor.y)
+	else:
+		# In flight use the aircraft scale and real runway ends, anchored
+		# to the wheels so the runway rises into view during the last descent.
+		var airport_view = _cabin_visible_airport()
+		if not airport_view.is_empty():
+			_draw_side_runway(airport_view, rect, anchor, pixels_per_m)
 	_draw_side_beacons(rect, anchor, pixels_per_m)
 
 func _side_beacon_size_scale(lateral_km: float) -> float:
@@ -989,14 +995,17 @@ func _draw_side_runway(view: Dictionary, rect: Rect2, anchor: Vector2, pixels_pe
 func _draw_runway_strip_screen(start_x: float, end_x: float, runway_y: float, dash_origin_x: float = NAN, size_scale: float = 1.0, side_on: bool = false) -> void:
 	landmarks._draw_runway_strip_screen(start_x, end_x, runway_y, dash_origin_x, size_scale, side_on)
 
-func _cabin_weather_scale() -> float:
+func _cabin_world_scale() -> float:
 	if cabin_terrain_zoom == 0:
-		return _aircraft_scale() * 1000.0 / 12.0
+		return _aircraft_scale() * 1000.0 / SIDE_AIRCRAFT_LENGTH_M
 	return minf((host.size.x - 72.0) / _cabin_terrain_span_m(), (host.size.y - 200.0) / 190.0)
+
+func _cabin_weather_scale() -> float:
+	return _cabin_world_scale()
 
 func _cabin_cloud_base_y(fraction: float, ground_m: float = NAN) -> float:
 	var scale_y = _cabin_weather_scale()
-	var reference_y = _aircraft_origin().y + AircraftArt.GROUND_Y * _aircraft_scale()
+	var reference_y = AircraftArt.wheel_contact_screen(_aircraft_origin(), _aircraft_scale(), _aircraft_mirrored(), _cabin_pitch()).y
 	var terrain: float = host.world.height_at(host.flight.position_km) if is_nan(ground_m) else ground_m
 	if cabin_terrain_zoom > 0:
 		reference_y = 115.0 + (host.size.y - 200.0) * 0.28

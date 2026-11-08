@@ -125,6 +125,7 @@ func _cabin_visible_airport() -> Dictionary:
 				"end_m": clipped_end * 1000.0,
 				"runway_start_m": interval.x * 1000.0,
 				"runway_end_m": interval.y * 1000.0,
+				"centreline_m": -local_position.y / local_direction.y * 1000.0 if absf(local_direction.y) > 0.000001 else centre_parameter * 1000.0,
 				"centre_m": centre_parameter * 1000.0,
 			}
 	return nearest
@@ -302,36 +303,49 @@ func _draw_side_clipped_line(a: Vector2, b: Vector2, color: Color, width: float,
 	if clipped.size() == 2:
 		host.draw_line(clipped[0], clipped[1], color, width, true)
 
+func _runway_screen_geometry(view: Dictionary, rect: Rect2, anchor: Vector2, pixels_per_m: float) -> Dictionary:
+	return {
+		"start_x": clampf(anchor.x + float(view.start_m) * pixels_per_m, rect.position.x, rect.end.x),
+		"end_x": clampf(anchor.x + float(view.end_m) * pixels_per_m, rect.position.x, rect.end.x),
+		"runway_y": _side_runway_y(int(view.airport_index), anchor, pixels_per_m),
+		"dash_origin_x": anchor.x + float(view.runway_start_m) * pixels_per_m,
+		"stripe_x": anchor.x + float(view.get("centreline_m", view.centre_m)) * pixels_per_m,
+	}
+
 func _draw_side_runway(view: Dictionary, rect: Rect2, anchor: Vector2, pixels_per_m: float) -> void:
-	var start_x = clampf(anchor.x + float(view.start_m) * pixels_per_m, rect.position.x, rect.end.x)
-	var end_x = clampf(anchor.x + float(view.end_m) * pixels_per_m, rect.position.x, rect.end.x)
-	var runway_y = _side_runway_y(int(view.airport_index), anchor, pixels_per_m)
+	var geometry := _runway_screen_geometry(view, rect, anchor, pixels_per_m)
+	var runway_y: float = geometry.runway_y
 	if runway_y < rect.position.y - 8.0 or runway_y > rect.end.y:
 		return
-	var dash_origin_x = anchor.x + float(view.runway_start_m) * pixels_per_m
-	_draw_runway_strip_screen(start_x, end_x, runway_y, dash_origin_x, float(view.get("size_scale", 1.0)), bool(view.get("crossing_view", false)))
+	_draw_runway_strip_screen(geometry.start_x, geometry.end_x, runway_y, geometry.dash_origin_x, float(view.get("size_scale", 1.0)), bool(view.get("crossing_view", false)), pixels_per_m, geometry.stripe_x)
 
-func _draw_runway_strip_screen(start_x: float, end_x: float, runway_y: float, dash_origin_x: float = NAN, size_scale: float = 1.0, side_on: bool = false) -> void:
+func _draw_runway_strip_screen(start_x: float, end_x: float, runway_y: float, dash_origin_x: float = NAN, size_scale: float = 1.0, side_on: bool = false, pixels_per_m: float = 0.0, side_on_center_x: float = NAN) -> void:
 	var opacity := minf(1.0, size_scale * 10.0)
 	var runway_rect = Rect2(start_x, runway_y - 2.0 * size_scale, maxf(0.0, end_x - start_x), 9.0 * size_scale)
 	host.draw_rect(runway_rect, Color(Color("b6a779"), opacity), true)
 	host.draw_line(Vector2(start_x, runway_y - 2.0 * size_scale), Vector2(end_x, runway_y - 2.0 * size_scale), Color(AircraftArt.INK, opacity), 2.0 * size_scale, true)
 	host.draw_line(Vector2(start_x, runway_y + 7.0 * size_scale), Vector2(end_x, runway_y + 7.0 * size_scale), Color(AircraftArt.LIGHT, opacity), 1.2 * size_scale, true)
 	if side_on:
-		var stripe_x := (start_x + end_x) * 0.5
-		host.draw_line(Vector2(stripe_x, runway_y - 1.0 * size_scale), Vector2(stripe_x, runway_y + 6.0 * size_scale), Color(Color("ded5b5"), opacity), 2.0 * size_scale, true)
+		var stripe_x := (start_x + end_x) * 0.5 if is_nan(side_on_center_x) else side_on_center_x
+		if stripe_x >= start_x and stripe_x <= end_x:
+			host.draw_line(Vector2(stripe_x, runway_y - 1.0 * size_scale), Vector2(stripe_x, runway_y + 6.0 * size_scale), Color(Color("ded5b5"), opacity), 2.0 * size_scale, true)
 		return
 	if is_nan(dash_origin_x):
 		dash_origin_x = start_x
 	# Subpixel distant strips need no individual markings.
 	if size_scale < 0.02:
 		return
-	var dash_x = dash_origin_x + 15.0 * size_scale
-	if dash_x + 24.0 * size_scale < start_x:
-		dash_x += ceilf((start_x - dash_x - 24.0 * size_scale) / (45.0 * size_scale)) * 45.0 * size_scale
+	# In landscape views markings are fixed on the ground: scale their length,
+	# spacing and threshold offset along with the runway when changing zoom.
+	# The schematic apron/parked cabin retains its screen-space decoration.
+	var dash_length := (15.0 * pixels_per_m if pixels_per_m > 0.0 else 24.0) * size_scale
+	var dash_period := (30.0 * pixels_per_m if pixels_per_m > 0.0 else 45.0) * size_scale
+	var dash_x = dash_origin_x + (10.0 * pixels_per_m if pixels_per_m > 0.0 else 15.0) * size_scale
+	if dash_x + dash_length < start_x:
+		dash_x += ceilf((start_x - dash_x - dash_length) / dash_period) * dash_period
 	while dash_x < end_x - 8.0 * size_scale:
 		var visible_dash_start = maxf(dash_x, start_x)
-		var visible_dash_end = minf(dash_x + 24.0 * size_scale, end_x)
+		var visible_dash_end = minf(dash_x + dash_length, end_x)
 		if visible_dash_end > visible_dash_start:
 			host.draw_line(Vector2(visible_dash_start, runway_y + 2.5 * size_scale), Vector2(visible_dash_end, runway_y + 2.5 * size_scale), Color(Color("ded5b5"), opacity), 2.0 * size_scale, true)
-		dash_x += 45.0 * size_scale
+		dash_x += dash_period

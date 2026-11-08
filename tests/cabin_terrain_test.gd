@@ -123,6 +123,7 @@ func _run() -> void:
 	scene._input(key)
 	check(scene.cabin_terrain_zoom == 0 and scene.view_mode == scene.ViewMode.CABIN, "Enter must restore cabin without activating its hotspots")
 	_test_side_airport_positions(scene)
+	_test_runway_screen_scale(scene)
 	await _test_side_beacons(scene)
 	print("Cabin terrain, zoom, visibility and input: ", "FAIL" if failed else "OK")
 	for zoom in range(4):
@@ -135,6 +136,50 @@ func _run() -> void:
 		check(is_equal_approx(after - before, 0.2 * scene._cabin_weather_scale()), "Crossing cloud base must move boundary continuously at current scale")
 	print("Cloud base continuity at all four zooms: ", "FAIL" if failed else "OK")
 	quit(1 if failed else 0)
+
+func _test_runway_screen_scale(scene) -> void:
+	var original_size: Vector2 = scene.size
+	for field_index in [0, 1]:
+		var airport: Dictionary = scene.world.airports[field_index]
+		var forward: Vector2 = scene.world.heading_vector(float(airport.heading))
+		var elevation: float = scene.world.airport_elevation_m(airport)
+		for viewport_size in [Vector2(1280, 800), Vector2(1920, 1080), Vector2(800, 600)]:
+			scene.size = viewport_size
+			for zoom in range(4):
+				scene.cabin_terrain_zoom = zoom
+				var scale: float = scene.side_scenes._cabin_world_scale()
+				check(is_equal_approx(scale, scene._cabin_weather_scale()), "Runway and weather must share one world scale at every zoom")
+				if zoom == 0:
+					check(is_equal_approx(scene._aircraft_scale() * 1000.0 / scale, 12.0), "Close cabin runway must use the same metre scale as the 12 m aircraft")
+				var rect := Rect2(36, 115, scene.size.x - 72, scene.size.y - 200)
+				for angle in [0.0, 8.0, 45.0, 90.0, 180.0]:
+					scene.flight.state = scene.FlightModelScript.State.FLYING
+					scene.flight.altitude_m = elevation + 0.5
+					scene.flight.pitch_deg = 5.0
+					scene.flight.heading_deg = float(airport.heading) + angle
+					scene.flight.speed_kmh = 100.0
+					scene.flight.current_wind_kmh = Vector2.ZERO
+					var direction: Vector2 = scene._cabin_ground_direction()
+					# The runway centre/axis is five metres ahead of the wheels.
+					scene.flight.position_km = Vector2(airport.position) - direction * 0.005
+					var view: Dictionary = scene._cabin_visible_airport()
+					check(not view.is_empty(), "A runway crossing ahead must remain visible at every angle and zoom")
+					var anchor: Vector2 = scene.AircraftArt.wheel_contact_screen(scene._aircraft_origin(), scene._aircraft_scale(), true, 5.0) if zoom == 0 else rect.get_center()
+					var geometry: Dictionary = scene.side_scenes.landmarks._runway_screen_geometry(view, rect, anchor, scale)
+					check(absf(float(geometry.runway_y) - anchor.y - 0.5 * scale) < 0.001, "Runway height must track wheel clearance with the same scale, including elevated airports")
+					if angle == 0.0 or angle == 180.0:
+						check(absf(float(view.runway_end_m) - float(view.runway_start_m) - 800.0) < 0.1, "Aligned approach must retain the full 800 m runway")
+					if angle == 90.0:
+						check(absf(float(view.runway_end_m) - float(view.runway_start_m) - 20.0) < 0.1, "Perpendicular approach must retain the real 20 m runway width")
+					if angle == 45.0 or angle == 90.0:
+						check(absf((float(geometry.stripe_x) - anchor.x) / scale - 5.0) < 0.02, "Side-on centre stripe must stay on the runway axis instead of following clipped screen edges")
+		# A crabbed nose with compensating crosswind still follows the full strip.
+		scene.flight.position_km = airport.position
+		scene.flight.heading_deg = float(airport.heading) - 10.0
+		scene.flight.current_wind_kmh = forward * 100.0 - scene.world.heading_vector(scene.flight.heading_deg) * 100.0
+		var crabbed: Dictionary = scene._cabin_visible_airport()
+		check(absf(float(crabbed.runway_end_m) - float(crabbed.runway_start_m) - 800.0) < 0.1, "Wind correction must project the runway along actual ground motion")
+	scene.size = original_size
 
 func _test_side_airport_positions(scene) -> void:
 	var airport: Dictionary = scene.world.airports[0]

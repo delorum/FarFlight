@@ -172,6 +172,12 @@ static func pitch_transform(origin: Vector2, scale_value: float, mirrored: bool,
 	var angle := deg_to_rad(pitch_deg) * (-1.0 if mirrored else 1.0)
 	return Transform2D(angle, pivot - pivot.rotated(angle))
 
+static func wheel_contact_screen(origin: Vector2, scale_value: float, mirrored: bool, pitch_deg: float) -> Vector2:
+	var contact := LandingContact.MAIN_WHEEL_CONTACT
+	if mirrored:
+		contact.x = 1000.0 - contact.x
+	return pitch_transform(origin, scale_value, mirrored, pitch_deg) * (origin + contact * scale_value)
+
 static func draw_small_aircraft(c: CanvasItem, origin: Vector2, scale_value: float, mirrored: bool, pitch_deg: float = 0.0) -> void:
 	# Same raised cockpit, cargo body and round tail, with screen-space strokes
 	# instead of subpixel outlines from scaling down the detailed cabin artwork.
@@ -205,11 +211,12 @@ static func draw_aircraft(c: CanvasItem, origin: Vector2, scale_value: float, mi
 	line(c, Vector2(892,185), Vector2(914,182), LIGHT)
 	line(c, Vector2(900,243), Vector2(922,240), LIGHT)
 	# Struts, main wheels and tailwheel: the silhouette rests on one baseline.
-	line(c, Vector2(314,321), Vector2(327,390), INK, 5)
-	line(c, Vector2(420,320), Vector2(327,390), INK, 5)
+	# Paint the complete far gear first so its strut cannot cover the near gear.
 	line(c, Vector2(343,327), Vector2(359,391), LIGHT, 4)
 	c.draw_circle(Vector2(361,396), 28, SHADE)
 	c.draw_arc(Vector2(361,396), 28, 0, TAU, 40, LIGHT, 2, true)
+	line(c, Vector2(314,321), Vector2(327,390), INK, 5)
+	line(c, Vector2(420,320), Vector2(327,390), INK, 5)
 	c.draw_circle(LandingContact.MAIN_WHEEL_CENTER, LandingContact.MAIN_WHEEL_RADIUS, PAPER)
 	c.draw_arc(LandingContact.MAIN_WHEEL_CENTER, LandingContact.MAIN_WHEEL_RADIUS, 0, TAU, 48, INK, 3, true)
 	c.draw_arc(Vector2(327,393), 24, 0, TAU, 40, INK, 1.5, true)
